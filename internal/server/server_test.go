@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -528,4 +529,197 @@ func TestConcurrentMutationsAndSSE(t *testing.T) {
 		cancel()
 	}
 	sseWG.Wait()
+}
+
+func TestHealthzAndRoomFlowViaApp(t *testing.T) {
+	app := NewApp()
+	defer app.Close()
+
+	ts := httptest.NewServer(app.Handler())
+	defer ts.Close()
+
+	resp, err := ts.Client().Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("healthz: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("healthz status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("healthz json: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("healthz status = %q, want %q", body["status"], "ok")
+	}
+
+	res, err := ts.Client().Post(ts.URL+"/rooms", "application/json", nil)
+	if err != nil {
+		t.Fatalf("create room: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("create room status = %d, want %d", res.StatusCode, http.StatusCreated)
+	}
+}
+
+func TestRandomCodeGenerator(t *testing.T) {
+	g := NewRandomCodeGenerator(rand.NewSource(1))
+	for i := 0; i < 10; i++ {
+		code := g.Generate()
+		if len(code) != codeLength {
+			t.Fatalf("code = %q, want %d chars", code, codeLength)
+		}
+		for _, c := range code {
+			if !strings.ContainsRune(codeAlphabet, c) {
+				t.Fatalf("code = %q has invalid char %q", code, c)
+			}
+		}
+	}
+
+	g2 := NewRandomCodeGenerator(nil)
+	if len(g2.Generate()) != codeLength {
+		t.Fatal("nil-source generator produced wrong length")
+	}
+}
+
+func TestNewStoreDefaultGen(t *testing.T) {
+	s := NewStore(time.Hour, time.Hour, nil)
+	room := s.CreateRoom()
+	if len(room.Code) != codeLength {
+		t.Fatalf("code = %q, want %d chars", room.Code, codeLength)
+	}
+	if room.HostToken == "" {
+		t.Fatal("empty host token")
+	}
+	if s.Get(room.Code) == nil {
+		t.Fatal("room not stored")
+	}
+}
+
+func TestUnknownRoomHandlers(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"get", http.MethodGet, "/rooms/nope42", ""},
+		{"add", http.MethodPost, "/rooms/nope42/queue", `{"url":"https://a.example/1"}`},
+		{"skip", http.MethodPost, "/rooms/nope42/skip", ""},
+		{"reorder", http.MethodPatch, "/rooms/nope42/queue", `{"order":[]}`},
+		{"events", http.MethodGet, "/rooms/nope42/events", ""},
+	}
+	for _, tc := range cases {
+		rec := doReq(t, mux, tc.method, tc.path, tc.body, "")
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: status = %d, want %d", tc.name, rec.Code, http.StatusNotFound)
+		}
+	}
+}
+
+func TestReorderEmptyQueue(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, token := createRoom(t, mux)
+
+	rec := doReq(t, mux, http.MethodPatch, "/rooms/"+code+"/queue", `{"order":[]}`, token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty order status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp struct {
+		Queue []Track `json:"queue"`
+	}
+	decodeBody(t, rec, &resp)
+	if len(resp.Queue) != 0 {
+		t.Fatalf("queue = %+v, want empty", resp.Queue)
+	}
+
+	rec = doReq(t, mux, http.MethodPatch, "/rooms/"+code+"/queue", `{"order":["x"]}`, token)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("mismatch status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestSSEHeartbeat(t *testing.T) {
+	_, store := newTestServer()
+	hub := NewHub()
+	hub.Heartbeat = 20 * time.Millisecond
+	mux := newTestMux(NewServer(store, hub))
+	code, _ := createRoom(t, mux)
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/rooms/"+code+"/events", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("sse connect: %v", err)
+	}
+	defer resp.Body.Close()
+
+	br := bufio.NewReader(resp.Body)
+	_, name, _ := readSSE(t, br)
+	if name != "queue_snapshot" {
+		t.Fatalf("first event = %q, want queue_snapshot", name)
+	}
+	id, name, _ := readSSE(t, br)
+	if name != "" || id != "" {
+		t.Fatalf("expected heartbeat comment, got id=%q name=%q", id, name)
+	}
+}
+
+func TestHeartbeatInterval(t *testing.T) {
+	h := &Hub{}
+	if got := h.heartbeatInterval(); got != 15*time.Second {
+		t.Fatalf("default interval = %v, want 15s", got)
+	}
+	h.Heartbeat = 20 * time.Millisecond
+	if got := h.heartbeatInterval(); got != 20*time.Millisecond {
+		t.Fatalf("interval = %v, want 20ms", got)
+	}
+}
+
+// noFlushWriter is a ResponseWriter without http.Flusher, to exercise the
+// streaming-unsupported error path.
+type noFlushWriter struct {
+	header http.Header
+	code   int
+}
+
+func (w *noFlushWriter) Header() http.Header         { return w.header }
+func (w *noFlushWriter) WriteHeader(code int)        { w.code = code }
+func (w *noFlushWriter) Write(b []byte) (int, error) { return len(b), nil }
+
+func TestServeHTTPNoFlusher(t *testing.T) {
+	hub := NewHub()
+	w := &noFlushWriter{header: http.Header{}}
+	hub.ServeHTTP(context.Background(), w, "somecode", func() interface{} { return map[string]string{} })
+	if w.code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", w.code, http.StatusInternalServerError)
+	}
+}
+
+func TestCurrentIDUnknownRoom(t *testing.T) {
+	hub := NewHub()
+	if got := hub.currentID("nope"); got != 0 {
+		t.Fatalf("currentID = %d, want 0", got)
+	}
+}
+
+func TestWriteEventUnmarshalableData(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeEvent(rec, Event{ID: 1, Name: "boom", Data: make(chan int)})
+	if !strings.Contains(rec.Body.String(), "data: {}\n") {
+		t.Fatalf("body = %q, want fallback {}", rec.Body.String())
+	}
 }

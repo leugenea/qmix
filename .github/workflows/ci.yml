@@ -20,4 +20,10 @@ jobs:
       - name: Build
         run: go build ./...
       - name: Test
-        run: go test -race ./...
+        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
+      - name: Coverage gate (>=95%)
+        run: |
+          go tool cover -func=coverage.out | tail -1
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/,"",$3); print $3}')
+          echo "total coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { if (t+0 < 95.0) { print "FAIL: coverage " t "% < 95%"; exit 1 } }'

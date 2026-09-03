@@ -21,8 +21,9 @@ type Event struct {
 // mutations. Overflowing events are dropped — the client recovers via a
 // queue_snapshot on reconnect.
 type Hub struct {
-	mu    sync.Mutex
-	rooms map[string]*roomHub
+	mu        sync.Mutex
+	rooms     map[string]*roomHub
+	Heartbeat time.Duration // keep-alive comment interval; <=0 means the 15s default
 }
 
 // roomHub holds the subscribers and the monotonic event counter for one room.
@@ -39,7 +40,7 @@ type subscriber struct {
 
 // NewHub returns an empty Hub.
 func NewHub() *Hub {
-	return &Hub{rooms: make(map[string]*roomHub)}
+	return &Hub{rooms: make(map[string]*roomHub), Heartbeat: 15 * time.Second}
 }
 
 // Subscribe registers a subscriber for a room and returns the channel to read
@@ -121,7 +122,7 @@ func (h *Hub) ServeHTTP(ctx context.Context, w http.ResponseWriter, roomCode str
 	writeEvent(w, Event{ID: h.currentID(roomCode), Name: "queue_snapshot", Data: snapshot()})
 	flusher.Flush()
 
-	heartbeat := time.NewTicker(15 * time.Second)
+	heartbeat := time.NewTicker(h.heartbeatInterval())
 	defer heartbeat.Stop()
 
 	for {
@@ -131,10 +132,7 @@ func (h *Hub) ServeHTTP(ctx context.Context, w http.ResponseWriter, roomCode str
 		case <-heartbeat.C:
 			_, _ = fmt.Fprint(w, ": ping\n\n")
 			flusher.Flush()
-		case ev, ok := <-ch:
-			if !ok {
-				return
-			}
+		case ev := <-ch:
 			writeEvent(w, ev)
 			flusher.Flush()
 		}
@@ -149,6 +147,15 @@ func (h *Hub) currentID(roomCode string) int64 {
 		return rh.seq
 	}
 	return 0
+}
+
+// heartbeatInterval returns the SSE keep-alive interval. A non-positive
+// Heartbeat falls back to the 15s default.
+func (h *Hub) heartbeatInterval() time.Duration {
+	if h.Heartbeat <= 0 {
+		return 15 * time.Second
+	}
+	return h.Heartbeat
 }
 
 // writeEvent writes one SSE event in the format:

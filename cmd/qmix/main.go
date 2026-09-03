@@ -3,38 +3,23 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
-	"net/http"
 	"os"
-	"time"
 
 	"github.com/leugenea/qmix/internal/server"
 )
 
-func main() {
-	store := server.NewStore(12*time.Hour, time.Minute, nil)
-	hub := server.NewHub()
-	srv := server.NewServer(store, hub)
-
-	// Janitor: sweep expired empty rooms in the background.
-	stop := make(chan struct{})
-	defer close(stop)
-	go store.Janitor(stop)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthz)
-	srv.Routes(mux)
-
-	addr := os.Getenv("QMIX_ADDR")
-	if addr == "" {
-		addr = ":8080"
+// listenAddr returns the HTTP listen address from QMIX_ADDR, defaulting
+// to :8080.
+func listenAddr() string {
+	if addr := os.Getenv("QMIX_ADDR"); addr != "" {
+		return addr
 	}
-	log.Printf("qmix: listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	return ":8080"
 }
 
-func healthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+func main() {
+	if err := server.Run(listenAddr()); err != nil {
+		log.Fatal(err)
+	}
 }
