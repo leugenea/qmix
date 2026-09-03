@@ -105,19 +105,21 @@ Backend-код — только стандартная библиотека Go, 
 ## 6. API surface
 
 **REST**
-- `POST /rooms` — создать комнату (хост) → `{code, url}`
-- `GET /rooms/{code}` — состояние комнаты (текущий трек + очередь)
-- `POST /rooms/{code}/tracks` — добавить ссылку в очередь (гость)
-- `DELETE /rooms/{code}/tracks/{id}` — удалить трек из очереди
-- `POST /rooms/{code}/next` — перейти к следующему треку (хост)
+- `POST /rooms` — создать комнату → `{code, host_token, url}` (`url` = `/r/{code}`)
+- `GET /rooms/{code}` — состояние комнаты (текущий трек + очередь; без host_token)
+- `POST /rooms/{code}/queue` — добавить трек `{url}` в конец очереди (гость)
+- `PATCH /rooms/{code}/queue` — переупорядочить очередь `{"order": [trackID, ...]}` (хост; точная перестановка ID)
+- `POST /rooms/{code}/skip` — следующий трек (хост)
 - `GET /healthz` — проверка живости
+
+Хост-операции (skip, reorder) требуют заголовок `X-Host-Token`, выданный при создании комнаты.
 
 **SSE**
 - `GET /rooms/{code}/events` — поток событий:
-  - `track_added` — в очередь добавлен трек
-  - `track_removed` — трек удалён
+  - `queue_snapshot` — полное состояние при подключении / реконнекте (Last-Event-ID)
+  - `queue_updated` — очередь изменилась (add / reorder)
   - `track_changed` — сменился текущий трек
-  - `queue_snapshot` — полное состояние при подключении / реконнекте
+  - `player_state` — изменилось состояние плеера
 
 ## 7. Plugin interfaces
 
