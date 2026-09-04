@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/leugenea/qmix/internal/resolver"
 )
 
 // App wires the store, hub and routes into one runnable backend.
@@ -35,7 +37,9 @@ func (a *App) Close() {
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
-	NewServer(a.Store, a.Hub).Routes(mux)
+	s := NewServer(a.Store, a.Hub)
+	s.Resolver = resolver.DefaultMux()
+	s.Routes(mux)
 	return mux
 }
 

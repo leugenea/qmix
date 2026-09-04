@@ -2,14 +2,21 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/leugenea/qmix/internal/resolver"
 )
 
 // Server wires the Store and Hub to HTTP handlers.
 type Server struct {
 	store *Store
 	hub   *Hub
+	// Resolver turns source URLs into track metadata. If nil, tracks are added
+	// with the URL as a stub title (pre-resolver behaviour); NewApp sets the
+	// production resolver.
+	Resolver resolver.Resolver
 }
 
 // NewServer returns a Server backed by the given store and hub.
@@ -98,7 +105,9 @@ func viewRoom(room *Room) roomView {
 	return v
 }
 
-// handleAddTrack appends a track to the queue. Open to guests.
+// handleAddTrack appends a track to the queue. Open to guests. When a resolver
+// is wired in, the URL is resolved to track metadata first; unresolvable links
+// return 422 (bad link) or 502 (upstream service failure).
 func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 	room := s.store.Get(r.PathValue("code"))
 	if room == nil {
@@ -117,10 +126,22 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	track := Track{
-		ID:    newTrackID(),
-		URL:   req.URL,
-		Title: req.URL, // M1 stub; TODO(M2): resolver fills real title
+	track := trackFromURL(req.URL)
+	if s.Resolver != nil {
+		meta, err := s.Resolver.Resolve(r.Context(), req.URL)
+		if err != nil {
+			status, msg := resolveError(err)
+			writeError(w, status, msg)
+			return
+		}
+		track = Track{
+			ID:          newTrackID(),
+			URL:         req.URL,
+			Title:       meta.Title,
+			Artist:      meta.Artist,
+			DurationSec: meta.DurationSec,
+			ResolvedBy:  meta.ResolvedBy,
+		}
 	}
 
 	s.store.mu.Lock()
@@ -131,6 +152,25 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 
 	s.hub.Publish(room.Code, "queue_updated", payload)
 	writeJSON(w, http.StatusCreated, track)
+}
+
+// trackFromURL returns the pre-resolver stub track (title == URL).
+func trackFromURL(u string) Track {
+	return Track{ID: newTrackID(), URL: u, Title: u}
+}
+
+// resolveError maps a resolver failure to an HTTP status and a human-readable
+// message. Unresolvable links (invalid, unsupported, no anonymous path) become
+// 422; transient upstream failures become 502. Nothing is ever 500.
+func resolveError(err error) (int, string) {
+	switch {
+	case errors.Is(err, resolver.ErrInvalid),
+		errors.Is(err, resolver.ErrUnsupported),
+		errors.Is(err, resolver.ErrNoAnonymous):
+		return http.StatusUnprocessableEntity, err.Error()
+	default:
+		return http.StatusBadGateway, err.Error()
+	}
 }
 
 // handleSkip advances to the next track. Host-only.
