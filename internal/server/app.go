@@ -38,7 +38,7 @@ func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	s := NewServer(a.Store, a.Hub)
-	s.Resolver = resolver.DefaultMux()
+	s.Resolver = resolver.DefaultMuxWithConfig(resolver.ConfigFromEnv())
 	s.Routes(mux)
 	return mux
 }

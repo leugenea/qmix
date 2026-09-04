@@ -32,6 +32,9 @@ type VKYandex struct {
 	Client *http.Client
 	// Endpoint overrides the fetch target (tests point this at a mock).
 	Endpoint string
+	// Config carries service credentials for the authenticated path (#9/#10).
+	// Empty values keep the anonymous best-effort behaviour.
+	Config Config
 }
 
 func (v *VKYandex) client() *http.Client {

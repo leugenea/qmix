@@ -25,6 +25,9 @@ type Spotify struct {
 	Endpoint string
 	// Name is the value reported in Track.ResolvedBy. Defaults to "spotify".
 	Name string
+	// Config carries service credentials for the authenticated path (#8). Empty
+	// values keep the anonymous oEmbed behaviour.
+	Config Config
 }
 
 func (s *Spotify) client() *http.Client {
