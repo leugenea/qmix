@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/leugenea/qmix/internal/resolver"
+	"github.com/leugenea/qmix/internal/stream"
 )
 
 // Server wires the Store and Hub to HTTP handlers.
@@ -17,6 +18,10 @@ type Server struct {
 	// with the URL as a stub title (pre-resolver behaviour); NewApp sets the
 	// production resolver.
 	Resolver resolver.Resolver
+	// StreamBackend turns the current track into an audio stream. If nil, the
+	// stream endpoint returns 404 (no streaming configured). NewApp sets the
+	// production yt-dlp backend.
+	StreamBackend stream.StreamBackend
 }
 
 // NewServer returns a Server backed by the given store and hub.
@@ -32,6 +37,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /rooms/{code}/skip", s.handleSkip)
 	mux.HandleFunc("PATCH /rooms/{code}/queue", s.handleReorder)
 	mux.HandleFunc("GET /rooms/{code}/events", s.handleEvents)
+	mux.HandleFunc("GET /rooms/{code}/current/stream", s.handleStream)
 }
 
 // writeJSON writes v as JSON with the given status code.
@@ -193,7 +199,13 @@ func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request) {
 	}
 	next := room.Queue[0]
 	room.Queue = room.Queue[1:]
-	room.Current = &Current{TrackID: next.ID, PosSec: 0, State: "playing"}
+	room.Current = &Current{
+		TrackID: next.ID,
+		PosSec:  0,
+		State:   "playing",
+		Title:   next.Title,
+		Artist:  next.Artist,
+	}
 	s.store.touch(room)
 	cur := *room.Current
 	payload := currentPayload(&cur)
@@ -316,6 +328,35 @@ func snapshotPayload(room *Room) map[string]interface{} {
 		"current": cur,
 		"queue":   cloneTracks(room.Queue),
 	}
+}
+
+// handleStream streams the current track's audio to the client. It delegates
+// Range/seek handling to the StreamBackend via stream.ServeStream. Rooms without
+// a current track, or with no stream backend configured, return 404.
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	room := s.store.Get(r.PathValue("code"))
+	if room == nil {
+		writeError(w, http.StatusNotFound, "room not found")
+		return
+	}
+	if s.StreamBackend == nil {
+		writeError(w, http.StatusNotFound, "no stream backend configured")
+		return
+	}
+
+	s.store.mu.Lock()
+	cur := room.Current
+	var track *stream.Track
+	if cur != nil {
+		track = &stream.Track{ID: cur.TrackID, Title: cur.Title, Artist: cur.Artist}
+	}
+	s.store.mu.Unlock()
+	if track == nil || strings.TrimSpace(track.Title) == "" {
+		writeError(w, http.StatusNotFound, "no current track")
+		return
+	}
+
+	stream.ServeStream(w, r, s.StreamBackend, track)
 }
 
 // newTrackID returns a unique-ish track id.

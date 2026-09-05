@@ -40,10 +40,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+      - name: Install yt-dlp (for stream live smoke)
+        run: python3 -m pip install --quiet yt-dlp
       - name: Integration tests (gated by secrets)
         env:
           QMIX_VK_TOKEN: ${{ secrets.QMIX_VK_TOKEN }}
           QMIX_YM_TOKEN: ${{ secrets.QMIX_YM_TOKEN }}
           QMIX_SPOTIFY_CLIENT_ID: ${{ secrets.QMIX_SPOTIFY_CLIENT_ID }}
           QMIX_SPOTIFY_CLIENT_SECRET: ${{ secrets.QMIX_SPOTIFY_CLIENT_SECRET }}
+          QMIX_STREAM_LIVE: "1"
         run: go test -race -run 'Live|Integration' ./...

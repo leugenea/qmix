@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/leugenea/qmix/internal/resolver"
+	"github.com/leugenea/qmix/internal/stream"
 )
 
 // App wires the store, hub and routes into one runnable backend.
@@ -39,8 +40,16 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", healthz)
 	s := NewServer(a.Store, a.Hub)
 	s.Resolver = resolver.DefaultMuxWithConfig(resolver.ConfigFromEnv())
+	s.StreamBackend = NewStreamBackend()
 	s.Routes(mux)
 	return mux
+}
+
+// NewStreamBackend returns the production yt-dlp StreamBackend configured from
+// the environment (path to yt-dlp, cache TTL).
+func NewStreamBackend() stream.StreamBackend {
+	cfg := stream.ConfigFromEnv()
+	return &stream.YTDLP{Bin: cfg.YtdlpBin, CacheTTL: cfg.CacheTTL}
 }
 
 // healthz reports service liveness.

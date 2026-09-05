@@ -116,6 +116,7 @@ Backend — Go со стандартной библиотекой по умол�
 - `POST /rooms/{code}/queue` — добавить трек `{url}` в конец очереди (гость)
 - `PATCH /rooms/{code}/queue` — переупорядочить очередь `{"order": [trackID, ...]}` (хост; точная перестановка ID)
 - `POST /rooms/{code}/skip` — следующий трек (хост)
+- `GET /rooms/{code}/current/stream` — аудио-поток текущего трека (с поддержкой Range/seek: 200 / 206 / 416; 404 если нет текущего трека)
 - `GET /healthz` — проверка живости
 
 Хост-операции (skip, reorder) требуют заголовок `X-Host-Token`, выданный при создании комнаты.
@@ -147,11 +148,32 @@ type Resolver interface {
 **StreamBackend** — `track → audio stream`
 ```go
 type StreamBackend interface {
-    // Stream возвращает аудио-поток для трека с поддержкой Range/seek.
-    Stream(ctx context.Context, track *Track, rangeHeader string) (io.ReadCloser, error)
+    // Stream возвращает аудио-поток для трека, учитывая Range-заголовок клиента.
+    Stream(ctx context.Context, track *Track, rangeHeader string) (*Result, error)
+}
+
+type Result struct {
+    Body          io.ReadCloser // аудио-поток
+    ContentType   string        // MIME-тип аудио (например audio/webm)
+    Status        int           // 200 / 206 / 416 как вернуть клиенту
+    ContentLength int64         // полный размер ресурса, -1 если неизвестен
+    ContentRange  string        // "bytes start-end/total" для 206, "bytes */total" для 416
+    AcceptRanges  string        // "bytes", если апстрим поддерживает Range
 }
 ```
-Реализация MVP: yt-dlp для поиска и стрим-прокси с поддержкой Range.
+Реализация MVP: **yt-dlp** — по метаданным `artist - title` ищем трек на YouTube
+(`yt-dlp --skip-download --dump-json -f bestaudio "ytsearch:..."`), берём прямую
+аудио-ссылку и стримим её. Найденная ссылка кэшируется на ~5 минут
+(thread-safe, TTL, конкурентные промахи без гонок), чтобы повторные запросы
+того же трека не искали заново. Внешний вызов yt-dlp — за injectable Runner
+(как в M2), HTTP-запрос аудио — через инжектируемый http.Client.
+
+HTTP-прокси (`GET /rooms/{code}/current/stream`) прокидывает Range клиента на
+апстрим и воспроизводит для клиента статус и заголовки: полный поток — 200,
+удовлетворённый Range — 206 с `Content-Range`, некорректный/неудовлетворимый
+диапазон — 416; `Content-Type`, `Content-Length`, `Content-Range` и
+`Accept-Ranges` пробрасываются. Ошибки апстрима (нет ссылки — 404, сбой
+поиска/сети — 502) не превращаются в 500. Отрисовка через `stream.ServeStream`.
 
 ## 8. State management
 
@@ -166,7 +188,12 @@ type StreamBackend interface {
 - Один сервис: **docker-compose** с одним контейнером `backend`.
 - Контейнер собирается из `Dockerfile` (multi-stage, статический бинарник Go).
 - Порт `8080`, переменная окружения `QMIX_ADDR`.
-- CI (GitHub Actions): gofmt + vet, build, `go test -race`.
+- Стриминг: для поиска аудио требуется **yt-dlp** на PATH (или путь через
+  `QMIX_YTDLP_BIN`). Кэш ссылок настраивается через `QMIX_STREAM_CACHE_TTL`
+  (по умолчанию `5m`; отрицательное значение отключает кэш).
+- CI (GitHub Actions): gofmt + vet, build, `go test -race`, coverage-гейт ≥95%;
+  отдельная `integration`-job с реальными токенами и live-тестами yt-dlp
+  (`continue-on-error`, не блокирует основной CI).
 - Ограничения деплоя: отдельный compose-проект, `mem_limit: 512m`,
   `restart: on-failure:3`, порт из диапазона 8100–8199.
 
