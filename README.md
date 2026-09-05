@@ -111,6 +111,11 @@ gh secret set QMIX_SPOTIFY_CLIENT_SECRET
 Секреты прокидываются в отдельную `integration`-job (см. `.github/workflows/ci.yml`),
 которая не блокирует основной CI.
 
+Live-проверка YouTube (реальный yt-dlp с домашнего IP) идёт в отдельном
+workflow `live.yml` на self-hosted раннере `nas`: вручную
+(`gh workflow run live`) и еженедельно по расписанию; основной CI не
+блокирует.
+
 ### Получение токена VK через `cmd/token-vk` (предпочтительно)
 
 Утилита `cmd/token-vk` — обёртка над `github.com/oklookat/vkmauth` с тем же

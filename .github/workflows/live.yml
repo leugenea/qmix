@@ -1,0 +1,41 @@
+# Live YouTube smoke from the deploy environment (qmix#18).
+#
+# Runs on the self-hosted runner labeled "nas" (home IP), where real yt-dlp
+# requests to YouTube are possible. A separate file (not ci.yml) so the main
+# pipeline never queues on the NAS being offline: this workflow is triggered
+# manually (workflow_dispatch) and weekly on schedule. It never blocks the
+# main CI (continue-on-error) — same policy as the integration job. The
+# -race flag is intentionally omitted: the race gate lives in ci.yml on
+# ubuntu-latest, and the runner host may lack a C toolchain.
+name: live
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC (09:00 MSK)
+
+jobs:
+  live-nas:
+    runs-on: [self-hosted, nas]
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Ensure yt-dlp on the runner
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          if ! command -v yt-dlp; then
+            python3 -m pip install --user yt-dlp \
+              || python3 -m pip install --user --break-system-packages yt-dlp \
+              || { echo "no way to install yt-dlp on the runner"; exit 1; }
+          fi
+          yt-dlp --version
+      - name: Live stream test (real YouTube from home IP)
+        env:
+          QMIX_STREAM_LIVE: "1"
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          go test -run 'Live' ./internal/stream/...
