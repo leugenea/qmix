@@ -24,15 +24,28 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - name: Ensure yt-dlp on the runner
+      - name: Install latest yt-dlp standalone build
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH"
+          # Always fetch the freshest standalone build: YouTube breaks old
+          # extractors regularly, and the live smoke must distinguish
+          # extractor breakage from qmix breakage. The standalone binary
+          # does not depend on the runner's python version (pip resolved
+          # to an outdated 2024.10.22 release on this runner).
+          curl -fsSL \
+            https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
+            -o "$HOME/.local/bin/yt-dlp"
+          chmod +x "$HOME/.local/bin/yt-dlp"
+          yt-dlp --version
+      - name: Probe search directly (visible stderr)
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          if ! command -v yt-dlp; then
-            python3 -m pip install --user yt-dlp \
-              || python3 -m pip install --user --break-system-packages yt-dlp \
-              || { echo "no way to install yt-dlp on the runner"; exit 1; }
-          fi
-          yt-dlp --version
+          yt-dlp --skip-download --dump-json --no-warnings \
+            -f bestaudio "ytsearch:Rick Astley - Never Gonna Give You Up" \
+            | head -c 300
+          echo
+          echo "probe rc=${PIPESTATUS[0]}"
       - name: Live stream test (real YouTube from home IP)
         env:
           QMIX_STREAM_LIVE: "1"
