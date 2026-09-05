@@ -1,9 +1,13 @@
-// Command token-vk is a small interactive CLI that obtains a VK Music access
-// token via github.com/oklookat/vkmauth and prints it to stdout. Unlike the
-// synchro CLI it stores nothing on disk: the token is printed in a simple
-// machine-readable form suitable for `gh secret set` or an env file.
+// Command token-vk is a small interactive CLI that obtains a VK API access
+// token with the audio scope and prints it to stdout. It uses the
+// oauth.vk.com password grant while impersonating the official VK for
+// Android app — the same flow used by actively maintained VK music clients —
+// so the resulting token works with api.vk.com methods such as
+// audio.getById. It stores nothing on disk: the token
+// is printed in a simple machine-readable form suitable for `gh secret set`
+// or an env file.
 //
-// Credentials (phone, password, 2FA code) are read from stdin, never from
+// Credentials (login, password, 2FA code) are read from stdin, never from
 // argv, so the password does not end up in shell history. Tokens are never
 // logged.
 package main
@@ -11,57 +15,176 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
-
-	"github.com/oklookat/vkmauth"
-	"golang.org/x/oauth2"
 )
 
-// tokenFetcher abstracts the vkmauth network flow so tests can inject a mock
-// and never hit the real VK API.
+// The official "VK for Android" standalone client. The password grant only
+// works for trusted first-party apps, and this is the client pair used by
+// actively maintained VK music clients (endpoints verified live 2026-09).
+const (
+	clientID     = "2274003"
+	clientSecret = "hHbZxrka2uZ6jB1inYsH"
+	userAgent    = "VKAndroidApp/4.13.1-1206 (Android 4.4.3; SDK 19; armeabi; ; ru)"
+
+	oauthTokenURL    = "https://oauth.vk.com/token"
+	validatePhoneURL = "https://api.vk.com/method/auth.validatePhone"
+	apiVersion       = "5.131"
+
+	// offline makes the token non-expiring; audio is the point of the tool.
+	scope = "audio,offline"
+)
+
+// tokenFetcher abstracts the VK OAuth password-grant flow so tests can
+// inject a mock and never hit the real VK API.
 type tokenFetcher interface {
-	// Fetch runs the full VK auth flow and returns the obtained token.
-	Fetch(ctx context.Context, phone, password string, onCodeWaiting func(vkmauth.CodeSended) (vkmauth.GotCode, error)) (*oauth2.Token, error)
+	// Auth performs one auth attempt. An empty code means "no code yet";
+	// after a 2FA prompt the code from stdin is passed back in.
+	Auth(ctx context.Context, login, password, code string) (*authResult, error)
 }
 
-// vkmauthFetcher is the production implementation backed by vkmauth.New.
-type vkmauthFetcher struct{}
-
-// Fetch delegates to vkmauth.New.
-func (vkmauthFetcher) Fetch(ctx context.Context, phone, password string, onCodeWaiting func(vkmauth.CodeSended) (vkmauth.GotCode, error)) (*oauth2.Token, error) {
-	return vkmauth.New(ctx, phone, password, onCodeWaiting)
+// authResult is the outcome of one auth attempt: either a token, or a
+// request for a 2FA/confirmation code, or a terminal error.
+type authResult struct {
+	// AccessToken is set when auth succeeded.
+	AccessToken string
+	// Need2FA: VK requires a confirmation code.
+	Need2FA bool
+	// ValidationType tells where the code comes from ("sms", "2fa_app", ...).
+	ValidationType string
+	// BadCode: the entered code was wrong; ask for another one.
+	BadCode bool
+	// Err is a terminal error (bad credentials, flood control, ...).
+	Err error
 }
 
-// codeHandler drives the interactive 2FA step: it reports where the code was
-// sent, offers a resend when another channel is available, and reads the code
-// from stdin. It is a struct so the reader/writer are injectable in tests.
-type codeHandler struct {
-	in  *bufio.Reader
-	out io.Writer
+// tokenResponse mirrors the JSON returned by oauth.vk.com/token: the success
+// and error shapes share one object.
+type tokenResponse struct {
+	AccessToken      string `json:"access_token"`
+	Error            string `json:"error"`
+	ErrorType        string `json:"error_type"`
+	ErrorDescription string `json:"error_description"`
+	ValidationType   string `json:"validation_type"`
+	ValidationSID    string `json:"validation_sid"`
+	CaptchaSID       string `json:"captcha_sid"`
 }
 
-// onCodeWaiting implements the vkmauth callback. An empty line resends the
-// code via the next available channel (when one exists); any other input is
-// treated as the confirmation code.
-func (h *codeHandler) onCodeWaiting(by vkmauth.CodeSended) (vkmauth.GotCode, error) {
-	if by.Resend != "" {
-		fmt.Fprintf(h.out, "Code sent via %s. Enter code, or press Enter to resend via %s: ", by.Current, by.Resend)
-	} else {
-		fmt.Fprintf(h.out, "Code sent via %s. Enter code: ", by.Current)
+// result maps a raw token response onto an authResult.
+func (tr tokenResponse) result() *authResult {
+	if tr.AccessToken != "" {
+		return &authResult{AccessToken: tr.AccessToken}
 	}
-	line, err := h.in.ReadString('\n')
+	switch {
+	case tr.Error == "need_validation":
+		return &authResult{Need2FA: true, ValidationType: tr.ValidationType}
+	case tr.Error == "invalid_request":
+		// A wrong confirmation code; ask the user for another one.
+		return &authResult{BadCode: true}
+	case tr.Error == "invalid_client":
+		return &authResult{Err: errors.New("invalid login or password")}
+	case tr.Error == "9;Flood control" || tr.ErrorType == "password_bruteforce_attempt":
+		return &authResult{Err: errors.New("flood control: too many login attempts, try again later")}
+	case tr.Error == "need_captcha":
+		return &authResult{Err: fmt.Errorf("captcha required (sid %s); try again later or from another network", tr.CaptchaSID)}
+	}
+	msg := tr.Error
+	if tr.ErrorDescription != "" {
+		if msg != "" {
+			msg += ": "
+		}
+		msg += tr.ErrorDescription
+	}
+	if msg == "" {
+		msg = "no access token in VK response"
+	}
+	return &authResult{Err: errors.New(msg)}
+}
+
+// httpDoer abstracts *http.Client so tests can feed fixture responses.
+type httpDoer interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// vkFetcher is the production implementation backed by the oauth.vk.com
+// password grant, impersonating the VK for Android client.
+type vkFetcher struct{ do httpDoer }
+
+// Auth performs one password-grant attempt. On need_validation it also asks
+// VK to deliver the confirmation code (best effort, the way maintained VK
+// clients do).
+func (f vkFetcher) Auth(ctx context.Context, login, password, code string) (*authResult, error) {
+	vals := url.Values{
+		"grant_type":    {"password"},
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+		"username":      {login},
+		"password":      {password},
+		"scope":         {scope},
+		"2fa_supported": {"1"},
+		"force_sms":     {"1"},
+		"v":             {apiVersion},
+	}
+	if code != "" {
+		vals.Set("code", code)
+	}
+	body, err := f.post(ctx, oauthTokenURL, vals)
 	if err != nil {
-		return vkmauth.GotCode{}, err
+		return nil, err
 	}
-	code := strings.TrimSpace(line)
-	if code == "" && by.Resend != "" {
-		return vkmauth.GotCode{Resend: true}, nil
+	var tr tokenResponse
+	if err := json.Unmarshal(body, &tr); err != nil {
+		return nil, fmt.Errorf("parse VK response: %w", err)
 	}
-	return vkmauth.GotCode{Code: code}, nil
+	res := tr.result()
+	if res.Need2FA && tr.ValidationSID != "" {
+		// Best effort: this call asks VK to actually deliver the code. A
+		// failure is not fatal — the code may arrive anyway (e.g. push).
+		_, _ = f.post(ctx, validatePhoneURL, url.Values{
+			"sid": {tr.ValidationSID},
+			"v":   {apiVersion},
+		})
+	}
+	return res, nil
+}
+
+// post sends a form-encoded POST with the client user agent and returns the
+// response body.
+func (f vkFetcher) post(ctx context.Context, endpoint string, vals url.Values) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(vals.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := f.do.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+// validationHint renders a human-readable hint for where the code comes from.
+func validationHint(validationType string) string {
+	switch validationType {
+	case "sms":
+		return "SMS"
+	case "2fa_app":
+		return "authenticator app"
+	case "2fa_callreset":
+		return "incoming call"
+	case "":
+		return "VK"
+	default:
+		return validationType
+	}
 }
 
 // readLine reads a single trimmed line from r.
@@ -79,13 +202,13 @@ func readLine(r *bufio.Reader) (string, error) {
 func run(stdin io.Reader, stdout, stderr io.Writer, fetcher tokenFetcher) error {
 	in := bufio.NewReader(stdin)
 
-	fmt.Fprint(stdout, "Phone: ")
-	phone, err := readLine(in)
+	fmt.Fprint(stdout, "Login (phone or email): ")
+	login, err := readLine(in)
 	if err != nil {
-		return fmt.Errorf("read phone: %w", err)
+		return fmt.Errorf("read login: %w", err)
 	}
-	if phone == "" {
-		return errors.New("phone must not be empty")
+	if login == "" {
+		return errors.New("login must not be empty")
 	}
 
 	fmt.Fprint(stdout, "Password: ")
@@ -97,25 +220,45 @@ func run(stdin io.Reader, stdout, stderr io.Writer, fetcher tokenFetcher) error 
 		return errors.New("password must not be empty")
 	}
 
-	handler := &codeHandler{in: in, out: stdout}
-	token, err := fetcher.Fetch(context.Background(), phone, password, handler.onCodeWaiting)
-	if err != nil {
-		fmt.Fprintf(stderr, "VK auth failed: %v\n", err)
-		return err
-	}
-	if token == nil || token.AccessToken == "" {
-		err := errors.New("VK auth returned an empty access token")
+	code := ""
+	for {
+		res, err := fetcher.Auth(context.Background(), login, password, code)
+		if err != nil {
+			fmt.Fprintf(stderr, "VK auth request failed: %v\n", err)
+			return err
+		}
+		if res.AccessToken != "" {
+			fmt.Fprintf(stdout, "access_token=%s\n", res.AccessToken)
+			return nil
+		}
+		if res.Need2FA || res.BadCode {
+			if res.BadCode {
+				fmt.Fprintln(stdout, "Invalid code, try again.")
+			} else {
+				fmt.Fprintf(stdout, "Code sent via %s.\n", validationHint(res.ValidationType))
+			}
+			fmt.Fprint(stdout, "Code: ")
+			code, err = readLine(in)
+			if err != nil {
+				return fmt.Errorf("read code: %w", err)
+			}
+			if code == "" {
+				return errors.New("code must not be empty")
+			}
+			continue
+		}
+		if res.Err != nil {
+			fmt.Fprintf(stderr, "VK auth failed: %v\n", res.Err)
+			return res.Err
+		}
+		err = errors.New("unexpected auth result")
 		fmt.Fprintf(stderr, "%v\n", err)
 		return err
 	}
-
-	fmt.Fprintf(stdout, "access_token=%s\n", token.AccessToken)
-	fmt.Fprintf(stdout, "refresh_token=%s\n", token.RefreshToken)
-	return nil
 }
 
 func main() {
-	if err := run(os.Stdin, os.Stdout, os.Stderr, vkmauthFetcher{}); err != nil {
+	if err := run(os.Stdin, os.Stdout, os.Stderr, vkFetcher{do: http.DefaultClient}); err != nil {
 		os.Exit(1)
 	}
 }

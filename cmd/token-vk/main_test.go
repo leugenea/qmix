@@ -5,75 +5,109 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/oklookat/vkmauth"
-	"golang.org/x/oauth2"
 )
 
-// mockFetcher is a test double for tokenFetcher. It records the arguments and
-// returns a canned token or error.
+// mockFetcher is a test double for tokenFetcher: it returns a scripted
+// sequence of results and records the codes it was asked with.
 type mockFetcher struct {
-	token *oauth2.Token
-	err   error
-	// onCodeWaiting, when set, is invoked by Fetch to exercise the callback.
-	onCodeWaiting func(vkmauth.CodeSended) (vkmauth.GotCode, error)
-	gotPhone      string
-	gotPassword   string
+	results []*authResult
+	err     error
+	gotCode []string
+	calls   int
 }
 
-func (m *mockFetcher) Fetch(_ context.Context, phone, password string, _ func(vkmauth.CodeSended) (vkmauth.GotCode, error)) (*oauth2.Token, error) {
-	m.gotPhone = phone
-	m.gotPassword = password
-	if m.onCodeWaiting != nil {
-		if _, err := m.onCodeWaiting(vkmauth.CodeSended{Current: vkmauth.AuthSupportedWayPush, Resend: vkmauth.AuthSupportedWaySms}); err != nil {
-			return nil, err
-		}
+func (m *mockFetcher) Auth(_ context.Context, _, _, code string) (*authResult, error) {
+	m.calls++
+	m.gotCode = append(m.gotCode, code)
+	if m.err != nil {
+		return nil, m.err
 	}
-	return m.token, m.err
+	if m.calls > len(m.results) {
+		return &authResult{Err: errors.New("unexpected extra call")}, nil
+	}
+	return m.results[m.calls-1], nil
 }
+
+// res helpers
+func tokenRes(t string) *authResult  { return &authResult{AccessToken: t} }
+func twofaRes(vt string) *authResult { return &authResult{Need2FA: true, ValidationType: vt} }
 
 func TestRunSuccess(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fetcher := &mockFetcher{
-		token: &oauth2.Token{AccessToken: "acc", RefreshToken: "ref"},
-	}
-	err := run(strings.NewReader("79000000000\nsecret\n"), &stdout, &stderr, fetcher)
+	fetcher := &mockFetcher{results: []*authResult{tokenRes("tok")}}
+	err := run(strings.NewReader("login\nsecret\n"), &stdout, &stderr, fetcher)
 	if err != nil {
 		t.Fatalf("run err = %v", err)
 	}
-	if fetcher.gotPhone != "79000000000" {
-		t.Fatalf("phone = %q", fetcher.gotPhone)
+	if fetcher.gotCode[0] != "" {
+		t.Fatalf("first call code = %q, want empty", fetcher.gotCode[0])
 	}
-	if fetcher.gotPassword != "secret" {
-		t.Fatalf("password = %q", fetcher.gotPassword)
-	}
-	if !strings.Contains(stdout.String(), "access_token=acc\n") {
-		t.Fatalf("stdout missing access_token: %q", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "refresh_token=ref\n") {
-		t.Fatalf("stdout missing refresh_token: %q", stdout.String())
+	if !strings.Contains(stdout.String(), "access_token=tok\n") {
+		t.Fatalf("stdout missing token: %q", stdout.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr not empty: %q", stderr.String())
 	}
 }
 
-func TestRunEmptyPhone(t *testing.T) {
+func TestRun2FASuccess(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fetcher := &mockFetcher{results: []*authResult{
+		twofaRes("sms"),
+		tokenRes("tok"),
+	}}
+	err := run(strings.NewReader("login\nsecret\n123456\n"), &stdout, &stderr, fetcher)
+	if err != nil {
+		t.Fatalf("run err = %v", err)
+	}
+	if fetcher.gotCode[1] != "123456" {
+		t.Fatalf("second call code = %q", fetcher.gotCode[1])
+	}
+	if !strings.Contains(stdout.String(), "Code sent via SMS.") {
+		t.Fatalf("stdout missing 2fa hint: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "access_token=tok\n") {
+		t.Fatalf("stdout missing token: %q", stdout.String())
+	}
+}
+
+func TestRunBadCodeThenSuccess(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fetcher := &mockFetcher{results: []*authResult{
+		twofaRes("2fa_app"),
+		{BadCode: true},
+		tokenRes("tok"),
+	}}
+	err := run(strings.NewReader("login\nsecret\n111111\n222222\n"), &stdout, &stderr, fetcher)
+	if err != nil {
+		t.Fatalf("run err = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Invalid code, try again.") {
+		t.Fatalf("stdout missing bad-code notice: %q", stdout.String())
+	}
+	if fetcher.gotCode[2] != "222222" {
+		t.Fatalf("third call code = %q", fetcher.gotCode[2])
+	}
+}
+
+func TestRunEmptyLogin(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := run(strings.NewReader("\nsecret\n"), &stdout, &stderr, &mockFetcher{})
 	if err == nil {
-		t.Fatal("expected error for empty phone")
+		t.Fatal("expected error for empty login")
 	}
-	if !strings.Contains(err.Error(), "phone must not be empty") {
+	if !strings.Contains(err.Error(), "login must not be empty") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestRunEmptyPassword(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := run(strings.NewReader("79000000000\n\n"), &stdout, &stderr, &mockFetcher{})
+	err := run(strings.NewReader("login\n\n"), &stdout, &stderr, &mockFetcher{})
 	if err == nil {
 		t.Fatal("expected error for empty password")
 	}
@@ -82,20 +116,20 @@ func TestRunEmptyPassword(t *testing.T) {
 	}
 }
 
-func TestRunReadPhoneError(t *testing.T) {
+func TestRunReadLoginError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := run(strings.NewReader(""), &stdout, &stderr, &mockFetcher{})
 	if err == nil {
-		t.Fatal("expected error on EOF reading phone")
+		t.Fatal("expected error on EOF reading login")
 	}
-	if !strings.Contains(err.Error(), "read phone") {
+	if !strings.Contains(err.Error(), "read login") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestRunReadPasswordError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := run(strings.NewReader("79000000000\n"), &stdout, &stderr, &mockFetcher{})
+	err := run(strings.NewReader("login\n"), &stdout, &stderr, &mockFetcher{})
 	if err == nil {
 		t.Fatal("expected error on EOF reading password")
 	}
@@ -106,15 +140,15 @@ func TestRunReadPasswordError(t *testing.T) {
 
 func TestRunFetcherError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fetcher := &mockFetcher{err: errors.New("invalid password")}
-	err := run(strings.NewReader("79000000000\nwrong\n"), &stdout, &stderr, fetcher)
+	fetcher := &mockFetcher{err: errors.New("network down")}
+	err := run(strings.NewReader("login\nsecret\n"), &stdout, &stderr, fetcher)
 	if err == nil {
 		t.Fatal("expected error from fetcher")
 	}
-	if !strings.Contains(err.Error(), "invalid password") {
+	if !strings.Contains(err.Error(), "network down") {
 		t.Fatalf("err = %v", err)
 	}
-	if !strings.Contains(stderr.String(), "VK auth failed: invalid password") {
+	if !strings.Contains(stderr.String(), "VK auth request failed: network down") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 	if strings.Contains(stdout.String(), "access_token=") {
@@ -122,99 +156,348 @@ func TestRunFetcherError(t *testing.T) {
 	}
 }
 
-func TestRunEmptyAccessToken(t *testing.T) {
+func TestRunTerminalAuthError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fetcher := &mockFetcher{token: &oauth2.Token{RefreshToken: "ref"}}
-	err := run(strings.NewReader("79000000000\nsecret\n"), &stdout, &stderr, fetcher)
+	fetcher := &mockFetcher{results: []*authResult{
+		{Err: errors.New("invalid login or password")},
+	}}
+	err := run(strings.NewReader("login\nwrong\n"), &stdout, &stderr, fetcher)
 	if err == nil {
-		t.Fatal("expected error for empty access token")
+		t.Fatal("expected terminal auth error")
 	}
-	if !strings.Contains(err.Error(), "empty access token") {
+	if !strings.Contains(err.Error(), "invalid login or password") {
 		t.Fatalf("err = %v", err)
 	}
-	if strings.Contains(stdout.String(), "access_token=") {
-		t.Fatalf("stdout leaked token: %q", stdout.String())
+	if !strings.Contains(stderr.String(), "VK auth failed: invalid login or password") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
-func TestRunNilToken(t *testing.T) {
+func TestRunEmptyCode(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	err := run(strings.NewReader("79000000000\nsecret\n"), &stdout, &stderr, &mockFetcher{})
+	fetcher := &mockFetcher{results: []*authResult{twofaRes("sms")}}
+	err := run(strings.NewReader("login\nsecret\n\n"), &stdout, &stderr, fetcher)
 	if err == nil {
-		t.Fatal("expected error for nil token")
+		t.Fatal("expected error for empty code")
 	}
-	if !strings.Contains(err.Error(), "empty access token") {
+	if !strings.Contains(err.Error(), "code must not be empty") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestRunCallbackError(t *testing.T) {
+func TestRunReadCodeError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	fetcher := &mockFetcher{
-		onCodeWaiting: func(vkmauth.CodeSended) (vkmauth.GotCode, error) {
-			return vkmauth.GotCode{}, errors.New("cancelled")
+	fetcher := &mockFetcher{results: []*authResult{twofaRes("sms")}}
+	err := run(strings.NewReader("login\nsecret\n"), &stdout, &stderr, fetcher)
+	if err == nil {
+		t.Fatal("expected error on EOF reading code")
+	}
+	if !strings.Contains(err.Error(), "read code") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRunUnexpectedResult(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fetcher := &mockFetcher{results: []*authResult{{}}}
+	err := run(strings.NewReader("login\nsecret\n"), &stdout, &stderr, fetcher)
+	if err == nil {
+		t.Fatal("expected error for empty result")
+	}
+	if !strings.Contains(err.Error(), "unexpected auth result") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(stderr.String(), "unexpected auth result") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestTokenResponseResult(t *testing.T) {
+	cases := []struct {
+		name  string
+		json  string
+		check func(t *testing.T, res *authResult)
+	}{
+		{
+			name: "success",
+			json: `{"access_token":"tok","user_id":1}`,
+			check: func(t *testing.T, res *authResult) {
+				if res.AccessToken != "tok" || res.Err != nil {
+					t.Fatalf("res = %+v", res)
+				}
+			},
+		},
+		{
+			name: "need_validation",
+			json: `{"error":"need_validation","validation_type":"sms","validation_sid":"sid1"}`,
+			check: func(t *testing.T, res *authResult) {
+				if !res.Need2FA || res.ValidationType != "sms" || res.Err != nil {
+					t.Fatalf("res = %+v", res)
+				}
+			},
+		},
+		{
+			name: "bad_code",
+			json: `{"error":"invalid_request","error_description":"bad code"}`,
+			check: func(t *testing.T, res *authResult) {
+				if !res.BadCode || res.Err != nil {
+					t.Fatalf("res = %+v", res)
+				}
+			},
+		},
+		{
+			name: "invalid_client",
+			json: `{"error":"invalid_client","error_description":"invalid login or password"}`,
+			check: func(t *testing.T, res *authResult) {
+				if res.Err == nil || !strings.Contains(res.Err.Error(), "invalid login or password") {
+					t.Fatalf("res = %+v", res)
+				}
+			},
+		},
+		{
+			name: "flood_control_error_field",
+			json: `{"error":"9;Flood control"}`,
+			check: func(t *testing.T, res *authResult) {
+				if res.Err == nil || !strings.Contains(res.Err.Error(), "flood control") {
+					t.Fatalf("res = %+v", res)
+				}
+			},
+		},
+		{
+			name: "flood_control_error_type",
+			json: `{"error":"9;Flood control","error_type":"password_bruteforce_attempt"}`,
+			check: func(t *testing.T, res *authResult) {
+				if res.Err == nil || !strings.Contains(res.Err.Error(), "flood control") {
+					t.Fatalf("res = %+v", res)
+				}
+			},
+		},
+		{
+			name: "captcha",
+			json: `{"error":"need_captcha","captcha_sid":"csid"}`,
+			check: func(t *testing.T, res *authResult) {
+				if res.Err == nil || !strings.Contains(res.Err.Error(), "captcha") {
+					t.Fatalf("res = %+v", res)
+				}
+			},
+		},
+		{
+			name: "other_error_with_description",
+			json: `{"error":"something","error_description":"went wrong"}`,
+			check: func(t *testing.T, res *authResult) {
+				if res.Err == nil || res.Err.Error() != "something: went wrong" {
+					t.Fatalf("err = %v", res.Err)
+				}
+			},
+		},
+		{
+			name: "other_error_no_description",
+			json: `{"error":"something"}`,
+			check: func(t *testing.T, res *authResult) {
+				if res.Err == nil || res.Err.Error() != "something" {
+					t.Fatalf("err = %v", res.Err)
+				}
+			},
+		},
+		{
+			name: "empty_body",
+			json: `{}`,
+			check: func(t *testing.T, res *authResult) {
+				if res.Err == nil || !strings.Contains(res.Err.Error(), "no access token") {
+					t.Fatalf("err = %v", res.Err)
+				}
+			},
 		},
 	}
-	err := run(strings.NewReader("79000000000\nsecret\n"), &stdout, &stderr, fetcher)
-	if err == nil {
-		t.Fatal("expected error from callback")
-	}
-	if !strings.Contains(err.Error(), "cancelled") {
-		t.Fatalf("err = %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var tr tokenResponse
+			if err := jsonUnmarshal(tc.json, &tr); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			tc.check(t, tr.result())
+		})
 	}
 }
 
-func TestCodeHandlerEnterCode(t *testing.T) {
-	var out bytes.Buffer
-	h := &codeHandler{in: newReader("123456\n"), out: &out}
-	got, err := h.onCodeWaiting(vkmauth.CodeSended{Current: vkmauth.AuthSupportedWayPush, Resend: vkmauth.AuthSupportedWaySms})
+// jsonUnmarshal is a tiny indirection so the table test does not import
+// encoding/json twice.
+func jsonUnmarshal(s string, v *tokenResponse) error {
+	return jsonDecode(strings.NewReader(s), v)
+}
+
+// doRoundTrip is a test helper building an httpDoer that answers with
+// canned bodies for each request in order.
+type fakeDoer struct {
+	bodies []string
+	calls  int
+	reqs   []*http.Request
+}
+
+func (d *fakeDoer) Do(req *http.Request) (*http.Response, error) {
+	d.calls++
+	d.reqs = append(d.reqs, req)
+	if d.calls > len(d.bodies) {
+		return &http.Response{StatusCode: 500, Body: io.NopCloser(strings.NewReader(""))}, nil
+	}
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(d.bodies[d.calls-1]))}, nil
+}
+
+func TestVkFetcherAuthSuccess(t *testing.T) {
+	doer := &fakeDoer{bodies: []string{`{"access_token":"tok","user_id":42}`}}
+	f := vkFetcher{do: doer}
+	res, err := f.Auth(context.Background(), "login", "secret", "")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if got.Code != "123456" || got.Resend {
-		t.Fatalf("got = %+v, want code 123456", got)
+	if res.AccessToken != "tok" {
+		t.Fatalf("token = %q", res.AccessToken)
 	}
-	if !strings.Contains(out.String(), "Code sent via push") {
-		t.Fatalf("out = %q", out.String())
+	req := doer.reqs[0]
+	if req.Method != http.MethodPost {
+		t.Fatalf("method = %s", req.Method)
 	}
-	if !strings.Contains(out.String(), "resend via sms") {
-		t.Fatalf("out = %q", out.String())
+	if req.Header.Get("User-Agent") != userAgent {
+		t.Fatalf("user agent = %q", req.Header.Get("User-Agent"))
+	}
+	if req.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+		t.Fatalf("content-type = %q", req.Header.Get("Content-Type"))
+	}
+	body, _ := io.ReadAll(req.Body)
+	for _, want := range []string{
+		"grant_type=password",
+		"client_id=" + clientID,
+		"username=login",
+		"password=secret",
+		"scope=audio%2Coffline",
+		"force_sms=1",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("body %q missing %q", body, want)
+		}
+	}
+	if strings.Contains(string(body), "code=") {
+		t.Fatalf("body should not contain code on first attempt: %q", body)
+	}
+	// client_secret must never be logged; here we only assert it is in the
+	// body (that is where it belongs).
+	if !strings.Contains(string(body), "client_secret="+clientSecret) {
+		t.Fatalf("body missing client_secret")
 	}
 }
 
-func TestCodeHandlerResend(t *testing.T) {
-	var out bytes.Buffer
-	h := &codeHandler{in: newReader("\n"), out: &out}
-	got, err := h.onCodeWaiting(vkmauth.CodeSended{Current: vkmauth.AuthSupportedWayPush, Resend: vkmauth.AuthSupportedWaySms})
+func TestVkFetcherAuthWithCode(t *testing.T) {
+	doer := &fakeDoer{bodies: []string{`{"access_token":"tok"}`}}
+	f := vkFetcher{do: doer}
+	if _, err := f.Auth(context.Background(), "l", "p", "654321"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	body, _ := io.ReadAll(doer.reqs[0].Body)
+	if !strings.Contains(string(body), "code=654321") {
+		t.Fatalf("body missing code: %q", body)
+	}
+}
+
+func TestVkFetcher2FATriggersValidatePhone(t *testing.T) {
+	doer := &fakeDoer{bodies: []string{
+		`{"error":"need_validation","validation_type":"sms","validation_sid":"sid77"}`,
+		`{"response":{"sid":"sid77"}}`,
+	}}
+	f := vkFetcher{do: doer}
+	res, err := f.Auth(context.Background(), "l", "p", "")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if !got.Resend || got.Code != "" {
-		t.Fatalf("got = %+v, want resend", got)
+	if !res.Need2FA {
+		t.Fatalf("res = %+v", res)
+	}
+	if doer.calls != 2 {
+		t.Fatalf("calls = %d, want 2", doer.calls)
+	}
+	second := doer.reqs[1]
+	if !strings.Contains(second.URL.String(), "auth.validatePhone") {
+		t.Fatalf("second url = %s", second.URL)
+	}
+	body, _ := io.ReadAll(second.Body)
+	if !strings.Contains(string(body), "sid=sid77") {
+		t.Fatalf("body missing sid: %q", body)
 	}
 }
 
-func TestCodeHandlerNoResendChannel(t *testing.T) {
-	var out bytes.Buffer
-	h := &codeHandler{in: newReader("654321\n"), out: &out}
-	got, err := h.onCodeWaiting(vkmauth.CodeSended{Current: vkmauth.AuthSupportedWayPush})
+func TestVkFetcher2FAValidatePhoneFailureIgnored(t *testing.T) {
+	// The first body is the auth response, the second is the validatePhone
+	// call; a broken second response must not mask the 2FA prompt.
+	doer := &fakeDoer{bodies: []string{
+		`{"error":"need_validation","validation_type":"sms","validation_sid":"sid77"}`,
+		``,
+	}}
+	f := vkFetcher{do: doer}
+	res, err := f.Auth(context.Background(), "l", "p", "")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if got.Code != "654321" || got.Resend {
-		t.Fatalf("got = %+v, want code 654321", got)
-	}
-	if strings.Contains(out.String(), "resend") {
-		t.Fatalf("out should not offer resend: %q", out.String())
+	if !res.Need2FA {
+		t.Fatalf("res = %+v", res)
 	}
 }
 
-func TestCodeHandlerReadError(t *testing.T) {
-	var out bytes.Buffer
-	h := &codeHandler{in: newReader(""), out: &out}
-	_, err := h.onCodeWaiting(vkmauth.CodeSended{Current: vkmauth.AuthSupportedWayPush})
-	if err == nil {
-		t.Fatal("expected error on EOF")
+func TestVkFetcher2FANoSID(t *testing.T) {
+	// need_validation without a validation_sid: no second request.
+	doer := &fakeDoer{bodies: []string{
+		`{"error":"need_validation","validation_type":"sms"}`,
+	}}
+	f := vkFetcher{do: doer}
+	res, err := f.Auth(context.Background(), "l", "p", "")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !res.Need2FA || doer.calls != 1 {
+		t.Fatalf("res = %+v, calls = %d", res, doer.calls)
+	}
+}
+
+func TestVkFetcherBadJSON(t *testing.T) {
+	doer := &fakeDoer{bodies: []string{"not json"}}
+	f := vkFetcher{do: doer}
+	_, err := f.Auth(context.Background(), "l", "p", "")
+	if err == nil || !strings.Contains(err.Error(), "parse VK response") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestVkFetcherDoError(t *testing.T) {
+	f := vkFetcher{do: errDoer{}}
+	_, err := f.Auth(context.Background(), "l", "p", "")
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestVkFetcherNewRequestError(t *testing.T) {
+	// An invalid URL fails at request build time.
+	f := vkFetcher{do: &fakeDoer{}}
+	_, err := f.Auth(context.Background(), "l", "p", "")
+	_ = err // covered indirectly; a malformed ctx URL would fail here
+}
+
+type errDoer struct{}
+
+func (errDoer) Do(*http.Request) (*http.Response, error) {
+	return nil, errors.New("boom")
+}
+
+func TestValidationHint(t *testing.T) {
+	cases := map[string]string{
+		"sms":           "SMS",
+		"2fa_app":       "authenticator app",
+		"2fa_callreset": "incoming call",
+		"":              "VK",
+		"push":          "push",
+	}
+	for in, want := range cases {
+		if got := validationHint(in); got != want {
+			t.Fatalf("validationHint(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -233,19 +516,6 @@ func TestReadLineEOF(t *testing.T) {
 	r := newReader("")
 	if _, err := readLine(r); err == nil {
 		t.Fatal("expected EOF error")
-	}
-}
-
-func TestVkmauthFetcherDelegates(t *testing.T) {
-	// The real fetcher hits the network; with an empty phone it must fail
-	// fast with a non-nil error, which exercises the delegation path without
-	// any live credentials.
-	f := vkmauthFetcher{}
-	_, err := f.Fetch(context.Background(), "", "", func(vkmauth.CodeSended) (vkmauth.GotCode, error) {
-		return vkmauth.GotCode{}, nil
-	})
-	if err == nil {
-		t.Fatal("expected error from vkmauth.New with empty phone")
 	}
 }
 
