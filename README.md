@@ -72,7 +72,7 @@ docker compose up --build
 
 | Переменная | Сервис | Что это |
 |---|---|---|
-| `QMIX_VK_TOKEN` | VK | токен доступа VK Music |
+| `QMIX_VK_TOKEN` | VK | токен доступа api.vk.com (scope `audio`) |
 | `QMIX_YM_TOKEN` | Яндекс Музыка | OAuth-токен Яндекс Музыки |
 | `QMIX_SPOTIFY_CLIENT_ID` | Spotify | Client ID приложения |
 | `QMIX_SPOTIFY_CLIENT_SECRET` | Spotify | Client Secret приложения |
@@ -86,8 +86,9 @@ VK / Яндекс — честный 422. Токены нужны только �
 **Spotify** — создать приложение в [Spotify Developer Dashboard](https://developer.spotify.com/dashboard),
 оттуда взять Client ID и Client Secret.
 
-**VK** — токен получается через утилиту `cmd/token-vk` (см. ниже) по номеру
-телефона и паролю VK с подтверждением кода (пуш / SMS / почта).
+**VK** — токен api.vk.com со scope `audio` получается через утилиту
+`cmd/token-vk` (см. ниже) по логину (телефон или email) и паролю VK
+с подтверждением кодом (2FA-приложение / SMS / звонок).
 
 **Яндекс Музыка** — токен получается через CLI `synchro` по OAuth-флоу Яндекс
 (открывается страница, вводится код).
@@ -136,11 +137,13 @@ workflow `live.yml` на self-hosted раннере `nas`: при каждом �
 вручную (`gh workflow run live`) и еженедельно по расписанию; основной CI
 не блокирует.
 
-### Получение токена VK через `cmd/token-vk` (предпочтительно)
+### Получение токена VK через `cmd/token-vk`
 
-Утилита `cmd/token-vk` — обёртка над `github.com/oklookat/vkmauth` с тем же
-флоу, что у `synchro`, но токен печатается в stdout и **ничего не сохраняет
-на диск**. Телефон, пароль и код 2FA читаются из stdin (не из argv), поэтому
+Утилита `cmd/token-vk` получает токен api.vk.com со scope `audio,offline`
+через password grant `oauth.vk.com/token` от имени официального клиента
+VK for Android — тот же флоу, что используют поддерживаемые VK-клиенты
+(напр. vkpymusic). Токен печатается в stdout и **ничего не сохраняет на
+диск**. Логин, пароль и код 2FA читаются из stdin (не из argv), поэтому
 пароль не попадает в shell-history.
 
 **Сборка и запуск:**
@@ -154,16 +157,15 @@ go build -o bin/token-vk ./cmd/token-vk
 
 Утилита последовательно запросит:
 
-1. `Phone:` — номер телефона VK (полный, например `+79000000000`).
+1. `Login (phone or email):` — логин VK (телефон или email).
 2. `Password:` — пароль от VK.
-3. Код подтверждения — утилита покажет, куда он отправлен (пуш / SMS / почта),
-   и предложит переотправить другим способом (пустой ввод = переотправить).
+3. Код подтверждения — утилита покажет, куда он отправлен (SMS /
+   authenticator app / звонок), при неверном коде предложит ввести ещё раз.
 
 **Формат вывода** (машиночитаемый, построчно):
 
 ```
 access_token=...
-refresh_token=...
 ```
 
 Удобно для `gh secret set` или env-файла:
@@ -172,27 +174,17 @@ refresh_token=...
 go run ./cmd/token-vk | sed -n 's/^access_token=//p' | gh secret set QMIX_VK_TOKEN
 ```
 
-Токены печатаются только в stdout и не логируются. При ошибке (неверный
-пароль, отмена) утилита пишет человекочитаемое сообщение в stderr и
-завершается с ненулевым кодом.
+Токен печатается только в stdout и не логируется. При ошибке (неверный
+пароль, flood control, капча) утилита пишет человекочитаемое сообщение
+в stderr и завершается с ненулевым кодом. Код ответа можно переотправить,
+перезапустив утилиту.
 
-### Получение токенов VK и Яндекса через `synchro` (запасной способ)
+### Получение токена Яндекса через `synchro` (запасной способ)
 
-> Для VK предпочтителен `cmd/token-vk` (см. выше). `synchro` остаётся
-> запасным способом, а для Яндекс Музыки — основным.
+> Для Яндекс Музыки `synchro` — основной способ; для VK он больше не
+> используется (токен VK выдаёт `cmd/token-vk`, см. выше).
 
-Команды взяты из исходников `github.com/oklookat/synchro` (CLI `commander/cli`),
-`github.com/oklookat/vkmauth` и `github.com/oklookat/yandexauth/v3`.
-
-**VK:**
-
-```bash
-synchro account add vkmusic --phone <PHONE> --password <PASSWORD>
-```
-
-CLI запросит код подтверждения (пуш / SMS / почта) и сохранит токен в локальную
-БД `synchro` (`data/data.sqlite`). Токен не печатается в stdout — его нужно
-достать из БД аккаунта (поле `auth`, JSON с `access_token`).
+Команды взяты из исходников `github.com/oklookat/synchro` (CLI `commander/cli`).
 
 **Яндекс Музыка:**
 
@@ -220,7 +212,7 @@ CLI откроет страницу Яндекс OAuth, нужно войти и
 - **Spotify** — ротация в [Developer Dashboard](https://developer.spotify.com/dashboard):
   сгенерировать новый Client Secret, старый перестанет работать.
 - **VK** — завершить активные сессии в настройках безопасности VK; новый токен
-  получить заново через `cmd/token-vk` (или `synchro account add vkmusic`).
+  получить заново через `cmd/token-vk`.
 - **Яндекс** — отозвать OAuth-токен в настройках Яндекс ID (раздел
   «Приложения» / «Управление доступом»); новый токен получить через
   `synchro account add yandexmusic`.
