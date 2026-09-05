@@ -31,7 +31,8 @@ jobs:
   # Integration tests with real service credentials. The job always runs; the
   # gated tests skip themselves when the secrets are absent, so this job is
   # green even without them. continue-on-error keeps flaky external APIs from
-  # blocking the main CI.
+  # blocking the main CI. (The yt-dlp live stream test is gated locally via
+  # QMIX_STREAM_LIVE and skips here since runners can't reach YouTube.)
   integration:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -40,13 +41,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - name: Install yt-dlp (for stream live smoke)
-        run: python3 -m pip install --quiet yt-dlp
       - name: Integration tests (gated by secrets)
         env:
           QMIX_VK_TOKEN: ${{ secrets.QMIX_VK_TOKEN }}
           QMIX_YM_TOKEN: ${{ secrets.QMIX_YM_TOKEN }}
           QMIX_SPOTIFY_CLIENT_ID: ${{ secrets.QMIX_SPOTIFY_CLIENT_ID }}
           QMIX_SPOTIFY_CLIENT_SECRET: ${{ secrets.QMIX_SPOTIFY_CLIENT_SECRET }}
-          QMIX_STREAM_LIVE: "1"
         run: go test -race -run 'Live|Integration' ./...
