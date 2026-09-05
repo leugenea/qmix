@@ -61,7 +61,7 @@ jobs:
         run: docker build -t qmix:ci .
       - name: yt-dlp present in image
         run: docker run --rm --entrypoint sh qmix:ci -c 'yt-dlp --version'
-      - name: Smoke: server boots and /healthz answers
+      - name: "Smoke: server boots and /healthz answers"
         run: |
           docker run -d --name qmix-smoke qmix:ci
           ok=""
@@ -76,4 +76,5 @@ jobs:
           fi
           docker rm -f qmix-smoke
       - name: Image size
-        run: docker image inspect qmix:ci --format 'image size: {{.Size}} bytes'
+        run: |
+          docker image inspect qmix:ci --format 'image size: {{.Size}} bytes'
