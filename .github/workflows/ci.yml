@@ -28,6 +28,20 @@ jobs:
           echo "total coverage: ${total}%"
           awk -v t="$total" 'BEGIN { if (t+0 < 95.0) { print "FAIL: coverage " t "% < 95%"; exit 1 } }'
 
+  # Mandatory integration level (qmix#17): core scenarios (healthz, room
+  # lifecycle, SSE, mock resolver, streaming via a fake yt-dlp + local mock
+  # upstream, TTL) over HTTP on a real socket with the full App handler.
+  # No network or secrets are required, so this job must stay green.
+  integration-mandatory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Integration tests (mandatory)
+        run: make test-integration
+
   # Integration tests with real service credentials. The job always runs; the
   # gated tests skip themselves when the secrets are absent, so this job is
   # green even without them. continue-on-error keeps flaky external APIs from

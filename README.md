@@ -35,6 +35,26 @@ YouTube через `yt-dlp`. Когда хост нажимает *skip*, тре
 compose прокидывает их в контейнер (учитываются и yt-dlp, и HTTP-прокси
 аудио).
 
+## Интеграционные тесты
+
+Обязательный уровень — `make test-integration`: сценарии по HTTP на реальном
+сокете с полным `App.Handler()`, без сети и секретов:
+
+- `/healthz`;
+- жизненный цикл комнаты: create → get → add track → skip/reorder (host-токен);
+- SSE: snapshot на подключении, события мутаций, snapshot на реконнекте;
+- добавление трека через мок-resolver (неизвестная ссылка → 422);
+- стриминг через фейковый `yt-dlp` (путь через `QMIX_YTDLP_BIN`) и локальный
+  мок-апстрим с поддержкой Range: 200/206;
+- TTL: пустая комната протухает, комната с очередью живёт.
+
+Тесты помечены build-тегом `integration`, поэтому обычный `go test ./...` и
+coverage-гейт их не трогают. В CI идут отдельной job `integration-mandatory`.
+
+Сетевые live-сценарии (VK/Spotify/Яндекс с реальными токенами, реальный
+yt-dlp) остаются в gated-режиме: job `integration` с секретами
+(`continue-on-error`) и workflow `live.yml` на self-hosted раннере.
+
 ## Запуск
 
 ```bash
