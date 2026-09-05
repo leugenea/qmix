@@ -339,3 +339,18 @@ func TestYtdlpCachedNonString(t *testing.T) {
 		t.Fatalf("err = %v, want ErrService", err)
 	}
 }
+
+// TestFirstJSONLineLongToken guards against bufio.Scanner's default 64KB
+// token cap: real yt-dlp dump-json output is a single line carrying the full
+// format list of the result, which exceeds 64KB (qmix#19).
+func TestFirstJSONLineLongToken(t *testing.T) {
+	url := `https://example.com/audio?u=` + strings.Repeat("a", 128*1024)
+	line := []byte(`{"url": "` + url + `"}` + "\n")
+	r, err := parseFirstSearchResult(line)
+	if err != nil {
+		t.Fatalf("parse long line: %v", err)
+	}
+	if r.URL != url {
+		t.Fatal("long-line url mismatch")
+	}
+}

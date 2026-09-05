@@ -195,6 +195,10 @@ func parseFirstSearchResult(out []byte) (*searchResult, error) {
 // JSON document per line even for multi-result searches.
 func firstJSONLine(out []byte) ([]byte, error) {
 	s := bufio.NewScanner(bytes.NewReader(out))
+	// Real yt-dlp dump-json output is a single line carrying the full format
+	// list of the result, which exceeds the scanner's default 64KB token cap
+	// (qmix#19). 4MB is far above any plausible document.
+	s.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for s.Scan() {
 		line := bytes.TrimSpace(s.Bytes())
 		if len(line) > 0 {
