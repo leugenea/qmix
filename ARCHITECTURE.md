@@ -197,9 +197,10 @@ HTTP-прокси (`GET /rooms/{code}/current/stream`) прокидывает Ra
 - CI (GitHub Actions): gofmt + vet, build, `go test -race`, coverage-гейт ≥95%;
   `docker`-job — сборка образа, проверка yt-dlp внутри и smoke `/healthz`;
   отдельная `integration`-job с реальными токенами и live-тестами yt-dlp
-  (`continue-on-error`, не блокирует основной CI); `live.yml` — еженедельный
-  live-смоук YouTube (реальный yt-dlp) на self-hosted раннере NAS —
-  `workflow_dispatch`/`schedule`, не блокирует основной CI (qmix#18).
+  (`continue-on-error`, не блокирует основной CI); `live.yml` — live-смоук
+  YouTube (реальный yt-dlp) на self-hosted раннере NAS при каждом пуше в
+  main, вручную и еженедельно (`workflow_dispatch`/`schedule`), не блокирует
+  основной CI (qmix#18).
 - Ограничения деплоя: отдельный compose-проект, `mem_limit: 512m`,
   `restart: on-failure:3`, порт из диапазона 8100–8199.
 

@@ -3,16 +3,20 @@
 # Runs on the self-hosted runner labeled "nas" (home IP), where real yt-dlp
 # requests to YouTube are possible. A separate file (not ci.yml) so the main
 # pipeline never queues on the NAS being offline: this workflow is triggered
-# manually (workflow_dispatch) and weekly on schedule. It never blocks the
-# main CI (continue-on-error) — same policy as the integration job. The
-# -race flag is intentionally omitted: the race gate lives in ci.yml on
-# ubuntu-latest, and the runner host may lack a C toolchain.
+# manually (workflow_dispatch), weekly on schedule, and on every push to
+# main. It never blocks the main CI (continue-on-error) — same policy as the
+# integration job; a stalled run (NAS offline) only affects this workflow,
+# never the main pipeline's green signal. The -race flag is intentionally
+# omitted: the race gate lives in ci.yml on ubuntu-latest, and the runner
+# host may lack a C toolchain.
 name: live
 
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC (09:00 MSK)
+  push:
+    branches: [main]
 
 jobs:
   live-nas:

@@ -112,9 +112,9 @@ gh secret set QMIX_SPOTIFY_CLIENT_SECRET
 которая не блокирует основной CI.
 
 Live-проверка YouTube (реальный yt-dlp с домашнего IP) идёт в отдельном
-workflow `live.yml` на self-hosted раннере `nas`: вручную
-(`gh workflow run live`) и еженедельно по расписанию; основной CI не
-блокирует.
+workflow `live.yml` на self-hosted раннере `nas`: при каждом пуше в main,
+вручную (`gh workflow run live`) и еженедельно по расписанию; основной CI
+не блокирует.
 
 ### Получение токена VK через `cmd/token-vk` (предпочтительно)
 
