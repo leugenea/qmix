@@ -48,3 +48,32 @@ jobs:
           QMIX_SPOTIFY_CLIENT_ID: ${{ secrets.QMIX_SPOTIFY_CLIENT_ID }}
           QMIX_SPOTIFY_CLIENT_SECRET: ${{ secrets.QMIX_SPOTIFY_CLIENT_SECRET }}
         run: go test -race -run 'Live|Integration' ./...
+
+  # Runtime image gate: yt-dlp must be present in the container (the
+  # streaming backend needs it) and the server must boot and answer
+  # /healthz. Runners cannot reach YouTube, so actual streaming stays
+  # gated locally (qmix#16).
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t qmix:ci .
+      - name: yt-dlp present in image
+        run: docker run --rm --entrypoint sh qmix:ci -c 'yt-dlp --version'
+      - name: Smoke: server boots and /healthz answers
+        run: |
+          docker run -d --name qmix-smoke qmix:ci
+          ok=""
+          for i in $(seq 1 15); do
+            if docker exec qmix-smoke wget -qO- http://127.0.0.1:8080/healthz; then ok=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then
+            docker logs qmix-smoke
+            docker rm -f qmix-smoke
+            exit 1
+          fi
+          docker rm -f qmix-smoke
+      - name: Image size
+        run: docker image inspect qmix:ci --format 'image size: {{.Size}} bytes'

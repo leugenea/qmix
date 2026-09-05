@@ -5,4 +5,10 @@ services:
       - "8080:8080"
     environment:
       QMIX_ADDR: ":8080"
+      # Proxy passthrough for environments where YouTube is reachable only
+      # via a proxy: yt-dlp and the audio proxy both honor these. Empty by
+      # default.
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      NO_PROXY: "${NO_PROXY:-}"
     restart: unless-stopped

@@ -188,10 +188,14 @@ HTTP-прокси (`GET /rooms/{code}/current/stream`) прокидывает Ra
 - Один сервис: **docker-compose** с одним контейнером `backend`.
 - Контейнер собирается из `Dockerfile` (multi-stage, статический бинарник Go).
 - Порт `8080`, переменная окружения `QMIX_ADDR`.
-- Стриминг: для поиска аудио требуется **yt-dlp** на PATH (или путь через
-  `QMIX_YTDLP_BIN`). Кэш ссылок настраивается через `QMIX_STREAM_CACHE_TTL`
-  (по умолчанию `5m`; отрицательное значение отключает кэш).
+- Стриминг: для поиска аудио требуется **yt-dlp** — в Docker-образе он
+  включён (`apk add yt-dlp`, версия зафиксирована в `Dockerfile`); вне
+  контейнера — бинарь на PATH (или путь через `QMIX_YTDLP_BIN`). Кэш ссылок
+  настраивается через `QMIX_STREAM_CACHE_TTL` (по умолчанию `5m`;
+  отрицательное значение отключает кэш). Прокси для доступа к YouTube
+  (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) прокидываются через compose.
 - CI (GitHub Actions): gofmt + vet, build, `go test -race`, coverage-гейт ≥95%;
+  `docker`-job — сборка образа, проверка yt-dlp внутри и smoke `/healthz`;
   отдельная `integration`-job с реальными токенами и live-тестами yt-dlp
   (`continue-on-error`, не блокирует основной CI).
 - Ограничения деплоя: отдельный compose-проект, `mem_limit: 512m`,
