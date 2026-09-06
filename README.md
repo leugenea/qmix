@@ -61,8 +61,9 @@ yt-dlp) остаются в gated-режиме: job `integration` с секре�
 make run
 curl localhost:8080/healthz
 
-# или через docker
+# или через docker (внешний порт 8180)
 docker compose up --build
+curl localhost:8180/healthz
 ```
 
 ## Токены сервисов
