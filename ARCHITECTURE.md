@@ -202,7 +202,8 @@ HTTP-прокси (`GET /rooms/{code}/current/stream`) прокидывает Ra
   main, вручную и еженедельно (`workflow_dispatch`/`schedule`), не блокирует
   основной CI (qmix#18).
 - Ограничения деплоя: отдельный compose-проект, `mem_limit: 512m`,
-  `restart: on-failure:3`, порт из диапазона 8100–8199.
+  `restart: on-failure:3`, внешний порт `8180` (зафиксирован за qmix,
+  диапазон 8100–8199).
 
 ## 10. Out of scope
 
