@@ -8,7 +8,20 @@
 
 ## Статус
 
-M0 — каркас: Go-скелет backend с `/healthz`, Makefile, docker-compose, CI.
+Готово:
+
+- **M0** — каркас: Go-скелет backend с `/healthz`, Makefile, docker-compose, CI.
+- **M1** — комната и очередь: create/get, add track, skip/reorder, SSE-события.
+- **M2** — резолвер ссылка → трек через публичные endpoints (Spotify oEmbed, честный 422 для VK/Яндекса без токена).
+- **M3** — стриминг: `yt-dlp` StreamBackend + HTTP-прокси с Range/seek и TTL-кэшем ссылок.
+- **token-vk v2** — токен api.vk.com со scope `audio` (разблокирует #9).
+- **Интеграционные тесты** основных сценариев — обязательная job `integration-mandatory` в CI.
+- Свежий тулчейн: Go 1.25 / alpine 3.22, compose в рамках деплой-ограничений (порт 8180, `mem_limit`, `restart: on-failure:3`).
+
+Дальше:
+
+- **M4** — TV-приложение (Android TV), **M5** — PWA для гостей, **M6** — Definition of Done (E2E + v0.1.0).
+- Авторизованный резолвинг сервисов: Spotify (#8), Яндекс Музыка (#10, токен #12); VK (#9) — в блоке.
 
 ## Стриминг
 
