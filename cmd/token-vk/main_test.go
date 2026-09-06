@@ -523,3 +523,55 @@ func TestReadLineEOF(t *testing.T) {
 func newReader(s string) *bufio.Reader {
 	return bufio.NewReader(strings.NewReader(s))
 }
+
+// TestVkFetcherAuthCarriesExpiry checks that user_id and expires_in survive
+// the trip from the VK JSON into authResult — they used to be dropped, which
+// hid short-lived tokens until they failed in production as "token expired".
+func TestVkFetcherAuthCarriesExpiry(t *testing.T) {
+	doer := &fakeDoer{bodies: []string{`{"access_token":"tok","user_id":42,"expires_in":86400}`}}
+	f := vkFetcher{do: doer}
+	res, err := f.Auth(context.Background(), "login", "secret", "")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if res.UserID != 42 {
+		t.Fatalf("user id = %d, want 42", res.UserID)
+	}
+	if res.ExpiresIn != 86400 {
+		t.Fatalf("expires in = %d, want 86400", res.ExpiresIn)
+	}
+}
+
+// TestRunWarnsOnExpiringToken checks that a non-zero expires_in is reported on
+// stdout and loudly flagged on stderr, while the token itself stays on stdout.
+func TestRunWarnsOnExpiringToken(t *testing.T) {
+	var stdout, stderr strings.Builder
+	fetcher := &mockFetcher{results: []*authResult{{AccessToken: "tok", UserID: 42, ExpiresIn: 86400}}}
+	if err := run(strings.NewReader("login\npassword\n"), &stdout, &stderr, fetcher); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	for _, want := range []string{"access_token=tok", "user_id=42", "expires_in=86400"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout %q missing %q", stdout.String(), want)
+		}
+	}
+	if !strings.Contains(stderr.String(), "did not grant the offline scope") {
+		t.Fatalf("stderr %q missing the expiry warning", stderr.String())
+	}
+}
+
+// TestRunSilentOnNonExpiringToken checks the happy path stays quiet: a token
+// with expires_in=0 really is offline, so no warning should be emitted.
+func TestRunSilentOnNonExpiringToken(t *testing.T) {
+	var stdout, stderr strings.Builder
+	fetcher := &mockFetcher{results: []*authResult{{AccessToken: "tok", UserID: 42}}}
+	if err := run(strings.NewReader("login\npassword\n"), &stdout, &stderr, fetcher); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "expires_in=0") {
+		t.Fatalf("stdout %q missing expires_in=0", stdout.String())
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr should be empty for a non-expiring token, got %q", stderr.String())
+	}
+}
