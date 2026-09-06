@@ -62,9 +62,11 @@ type authResult struct {
 	BadCode bool
 	// UserID is the VK id the token belongs to (0 when unknown).
 	UserID int
-	// ExpiresIn is the token lifetime in seconds; 0 means non-expiring,
-	// i.e. the offline scope was actually granted.
-	ExpiresIn int
+	// ExpiresIn is the token lifetime in seconds. A nil pointer means VK
+	// omitted the field entirely, which is not the same claim as an explicit
+	// 0 ("non-expiring", i.e. the offline scope was granted) — keep the two
+	// apart so the tool never reports more than VK actually said.
+	ExpiresIn *int
 	// Err is a terminal error (bad credentials, flood control, ...).
 	Err error
 }
@@ -74,7 +76,7 @@ type authResult struct {
 type tokenResponse struct {
 	AccessToken      string `json:"access_token"`
 	UserID           int    `json:"user_id"`
-	ExpiresIn        int    `json:"expires_in"`
+	ExpiresIn        *int   `json:"expires_in"`
 	Error            string `json:"error"`
 	ErrorType        string `json:"error_type"`
 	ErrorDescription string `json:"error_description"`
@@ -237,14 +239,22 @@ func run(stdin io.Reader, stdout, stderr io.Writer, fetcher tokenFetcher) error 
 		if res.AccessToken != "" {
 			fmt.Fprintf(stdout, "access_token=%s\n", res.AccessToken)
 			fmt.Fprintf(stdout, "user_id=%d\n", res.UserID)
-			fmt.Fprintf(stdout, "expires_in=%d\n", res.ExpiresIn)
 			// VK ignores the requested scope for first-party clients and
-			// returns the app's own mask, so "offline" is not guaranteed.
-			// A non-zero expires_in means the token WILL die; say so loudly
-			// instead of letting it fail later as "token expired".
-			if res.ExpiresIn != 0 {
+			// returns the app's own mask, so "offline" is never guaranteed.
+			switch {
+			case res.ExpiresIn == nil:
+				// Say "unknown" rather than guessing: reporting 0 here would
+				// assert a non-expiring token on evidence we do not have.
+				fmt.Fprintln(stdout, "expires_in=unknown")
+				fmt.Fprintln(stderr, "warning: VK returned no expires_in — the token lifetime is unknown; verify it against api.vk.com before relying on it")
+			case *res.ExpiresIn != 0:
+				// A non-zero expires_in means the token WILL die; say so
+				// loudly instead of letting it fail later as "token expired".
+				fmt.Fprintf(stdout, "expires_in=%d\n", *res.ExpiresIn)
 				fmt.Fprintf(stderr, "warning: VK did not grant the offline scope — this token expires in %d seconds (~%dh); re-run the tool to refresh it\n",
-					res.ExpiresIn, res.ExpiresIn/3600)
+					*res.ExpiresIn, *res.ExpiresIn/3600)
+			default:
+				fmt.Fprintln(stdout, "expires_in=0")
 			}
 			return nil
 		}
