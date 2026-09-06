@@ -207,6 +207,20 @@ func run(ctx context.Context, stdout io.Writer, cfg flowConfig, f deviceFlow) er
 	return nil
 }
 
+// defaultFlow builds the production device flow: the default HTTP client,
+// the real Yandex endpoints and time.Sleep as the polling ticker. It is a
+// function (not a literal in main) so a test can verify that every field
+// is set: sleep was once forgotten here and the very first
+// authorization_pending response panicked on the nil sleeper (#33).
+func defaultFlow() deviceFlow {
+	return deviceFlow{
+		do:       http.DefaultClient,
+		codeURL:  codeEndpoint,
+		tokenURL: tokenEndpoint,
+		sleep:    time.Sleep,
+	}
+}
+
 func main() {
 	cfg := flowConfig{
 		// A fixed device identity, same idea as synchro's stored DeviceID:
@@ -215,12 +229,7 @@ func main() {
 		deviceID:   "qmix-token-ym",
 		deviceName: "qmix token-ym",
 	}
-	flow := deviceFlow{
-		do:       http.DefaultClient,
-		codeURL:  codeEndpoint,
-		tokenURL: tokenEndpoint,
-	}
-	if err := run(context.Background(), os.Stdout, cfg, flow); err != nil {
+	if err := run(context.Background(), os.Stdout, cfg, defaultFlow()); err != nil {
 		fmt.Fprintf(os.Stderr, "Yandex auth failed: %v\n", err)
 		os.Exit(1)
 	}

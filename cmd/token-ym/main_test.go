@@ -357,3 +357,20 @@ func TestPostFormNewRequestError(t *testing.T) {
 		t.Fatal("expected request build error")
 	}
 }
+
+// TestDefaultFlowSetsSleep is the regression for #33: the deviceFlow
+// literal in main() left sleep unset, so the very first
+// authorization_pending response panicked with a nil pointer dereference.
+// The production constructor must fill every field.
+func TestDefaultFlowSetsSleep(t *testing.T) {
+	f := defaultFlow()
+	if f.sleep == nil {
+		t.Fatal("defaultFlow: sleep is nil, pollTokens would panic on authorization_pending")
+	}
+	if f.do == nil {
+		t.Fatal("defaultFlow: do is nil")
+	}
+	if f.codeURL != codeEndpoint || f.tokenURL != tokenEndpoint {
+		t.Fatalf("defaultFlow: urls = %q / %q", f.codeURL, f.tokenURL)
+	}
+}
