@@ -33,7 +33,13 @@ func (m *mockFetcher) Auth(_ context.Context, _, _, code string) (*authResult, e
 }
 
 // res helpers
-func tokenRes(t string) *authResult  { return &authResult{AccessToken: t} }
+// tokenRes builds a plain success: an explicit expires_in=0, the shape VK
+// returns when the offline scope is granted. Tests that care about other
+// lifetimes construct authResult directly.
+func tokenRes(t string) *authResult {
+	zero := 0
+	return &authResult{AccessToken: t, ExpiresIn: &zero}
+}
 func twofaRes(vt string) *authResult { return &authResult{Need2FA: true, ValidationType: vt} }
 
 func TestRunSuccess(t *testing.T) {
@@ -537,8 +543,23 @@ func TestVkFetcherAuthCarriesExpiry(t *testing.T) {
 	if res.UserID != 42 {
 		t.Fatalf("user id = %d, want 42", res.UserID)
 	}
-	if res.ExpiresIn != 86400 {
-		t.Fatalf("expires in = %d, want 86400", res.ExpiresIn)
+	if res.ExpiresIn == nil || *res.ExpiresIn != 86400 {
+		t.Fatalf("expires in = %v, want 86400", res.ExpiresIn)
+	}
+}
+
+// TestVkFetcherAuthOmittedExpiry checks that a response without expires_in
+// leaves the field nil rather than collapsing to 0, which would look
+// identical to VK explicitly promising a non-expiring token.
+func TestVkFetcherAuthOmittedExpiry(t *testing.T) {
+	doer := &fakeDoer{bodies: []string{`{"access_token":"tok","user_id":42}`}}
+	f := vkFetcher{do: doer}
+	res, err := f.Auth(context.Background(), "login", "secret", "")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if res.ExpiresIn != nil {
+		t.Fatalf("expires in = %v, want nil", *res.ExpiresIn)
 	}
 }
 
@@ -546,7 +567,8 @@ func TestVkFetcherAuthCarriesExpiry(t *testing.T) {
 // stdout and loudly flagged on stderr, while the token itself stays on stdout.
 func TestRunWarnsOnExpiringToken(t *testing.T) {
 	var stdout, stderr strings.Builder
-	fetcher := &mockFetcher{results: []*authResult{{AccessToken: "tok", UserID: 42, ExpiresIn: 86400}}}
+	day := 86400
+	fetcher := &mockFetcher{results: []*authResult{{AccessToken: "tok", UserID: 42, ExpiresIn: &day}}}
 	if err := run(strings.NewReader("login\npassword\n"), &stdout, &stderr, fetcher); err != nil {
 		t.Fatalf("run() = %v", err)
 	}
@@ -560,11 +582,12 @@ func TestRunWarnsOnExpiringToken(t *testing.T) {
 	}
 }
 
-// TestRunSilentOnNonExpiringToken checks the happy path stays quiet: a token
-// with expires_in=0 really is offline, so no warning should be emitted.
+// TestRunSilentOnNonExpiringToken checks the happy path stays quiet: an
+// explicit expires_in=0 really is offline, so no warning should be emitted.
 func TestRunSilentOnNonExpiringToken(t *testing.T) {
 	var stdout, stderr strings.Builder
-	fetcher := &mockFetcher{results: []*authResult{{AccessToken: "tok", UserID: 42}}}
+	zero := 0
+	fetcher := &mockFetcher{results: []*authResult{{AccessToken: "tok", UserID: 42, ExpiresIn: &zero}}}
 	if err := run(strings.NewReader("login\npassword\n"), &stdout, &stderr, fetcher); err != nil {
 		t.Fatalf("run() = %v", err)
 	}
@@ -573,5 +596,24 @@ func TestRunSilentOnNonExpiringToken(t *testing.T) {
 	}
 	if stderr.String() != "" {
 		t.Fatalf("stderr should be empty for a non-expiring token, got %q", stderr.String())
+	}
+}
+
+// TestRunWarnsOnUnknownExpiry checks that an omitted expires_in is reported as
+// "unknown" and flagged, instead of being silently rendered as a confident 0.
+func TestRunWarnsOnUnknownExpiry(t *testing.T) {
+	var stdout, stderr strings.Builder
+	fetcher := &mockFetcher{results: []*authResult{{AccessToken: "tok", UserID: 42}}}
+	if err := run(strings.NewReader("login\npassword\n"), &stdout, &stderr, fetcher); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "expires_in=unknown") {
+		t.Fatalf("stdout %q missing expires_in=unknown", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "expires_in=0") {
+		t.Fatalf("stdout %q must not claim a non-expiring token", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "no expires_in") {
+		t.Fatalf("stderr %q missing the unknown-lifetime warning", stderr.String())
 	}
 }
