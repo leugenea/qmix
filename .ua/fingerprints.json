@@ -1,0 +1,4906 @@
+{
+  "version": "1.0.0",
+  "gitCommitHash": "f33382aa5d6009b92fa7a1afeb2284d5a1cc4dd6",
+  "generatedAt": "2026-09-06T06:06:14.293Z",
+  "files": {
+    ".github/workflows/ci.yml": {
+      "filePath": ".github/workflows/ci.yml",
+      "contentHash": "f24adb789d7d93c01e7c02f7e5dd337e59b1c65ba06af064ea87c2bc236fca67",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 95,
+      "hasStructuralAnalysis": false
+    },
+    ".github/workflows/live.yml": {
+      "filePath": ".github/workflows/live.yml",
+      "contentHash": "ae8f094e34b5f9dc10f1efdf18824f97a0214d324b62c13f89127211deef288d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 61,
+      "hasStructuralAnalysis": false
+    },
+    "ARCHITECTURE.md": {
+      "filePath": "ARCHITECTURE.md",
+      "contentHash": "36ae34be37a29fda93e1bfeaf59451e06435a2b2341d20da0e606d2f839cce2b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 215,
+      "hasStructuralAnalysis": false
+    },
+    "Dockerfile": {
+      "filePath": "Dockerfile",
+      "contentHash": "73048a86a34ed03b4a8cdf01834ccdc6e6d0140950d3f1c0c97892ce3533fd97",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 18,
+      "hasStructuralAnalysis": false
+    },
+    "Makefile": {
+      "filePath": "Makefile",
+      "contentHash": "9d937e9697cd82cb03bb11e6b39971cea3beb77b46eed83b2e4c4dbbd284a4b1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 23,
+      "hasStructuralAnalysis": false
+    },
+    "README.md": {
+      "filePath": "README.md",
+      "contentHash": "67706ea241673b93ba683abf368fe8a62cb1b7325bbb004e7ca520090dafd7d5",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 225,
+      "hasStructuralAnalysis": false
+    },
+    "cmd/qmix/main.go": {
+      "filePath": "cmd/qmix/main.go",
+      "contentHash": "c1ab3a3202b9174770c0892d898c0d746ac44eb077c3a8ac308f6bf66c2f9dee",
+      "functions": [
+        {
+          "name": "listenAddr",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "main",
+          "params": [],
+          "exported": false,
+          "lineCount": 5
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "log",
+          "specifiers": [
+            "log"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "github.com/leugenea/qmix/internal/server",
+          "specifiers": [
+            "server"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 26,
+      "hasStructuralAnalysis": true
+    },
+    "cmd/qmix/main_test.go": {
+      "filePath": "cmd/qmix/main_test.go",
+      "contentHash": "b63eba9442723f1804b2b461cac83ec14e1458feeb1ab4da3dd0ccd5ef8fb032",
+      "functions": [
+        {
+          "name": "TestListenAddrDefault",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "TestListenAddrFromEnv",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "TestListenAddrDefault",
+        "TestListenAddrFromEnv"
+      ],
+      "totalLines": 20,
+      "hasStructuralAnalysis": true
+    },
+    "cmd/token-vk/main.go": {
+      "filePath": "cmd/token-vk/main.go",
+      "contentHash": "35698b9c36077f52e1addcde8b7744383a05521eacc3a14ccf93323faaf6bc7c",
+      "functions": [
+        {
+          "name": "result",
+          "params": [],
+          "returnType": "*authResult",
+          "exported": false,
+          "lineCount": 29
+        },
+        {
+          "name": "Auth",
+          "params": [
+            "ctx",
+            "login",
+            "password",
+            "code"
+          ],
+          "returnType": "(*authResult, error)",
+          "exported": true,
+          "lineCount": 34
+        },
+        {
+          "name": "post",
+          "params": [
+            "ctx",
+            "endpoint",
+            "vals"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "validationHint",
+          "params": [
+            "validationType"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "readLine",
+          "params": [
+            "r"
+          ],
+          "returnType": "(string, error)",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "run",
+          "params": [
+            "stdin",
+            "stdout",
+            "stderr",
+            "fetcher"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 57
+        },
+        {
+          "name": "main",
+          "params": [],
+          "exported": false,
+          "lineCount": 5
+        }
+      ],
+      "classes": [
+        {
+          "name": "tokenFetcher",
+          "methods": [
+            "Auth"
+          ],
+          "properties": [],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "authResult",
+          "methods": [],
+          "properties": [
+            "AccessToken",
+            "Need2FA",
+            "ValidationType",
+            "BadCode",
+            "Err"
+          ],
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "tokenResponse",
+          "methods": [
+            "result"
+          ],
+          "properties": [
+            "AccessToken",
+            "Error",
+            "ErrorType",
+            "ErrorDescription",
+            "ValidationType",
+            "ValidationSID",
+            "CaptchaSID"
+          ],
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "httpDoer",
+          "methods": [
+            "Do"
+          ],
+          "properties": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "vkFetcher",
+          "methods": [
+            "Auth",
+            "post"
+          ],
+          "properties": [
+            "do"
+          ],
+          "exported": false,
+          "lineCount": 1
+        }
+      ],
+      "imports": [
+        {
+          "source": "bufio",
+          "specifiers": [
+            "bufio"
+          ]
+        },
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/url",
+          "specifiers": [
+            "url"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        }
+      ],
+      "exports": [
+        "Auth"
+      ],
+      "totalLines": 265,
+      "hasStructuralAnalysis": true
+    },
+    "cmd/token-vk/main_test.go": {
+      "filePath": "cmd/token-vk/main_test.go",
+      "contentHash": "cb19a5d4cae717afb17b162ad7a3fd38d63a2ae25098c5b61ab790a8ac3a6a38",
+      "functions": [
+        {
+          "name": "Auth",
+          "params": [
+            "_",
+            "_",
+            "_",
+            "code"
+          ],
+          "returnType": "(*authResult, error)",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "tokenRes",
+          "params": [
+            "t"
+          ],
+          "returnType": "*authResult",
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "twofaRes",
+          "params": [
+            "vt"
+          ],
+          "returnType": "*authResult",
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "TestRunSuccess",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "TestRun2FASuccess",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "TestRunBadCodeThenSuccess",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "TestRunEmptyLogin",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestRunEmptyPassword",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestRunReadLoginError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestRunReadPasswordError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestRunFetcherError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "TestRunTerminalAuthError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "TestRunEmptyCode",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestRunReadCodeError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestRunUnexpectedResult",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestTokenResponseResult",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 107
+        },
+        {
+          "name": "jsonUnmarshal",
+          "params": [
+            "s",
+            "v"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "Do",
+          "params": [
+            "req"
+          ],
+          "returnType": "(*http.Response, error)",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "TestVkFetcherAuthSuccess",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 42
+        },
+        {
+          "name": "TestVkFetcherAuthWithCode",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestVkFetcher2FATriggersValidatePhone",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "TestVkFetcher2FAValidatePhoneFailureIgnored",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "TestVkFetcher2FANoSID",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestVkFetcherBadJSON",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "TestVkFetcherDoError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestVkFetcherNewRequestError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Do",
+          "params": [],
+          "returnType": "(*http.Response, error)",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "TestValidationHint",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestReadLine",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestReadLineEOF",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "newReader",
+          "params": [
+            "s"
+          ],
+          "returnType": "*bufio.Reader",
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "mockFetcher",
+          "methods": [
+            "Auth"
+          ],
+          "properties": [
+            "results",
+            "err",
+            "gotCode",
+            "calls"
+          ],
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "fakeDoer",
+          "methods": [
+            "Do"
+          ],
+          "properties": [
+            "bodies",
+            "calls",
+            "reqs"
+          ],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "errDoer",
+          "methods": [
+            "Do"
+          ],
+          "properties": [],
+          "exported": false,
+          "lineCount": 1
+        }
+      ],
+      "imports": [
+        {
+          "source": "bufio",
+          "specifiers": [
+            "bufio"
+          ]
+        },
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "Auth",
+        "TestRunSuccess",
+        "TestRun2FASuccess",
+        "TestRunBadCodeThenSuccess",
+        "TestRunEmptyLogin",
+        "TestRunEmptyPassword",
+        "TestRunReadLoginError",
+        "TestRunReadPasswordError",
+        "TestRunFetcherError",
+        "TestRunTerminalAuthError",
+        "TestRunEmptyCode",
+        "TestRunReadCodeError",
+        "TestRunUnexpectedResult",
+        "TestTokenResponseResult",
+        "Do",
+        "TestVkFetcherAuthSuccess",
+        "TestVkFetcherAuthWithCode",
+        "TestVkFetcher2FATriggersValidatePhone",
+        "TestVkFetcher2FAValidatePhoneFailureIgnored",
+        "TestVkFetcher2FANoSID",
+        "TestVkFetcherBadJSON",
+        "TestVkFetcherDoError",
+        "TestVkFetcherNewRequestError",
+        "Do",
+        "TestValidationHint",
+        "TestReadLine",
+        "TestReadLineEOF"
+      ],
+      "totalLines": 526,
+      "hasStructuralAnalysis": true
+    },
+    "docker-compose.yml": {
+      "filePath": "docker-compose.yml",
+      "contentHash": "30367f4530b38294ec26028499deb3477947bf19fdc2fca7d50d3c9193e83b4b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 15,
+      "hasStructuralAnalysis": false
+    },
+    "go.mod": {
+      "filePath": "go.mod",
+      "contentHash": "b4f679f7e75bfdc857652f1d2f33c9e606963341e24113ee14f9bd221ae639ad",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 4,
+      "hasStructuralAnalysis": false
+    },
+    "internal/resolver/config.go": {
+      "filePath": "internal/resolver/config.go",
+      "contentHash": "5452ee2734e2459badc2589e837e729df96ccc85faa1fe2fc2ed2e31e06fa079",
+      "functions": [
+        {
+          "name": "ConfigFromEnv",
+          "params": [],
+          "returnType": "Config",
+          "exported": true,
+          "lineCount": 8
+        }
+      ],
+      "classes": [
+        {
+          "name": "Config",
+          "methods": [],
+          "properties": [
+            "VKToken",
+            "YMToken",
+            "SpotifyClientID",
+            "SpotifyClientSecret"
+          ],
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        }
+      ],
+      "exports": [
+        "Config",
+        "ConfigFromEnv"
+      ],
+      "totalLines": 27,
+      "hasStructuralAnalysis": true
+    },
+    "internal/resolver/config_test.go": {
+      "filePath": "internal/resolver/config_test.go",
+      "contentHash": "3b52ce43aa7a80f4514143554787e19ef69ad5211e70ae7b7542815c2579e0f9",
+      "functions": [
+        {
+          "name": "TestConfigFromEnvAll",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestConfigFromEnvPartial",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestConfigFromEnvNone",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestDefaultMuxWithConfig",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 24
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "TestConfigFromEnvAll",
+        "TestConfigFromEnvPartial",
+        "TestConfigFromEnvNone",
+        "TestDefaultMuxWithConfig"
+      ],
+      "totalLines": 70,
+      "hasStructuralAnalysis": true
+    },
+    "internal/resolver/default.go": {
+      "filePath": "internal/resolver/default.go",
+      "contentHash": "d9a7c201cffec85b1dd54eefe5326269d10d2753d17d227ec557cfba42b5d0f9",
+      "functions": [
+        {
+          "name": "DefaultMux",
+          "params": [],
+          "returnType": "*Mux",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "DefaultMuxWithConfig",
+          "params": [
+            "cfg"
+          ],
+          "returnType": "*Mux",
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "DefaultMux",
+        "DefaultMuxWithConfig"
+      ],
+      "totalLines": 20,
+      "hasStructuralAnalysis": true
+    },
+    "internal/resolver/harness_test.go": {
+      "filePath": "internal/resolver/harness_test.go",
+      "contentHash": "8b4085e006df2fa63e6bcdb5efbb5518195e197264938bc6006d8bd392ff6ed2",
+      "functions": [
+        {
+          "name": "skipIfNoToken",
+          "params": [
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "TestSkipIfNoTokenMissing",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "TestSkipIfNoTokenPresent",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "TestSpotifyOEmbedLive",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "TestSkipIfNoTokenMissing",
+        "TestSkipIfNoTokenPresent",
+        "TestSpotifyOEmbedLive"
+      ],
+      "totalLines": 51,
+      "hasStructuralAnalysis": true
+    },
+    "internal/resolver/resolver.go": {
+      "filePath": "internal/resolver/resolver.go",
+      "contentHash": "7b2c651768926abf2bd2f86d186ecd77c13a3ed23fda46e7265c9db2fb882c58",
+      "functions": [
+        {
+          "name": "NewMux",
+          "params": [],
+          "returnType": "*Mux",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Resolve",
+          "params": [
+            "ctx",
+            "rawurl"
+          ],
+          "returnType": "(*Track, error)",
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "DomainOf",
+          "params": [
+            "rawurl"
+          ],
+          "returnType": "(string, error)",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "fmtInvalid",
+          "params": [
+            "rawurl"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "Track",
+          "methods": [],
+          "properties": [
+            "Title",
+            "Artist",
+            "DurationSec",
+            "Source",
+            "ResolvedBy"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "Resolver",
+          "methods": [
+            "Resolve"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Matcher",
+          "methods": [],
+          "properties": [
+            "Domains",
+            "Resolver"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Mux",
+          "methods": [
+            "Resolve"
+          ],
+          "properties": [
+            "matchers"
+          ],
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "net/url",
+          "specifiers": [
+            "url"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        }
+      ],
+      "exports": [
+        "Track",
+        "Resolver",
+        "Matcher",
+        "Mux",
+        "NewMux",
+        "Resolve",
+        "DomainOf"
+      ],
+      "totalLines": 99,
+      "hasStructuralAnalysis": true
+    },
+    "internal/resolver/resolver_test.go": {
+      "filePath": "internal/resolver/resolver_test.go",
+      "contentHash": "a279bd2522f5cb3fcb5df96a953034497770a3577eddfe8f01b74d5871a68e8d",
+      "functions": [
+        {
+          "name": "Run",
+          "params": [
+            "_",
+            "_"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "TestResolver_SpotifyOEmbed",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "TestResolver_SpotifyNoAuthor",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestResolver_SpotifyNonOK",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_SpotifyEmptyTitle",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_SpotifyBadJSON",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_SpotifyRequestError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolver_YouTube",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "TestResolver_YouTubePrefersEmbeddedSongMetadata",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_YouTubeChannelFallback",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_YouTubeRunnerError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolver_YouTubeEmptyOutput",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolver_YouTubeBadJSON",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolver_YouTubeEmptyTitle",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolver_YouTubeDefaultRunner",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_YouTubeCustomName",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestResolver_VKYandexOGTitle",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "TestResolver_VKYandexNoOGTitle",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_VKYandexYandex",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_VKYandexUnsupportedService",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolver_VKYandexRequestError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolver_MuxSpotifyRouting",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestResolver_MuxYouTubeRouting",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestResolver_MuxUnknownDomain",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolver_MuxInvalidURL",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "TestResolver_MuxRoutingCaseInsensitive",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestResolver_DefaultMux",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "TestResolver_DomainOf",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "TestResolver_SpotifyCustomNameAndDefaults",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "TestResolver_VKYandexClientDefault",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "TestResolver_ErrorMessages",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [
+        {
+          "name": "fakeRunner",
+          "methods": [
+            "Run"
+          ],
+          "properties": [
+            "out",
+            "err"
+          ],
+          "exported": false,
+          "lineCount": 4
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/http/httptest",
+          "specifiers": [
+            "httptest"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "Run",
+        "TestResolver_SpotifyOEmbed",
+        "TestResolver_SpotifyNoAuthor",
+        "TestResolver_SpotifyNonOK",
+        "TestResolver_SpotifyEmptyTitle",
+        "TestResolver_SpotifyBadJSON",
+        "TestResolver_SpotifyRequestError",
+        "TestResolver_YouTube",
+        "TestResolver_YouTubePrefersEmbeddedSongMetadata",
+        "TestResolver_YouTubeChannelFallback",
+        "TestResolver_YouTubeRunnerError",
+        "TestResolver_YouTubeEmptyOutput",
+        "TestResolver_YouTubeBadJSON",
+        "TestResolver_YouTubeEmptyTitle",
+        "TestResolver_YouTubeDefaultRunner",
+        "TestResolver_YouTubeCustomName",
+        "TestResolver_VKYandexOGTitle",
+        "TestResolver_VKYandexNoOGTitle",
+        "TestResolver_VKYandexYandex",
+        "TestResolver_VKYandexUnsupportedService",
+        "TestResolver_VKYandexRequestError",
+        "TestResolver_MuxSpotifyRouting",
+        "TestResolver_MuxYouTubeRouting",
+        "TestResolver_MuxUnknownDomain",
+        "TestResolver_MuxInvalidURL",
+        "TestResolver_MuxRoutingCaseInsensitive",
+        "TestResolver_DefaultMux",
+        "TestResolver_DomainOf",
+        "TestResolver_SpotifyCustomNameAndDefaults",
+        "TestResolver_VKYandexClientDefault",
+        "TestResolver_ErrorMessages"
+      ],
+      "totalLines": 417,
+      "hasStructuralAnalysis": true
+    },
+    "internal/resolver/spotify.go": {
+      "filePath": "internal/resolver/spotify.go",
+      "contentHash": "2cb257643cd07c3e20f37a6b9b14c8c603d28d2bac1111bd4adbb48b8c4deb14",
+      "functions": [
+        {
+          "name": "client",
+          "params": [],
+          "returnType": "*http.Client",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "endpoint",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "name",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "Resolve",
+          "params": [
+            "ctx",
+            "rawurl"
+          ],
+          "returnType": "(*Track, error)",
+          "exported": true,
+          "lineCount": 34
+        }
+      ],
+      "classes": [
+        {
+          "name": "Spotify",
+          "methods": [
+            "client",
+            "endpoint",
+            "name",
+            "Resolve"
+          ],
+          "properties": [
+            "Client",
+            "Endpoint",
+            "Name",
+            "Config"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "oembedResponse",
+          "methods": [],
+          "properties": [
+            "Title",
+            "AuthorName",
+            "Provider"
+          ],
+          "exported": false,
+          "lineCount": 5
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/url",
+          "specifiers": [
+            "url"
+          ]
+        }
+      ],
+      "exports": [
+        "Spotify",
+        "Resolve"
+      ],
+      "totalLines": 96,
+      "hasStructuralAnalysis": true
+    },
+    "internal/resolver/vkyandex.go": {
+      "filePath": "internal/resolver/vkyandex.go",
+      "contentHash": "afcac8555b7772fca4533130f201549c1611284d68312f585b2dc6c4f2b43c96",
+      "functions": [
+        {
+          "name": "client",
+          "params": [],
+          "returnType": "*http.Client",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "Resolve",
+          "params": [
+            "ctx",
+            "rawurl"
+          ],
+          "returnType": "(*Track, error)",
+          "exported": true,
+          "lineCount": 43
+        },
+        {
+          "name": "serviceFor",
+          "params": [
+            "rawurl"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 17
+        }
+      ],
+      "classes": [
+        {
+          "name": "VKYandex",
+          "methods": [
+            "client",
+            "Resolve"
+          ],
+          "properties": [
+            "Client",
+            "Endpoint",
+            "Config"
+          ],
+          "exported": true,
+          "lineCount": 9
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "regexp",
+          "specifiers": [
+            "regexp"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        }
+      ],
+      "exports": [
+        "VKYandex",
+        "Resolve"
+      ],
+      "totalLines": 111,
+      "hasStructuralAnalysis": true
+    },
+    "internal/resolver/youtube.go": {
+      "filePath": "internal/resolver/youtube.go",
+      "contentHash": "de9b50fc097c1411dd013a267228ae87d691eeaf8c1cda6c1df9a9a478d3182e",
+      "functions": [
+        {
+          "name": "Run",
+          "params": [
+            "ctx",
+            "url"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "runner",
+          "params": [],
+          "returnType": "Runner",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "name",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "Resolve",
+          "params": [
+            "ctx",
+            "rawurl"
+          ],
+          "returnType": "(*Track, error)",
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "youTubeArtist",
+          "params": [
+            "v"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 9
+        }
+      ],
+      "classes": [
+        {
+          "name": "Runner",
+          "methods": [
+            "Run"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "ytdlpRunner",
+          "methods": [
+            "Run"
+          ],
+          "properties": [
+            "bin"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "youTubeJSON",
+          "methods": [],
+          "properties": [
+            "Title",
+            "Uploader",
+            "Channel",
+            "Artist",
+            "Track",
+            "Duration"
+          ],
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "YouTube",
+          "methods": [
+            "runner",
+            "name",
+            "Resolve"
+          ],
+          "properties": [
+            "Runner",
+            "Name"
+          ],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "os/exec",
+          "specifiers": [
+            "exec"
+          ]
+        }
+      ],
+      "exports": [
+        "Runner",
+        "Run",
+        "YouTube",
+        "Resolve"
+      ],
+      "totalLines": 104,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/app.go": {
+      "filePath": "internal/server/app.go",
+      "contentHash": "bb4eb84a023d871181e9f6eabcdb4eb1a5ebfe00f2bd656ecd01177582aff5ca",
+      "functions": [
+        {
+          "name": "NewApp",
+          "params": [],
+          "returnType": "*App",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "Close",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Handler",
+          "params": [],
+          "returnType": "http.Handler",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "NewStreamBackend",
+          "params": [],
+          "returnType": "stream.StreamBackend",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "healthz",
+          "params": [
+            "w",
+            "_"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "Run",
+          "params": [
+            "addr"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "classes": [
+        {
+          "name": "App",
+          "methods": [
+            "Close",
+            "Handler"
+          ],
+          "properties": [
+            "Store",
+            "Hub",
+            "stop"
+          ],
+          "exported": true,
+          "lineCount": 5
+        }
+      ],
+      "imports": [
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "log",
+          "specifiers": [
+            "log"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/leugenea/qmix/internal/resolver",
+          "specifiers": [
+            "resolver"
+          ]
+        },
+        {
+          "source": "github.com/leugenea/qmix/internal/stream",
+          "specifiers": [
+            "stream"
+          ]
+        }
+      ],
+      "exports": [
+        "App",
+        "NewApp",
+        "Close",
+        "Handler",
+        "NewStreamBackend",
+        "Run"
+      ],
+      "totalLines": 69,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/code.go": {
+      "filePath": "internal/server/code.go",
+      "contentHash": "050deada3545975e74085991ff3e4459d65f994b26e10e9e84ba6b57420bab67",
+      "functions": [
+        {
+          "name": "NewRandomCodeGenerator",
+          "params": [
+            "src"
+          ],
+          "returnType": "*RandomCodeGenerator",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Generate",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "newToken",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 10
+        }
+      ],
+      "classes": [
+        {
+          "name": "CodeGenerator",
+          "methods": [
+            "Generate"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "RandomCodeGenerator",
+          "methods": [
+            "Generate"
+          ],
+          "properties": [
+            "rng"
+          ],
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "imports": [
+        {
+          "source": "math/rand",
+          "specifiers": [
+            "rand"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        }
+      ],
+      "exports": [
+        "CodeGenerator",
+        "RandomCodeGenerator",
+        "NewRandomCodeGenerator",
+        "Generate"
+      ],
+      "totalLines": 57,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/handlers.go": {
+      "filePath": "internal/server/handlers.go",
+      "contentHash": "d32cbb7e98e9b230301cb85d95201bd4c251a6ed28544adffa090ed2d5495afd",
+      "functions": [
+        {
+          "name": "NewServer",
+          "params": [
+            "store",
+            "hub"
+          ],
+          "returnType": "*Server",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Routes",
+          "params": [
+            "mux"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "writeJSON",
+          "params": [
+            "w",
+            "status",
+            "v"
+          ],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "writeError",
+          "params": [
+            "w",
+            "status",
+            "msg"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "decodeJSON",
+          "params": [
+            "w",
+            "r",
+            "v"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "hostToken",
+          "params": [
+            "r"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "handleCreateRoom",
+          "params": [
+            "w",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "handleGetRoom",
+          "params": [
+            "w",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "viewRoom",
+          "params": [
+            "room"
+          ],
+          "returnType": "roomView",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "handleAddTrack",
+          "params": [
+            "w",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 45
+        },
+        {
+          "name": "trackFromURL",
+          "params": [
+            "u"
+          ],
+          "returnType": "Track",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "resolveError",
+          "params": [
+            "err"
+          ],
+          "returnType": "(int, string)",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "handleSkip",
+          "params": [
+            "w",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 35
+        },
+        {
+          "name": "handleReorder",
+          "params": [
+            "w",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 41
+        },
+        {
+          "name": "isPermutation",
+          "params": [
+            "ids",
+            "queue"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 16
+        },
+        {
+          "name": "handleEvents",
+          "params": [
+            "w",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "cloneTracks",
+          "params": [
+            "q"
+          ],
+          "returnType": "[]Track",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "queuePayload",
+          "params": [
+            "room"
+          ],
+          "returnType": "map[string]interface{}",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "currentPayload",
+          "params": [
+            "cur"
+          ],
+          "returnType": "map[string]interface{}",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "snapshotPayload",
+          "params": [
+            "room"
+          ],
+          "returnType": "map[string]interface{}",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "handleStream",
+          "params": [
+            "w",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 25
+        },
+        {
+          "name": "newTrackID",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "Server",
+          "methods": [
+            "Routes",
+            "handleCreateRoom",
+            "handleGetRoom",
+            "handleAddTrack",
+            "handleSkip",
+            "handleReorder",
+            "handleEvents",
+            "handleStream"
+          ],
+          "properties": [
+            "store",
+            "hub",
+            "Resolver",
+            "StreamBackend"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "roomView",
+          "methods": [],
+          "properties": [
+            "Code",
+            "Current",
+            "Queue"
+          ],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "curView",
+          "methods": [],
+          "properties": [
+            "TrackID",
+            "PosSec",
+            "State"
+          ],
+          "exported": false,
+          "lineCount": 5
+        }
+      ],
+      "imports": [
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "github.com/leugenea/qmix/internal/resolver",
+          "specifiers": [
+            "resolver"
+          ]
+        },
+        {
+          "source": "github.com/leugenea/qmix/internal/stream",
+          "specifiers": [
+            "stream"
+          ]
+        }
+      ],
+      "exports": [
+        "Server",
+        "NewServer",
+        "Routes"
+      ],
+      "totalLines": 366,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/hub.go": {
+      "filePath": "internal/server/hub.go",
+      "contentHash": "2541e0e011ca60d531439417f590d2557a084f1e5441a9281512f54e891e6734",
+      "functions": [
+        {
+          "name": "NewHub",
+          "params": [],
+          "returnType": "*Hub",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Subscribe",
+          "params": [
+            "roomCode"
+          ],
+          "returnType": "(<-chan Event, func())",
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "Publish",
+          "params": [
+            "roomCode",
+            "name",
+            "data"
+          ],
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "ServeHTTP",
+          "params": [
+            "ctx",
+            "w",
+            "roomCode",
+            "snapshot"
+          ],
+          "exported": true,
+          "lineCount": 34
+        },
+        {
+          "name": "currentID",
+          "params": [
+            "roomCode"
+          ],
+          "returnType": "int64",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "heartbeatInterval",
+          "params": [],
+          "returnType": "time.Duration",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "writeEvent",
+          "params": [
+            "w",
+            "ev"
+          ],
+          "exported": false,
+          "lineCount": 9
+        }
+      ],
+      "classes": [
+        {
+          "name": "Event",
+          "methods": [],
+          "properties": [
+            "ID",
+            "Name",
+            "Data"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "Hub",
+          "methods": [
+            "Subscribe",
+            "Publish",
+            "ServeHTTP",
+            "currentID",
+            "heartbeatInterval"
+          ],
+          "properties": [
+            "mu",
+            "rooms",
+            "Heartbeat"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "roomHub",
+          "methods": [],
+          "properties": [
+            "seq",
+            "subs"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "subscriber",
+          "methods": [],
+          "properties": [
+            "ch",
+            "done"
+          ],
+          "exported": false,
+          "lineCount": 4
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Event",
+        "Hub",
+        "NewHub",
+        "Subscribe",
+        "Publish",
+        "ServeHTTP"
+      ],
+      "totalLines": 175,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/integration_mandatory_test.go": {
+      "filePath": "internal/server/integration_mandatory_test.go",
+      "contentHash": "ef83c05322c3083477ce05a53ad8552ace183cb8e8f984adeb2e84bf6fb732b1",
+      "functions": [
+        {
+          "name": "integServe",
+          "params": [
+            "t",
+            "h"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "integDo",
+          "params": [
+            "t",
+            "method",
+            "url",
+            "body",
+            "hostToken"
+          ],
+          "returnType": "integResp",
+          "exported": false,
+          "lineCount": 25
+        },
+        {
+          "name": "integJSON",
+          "params": [
+            "t",
+            "r",
+            "v"
+          ],
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "integCreateRoom",
+          "params": [
+            "t",
+            "base"
+          ],
+          "returnType": "(code, token string)",
+          "exported": false,
+          "lineCount": 17
+        },
+        {
+          "name": "integAddTrack",
+          "params": [
+            "t",
+            "base",
+            "code",
+            "url"
+          ],
+          "returnType": "Track",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "integGetRoom",
+          "params": [
+            "t",
+            "base",
+            "code"
+          ],
+          "returnType": "(integResp, integRoomView)",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "integSkip",
+          "params": [
+            "t",
+            "base",
+            "code",
+            "token"
+          ],
+          "returnType": "integResp",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "fakeYtdlp",
+          "params": [
+            "t",
+            "upstreamURL"
+          ],
+          "exported": false,
+          "lineCount": 18
+        },
+        {
+          "name": "mockAudioUpstream",
+          "params": [
+            "t"
+          ],
+          "returnType": "(string, []byte)",
+          "exported": false,
+          "lineCount": 29
+        },
+        {
+          "name": "TestIntegrationHealthz",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "TestIntegrationRoomLifecycle",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 79
+        },
+        {
+          "name": "TestIntegrationSSE",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 103
+        },
+        {
+          "name": "TestIntegrationResolverMock",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "TestIntegrationResolverMockUnknownLink",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "TestIntegrationStreamFakeYtdlp",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 58
+        },
+        {
+          "name": "TestIntegrationRoomTTL",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 39
+        }
+      ],
+      "classes": [
+        {
+          "name": "integResp",
+          "methods": [],
+          "properties": [
+            "status",
+            "header",
+            "body"
+          ],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "integRoomView",
+          "methods": [],
+          "properties": [
+            "Code",
+            "Current",
+            "Queue"
+          ],
+          "exported": false,
+          "lineCount": 5
+        }
+      ],
+      "imports": [
+        {
+          "source": "bufio",
+          "specifiers": [
+            "bufio"
+          ]
+        },
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net",
+          "specifiers": [
+            "net"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "strconv",
+          "specifiers": [
+            "strconv"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/leugenea/qmix/internal/resolver",
+          "specifiers": [
+            "resolver"
+          ]
+        }
+      ],
+      "exports": [
+        "TestIntegrationHealthz",
+        "TestIntegrationRoomLifecycle",
+        "TestIntegrationSSE",
+        "TestIntegrationResolverMock",
+        "TestIntegrationResolverMockUnknownLink",
+        "TestIntegrationStreamFakeYtdlp",
+        "TestIntegrationRoomTTL"
+      ],
+      "totalLines": 558,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/models.go": {
+      "filePath": "internal/server/models.go",
+      "contentHash": "cd7cb92e93f02ae5bc1d0585e4d587e99fb1ffb1ec6a6b7150ae8eff394cb30b",
+      "functions": [],
+      "classes": [
+        {
+          "name": "Room",
+          "methods": [],
+          "properties": [
+            "Code",
+            "HostToken",
+            "Queue",
+            "Current",
+            "LastActivity"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "Track",
+          "methods": [],
+          "properties": [
+            "ID",
+            "URL",
+            "Title",
+            "Artist",
+            "DurationSec",
+            "ResolvedBy"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "Current",
+          "methods": [],
+          "properties": [
+            "TrackID",
+            "PosSec",
+            "State",
+            "Title",
+            "Artist"
+          ],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "imports": [
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Room",
+        "Track",
+        "Current"
+      ],
+      "totalLines": 38,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/resolver_integration_test.go": {
+      "filePath": "internal/server/resolver_integration_test.go",
+      "contentHash": "7da5738188c0300a06cdc5efe5156efb0bda931d5bdf476bba1a210ec71c086c",
+      "functions": [
+        {
+          "name": "Resolve",
+          "params": [
+            "_",
+            "_"
+          ],
+          "returnType": "(*resolver.Track, error)",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "newResolverTestServer",
+          "params": [
+            "r"
+          ],
+          "returnType": "(*Server, *Store)",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "TestAddTrackResolvesMetadata",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "TestAddTrackUnknownDomain422",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestAddTrackInvalidLink422",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestAddTrackNoAnonymous422",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestAddTrackServiceError502",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestAddTrackResolvedQueueNotGrown",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "containsStr",
+          "params": [
+            "s",
+            "sub"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "stubResolver",
+          "methods": [
+            "Resolve"
+          ],
+          "properties": [
+            "meta",
+            "err"
+          ],
+          "exported": false,
+          "lineCount": 4
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/leugenea/qmix/internal/resolver",
+          "specifiers": [
+            "resolver"
+          ]
+        }
+      ],
+      "exports": [
+        "Resolve",
+        "TestAddTrackResolvesMetadata",
+        "TestAddTrackUnknownDomain422",
+        "TestAddTrackInvalidLink422",
+        "TestAddTrackNoAnonymous422",
+        "TestAddTrackServiceError502",
+        "TestAddTrackResolvedQueueNotGrown"
+      ],
+      "totalLines": 142,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/server_test.go": {
+      "filePath": "internal/server/server_test.go",
+      "contentHash": "a9d50ff424a0a6b7cd8f96493ff85519a2fa15b6d572846886d43aee3f08b2fe",
+      "functions": [
+        {
+          "name": "newTestServer",
+          "params": [],
+          "returnType": "(*Server, *Store)",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "Generate",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "newTestMux",
+          "params": [
+            "s"
+          ],
+          "returnType": "*http.ServeMux",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "doReq",
+          "params": [
+            "t",
+            "mux",
+            "method",
+            "path",
+            "body",
+            "token"
+          ],
+          "returnType": "*httptest.ResponseRecorder",
+          "exported": false,
+          "lineCount": 16
+        },
+        {
+          "name": "decodeBody",
+          "params": [
+            "t",
+            "rec",
+            "v"
+          ],
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "createRoom",
+          "params": [
+            "t",
+            "mux"
+          ],
+          "returnType": "(code, token string)",
+          "exported": false,
+          "lineCount": 17
+        },
+        {
+          "name": "addTrack",
+          "params": [
+            "t",
+            "mux",
+            "code",
+            "url"
+          ],
+          "returnType": "*httptest.ResponseRecorder",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "TestCreateAndGetRoom",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 29
+        },
+        {
+          "name": "TestGetUnknownRoom",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "TestAddTrack",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "TestAddTrackBadJSON",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestAddTrackEmptyURL",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestSkip",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 42
+        },
+        {
+          "name": "TestSkipEmptyQueue",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestReorder",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 42
+        },
+        {
+          "name": "TestReorderNotPermutation",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "TestReorderNoToken",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "readSSE",
+          "params": [
+            "t",
+            "r"
+          ],
+          "returnType": "(id, name, data string)",
+          "exported": false,
+          "lineCount": 24
+        },
+        {
+          "name": "TestSSESnapshotAndEvents",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 69
+        },
+        {
+          "name": "TestTTLJanitor",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "TestConcurrentMutationsAndSSE",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 100
+        },
+        {
+          "name": "TestHealthzAndRoomFlowViaApp",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "TestRandomCodeGenerator",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "TestNewStoreDefaultGen",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "TestUnknownRoomHandlers",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "TestReorderEmptyQueue",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "TestSSEHeartbeat",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "TestHeartbeatInterval",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "Header",
+          "params": [],
+          "returnType": "http.Header",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "WriteHeader",
+          "params": [
+            "code"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Write",
+          "params": [
+            "b"
+          ],
+          "returnType": "(int, error)",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "TestServeHTTPNoFlusher",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "TestCurrentIDUnknownRoom",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "TestWriteEventUnmarshalableData",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [
+        {
+          "name": "seqCodeGen",
+          "methods": [
+            "Generate"
+          ],
+          "properties": [
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "noFlushWriter",
+          "methods": [
+            "Header",
+            "WriteHeader",
+            "Write"
+          ],
+          "properties": [
+            "header",
+            "code"
+          ],
+          "exported": false,
+          "lineCount": 4
+        }
+      ],
+      "imports": [
+        {
+          "source": "bufio",
+          "specifiers": [
+            "bufio"
+          ]
+        },
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "math/rand",
+          "specifiers": [
+            "rand"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/http/httptest",
+          "specifiers": [
+            "httptest"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "sync/atomic",
+          "specifiers": [
+            "atomic"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Generate",
+        "TestCreateAndGetRoom",
+        "TestGetUnknownRoom",
+        "TestAddTrack",
+        "TestAddTrackBadJSON",
+        "TestAddTrackEmptyURL",
+        "TestSkip",
+        "TestSkipEmptyQueue",
+        "TestReorder",
+        "TestReorderNotPermutation",
+        "TestReorderNoToken",
+        "TestSSESnapshotAndEvents",
+        "TestTTLJanitor",
+        "TestConcurrentMutationsAndSSE",
+        "TestHealthzAndRoomFlowViaApp",
+        "TestRandomCodeGenerator",
+        "TestNewStoreDefaultGen",
+        "TestUnknownRoomHandlers",
+        "TestReorderEmptyQueue",
+        "TestSSEHeartbeat",
+        "TestHeartbeatInterval",
+        "Header",
+        "WriteHeader",
+        "Write",
+        "TestServeHTTPNoFlusher",
+        "TestCurrentIDUnknownRoom",
+        "TestWriteEventUnmarshalableData"
+      ],
+      "totalLines": 726,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/store.go": {
+      "filePath": "internal/server/store.go",
+      "contentHash": "8be192671740c71089c8aec104d8483c19a84daaeafd298e18933f799fa001a2",
+      "functions": [
+        {
+          "name": "NewStore",
+          "params": [
+            "ttl",
+            "tick",
+            "gen"
+          ],
+          "returnType": "*Store",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "CreateRoom",
+          "params": [],
+          "returnType": "*Room",
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "Get",
+          "params": [
+            "code"
+          ],
+          "returnType": "*Room",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "touch",
+          "params": [
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "Janitor",
+          "params": [
+            "stop"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "sweep",
+          "params": [],
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "isEmpty",
+          "params": [],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "Store",
+          "methods": [
+            "CreateRoom",
+            "Get",
+            "touch",
+            "Janitor",
+            "sweep"
+          ],
+          "properties": [
+            "mu",
+            "rooms",
+            "TTL",
+            "Tick",
+            "gen"
+          ],
+          "exported": true,
+          "lineCount": 12
+        }
+      ],
+      "imports": [
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Store",
+        "NewStore",
+        "CreateRoom",
+        "Get",
+        "Janitor"
+      ],
+      "totalLines": 103,
+      "hasStructuralAnalysis": true
+    },
+    "internal/server/stream_integration_test.go": {
+      "filePath": "internal/server/stream_integration_test.go",
+      "contentHash": "bc1b0d08f9d18dbad3b7e2261b0d8aa1c75ffca87ca471840777ab954fefb5af",
+      "functions": [
+        {
+          "name": "Stream",
+          "params": [
+            "_",
+            "t",
+            "rangeHeader"
+          ],
+          "returnType": "(*stream.Result, error)",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "newStreamServer",
+          "params": [
+            "sb"
+          ],
+          "returnType": "(*Server, *Store)",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "startCurrentTrack",
+          "params": [
+            "t",
+            "mux",
+            "code",
+            "token",
+            "url"
+          ],
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "trackMeta",
+          "params": [],
+          "returnType": "*resolver.Track",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "streamBodyResult",
+          "params": [
+            "body"
+          ],
+          "returnType": "*stream.Result",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "TestStreamEndpointFull",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "TestStreamEndpointNoCurrentTrack404",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestStreamEndpointNoBackend404",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestStreamEndpointUnknownRoom404",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "TestStreamEndpointRange",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 31
+        },
+        {
+          "name": "TestAppWiresStreamBackend",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 24
+        }
+      ],
+      "classes": [
+        {
+          "name": "stubStreamBackend",
+          "methods": [
+            "Stream"
+          ],
+          "properties": [
+            "res",
+            "err",
+            "last"
+          ],
+          "exported": false,
+          "lineCount": 5
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/http/httptest",
+          "specifiers": [
+            "httptest"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "github.com/leugenea/qmix/internal/resolver",
+          "specifiers": [
+            "resolver"
+          ]
+        },
+        {
+          "source": "github.com/leugenea/qmix/internal/stream",
+          "specifiers": [
+            "stream"
+          ]
+        }
+      ],
+      "exports": [
+        "Stream",
+        "TestStreamEndpointFull",
+        "TestStreamEndpointNoCurrentTrack404",
+        "TestStreamEndpointNoBackend404",
+        "TestStreamEndpointUnknownRoom404",
+        "TestStreamEndpointRange",
+        "TestAppWiresStreamBackend"
+      ],
+      "totalLines": 195,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/cache.go": {
+      "filePath": "internal/stream/cache.go",
+      "contentHash": "45228e043f99b347f0f63e689559b48b146e0419ed87e02ab9cd1a30920bf5a6",
+      "functions": [
+        {
+          "name": "NewCache",
+          "params": [
+            "ttl"
+          ],
+          "returnType": "*Cache",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "Get",
+          "params": [
+            "key"
+          ],
+          "returnType": "(interface{}, bool)",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "Do",
+          "params": [
+            "key",
+            "loader"
+          ],
+          "returnType": "(interface{}, error)",
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "Len",
+          "params": [],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 11
+        }
+      ],
+      "classes": [
+        {
+          "name": "Cache",
+          "methods": [
+            "Get",
+            "Do",
+            "Len"
+          ],
+          "properties": [
+            "mu",
+            "ttl",
+            "entries",
+            "inflight"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "entry",
+          "methods": [],
+          "properties": [
+            "value",
+            "expiry"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "call",
+          "methods": [],
+          "properties": [
+            "done",
+            "val",
+            "err"
+          ],
+          "exported": false,
+          "lineCount": 5
+        }
+      ],
+      "imports": [
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Cache",
+        "NewCache",
+        "Get",
+        "Do",
+        "Len"
+      ],
+      "totalLines": 106,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/cache_test.go": {
+      "filePath": "internal/stream/cache_test.go",
+      "contentHash": "fb8000fd63a2c39447a531d0aaca83912bc68e29fe7cc5398b3110f2c6a4c09b",
+      "functions": [
+        {
+          "name": "TestCacheGetSet",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "TestCacheLoadErrorNotStored",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestCacheSingleflight",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 34
+        },
+        {
+          "name": "TestCacheKeyIsolation",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "TestCacheExpiryRunsLoaderAgain",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 18
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "sync/atomic",
+          "specifiers": [
+            "atomic"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "TestCacheGetSet",
+        "TestCacheLoadErrorNotStored",
+        "TestCacheSingleflight",
+        "TestCacheKeyIsolation",
+        "TestCacheExpiryRunsLoaderAgain"
+      ],
+      "totalLines": 137,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/config.go": {
+      "filePath": "internal/stream/config.go",
+      "contentHash": "a969ca32665292b4c24c80f323a5acb6e7aec92fd6340ffbcb42fcd5207ad75c",
+      "functions": [
+        {
+          "name": "ConfigFromEnv",
+          "params": [],
+          "returnType": "Config",
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [
+        {
+          "name": "Config",
+          "methods": [],
+          "properties": [
+            "YtdlpBin",
+            "CacheTTL"
+          ],
+          "exported": true,
+          "lineCount": 8
+        }
+      ],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Config",
+        "ConfigFromEnv"
+      ],
+      "totalLines": 30,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/config_test.go": {
+      "filePath": "internal/stream/config_test.go",
+      "contentHash": "7b66e665bd6f502a719f7792f12c80178e2a1e8a563f17d4b7d36908e8333240",
+      "functions": [
+        {
+          "name": "TestConfigFromEnvAll",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestConfigFromEnvNone",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestConfigFromEnvMalformedTTL",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "TestConfigFromEnvAll",
+        "TestConfigFromEnvNone",
+        "TestConfigFromEnvMalformedTTL"
+      ],
+      "totalLines": 39,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/proxy.go": {
+      "filePath": "internal/stream/proxy.go",
+      "contentHash": "8175d76467dd34a1ef65f11918e89904ee73bac816b8289f9cf9558a2178e90a",
+      "functions": [
+        {
+          "name": "ServeStream",
+          "params": [
+            "w",
+            "r",
+            "backend",
+            "track"
+          ],
+          "exported": true,
+          "lineCount": 39
+        },
+        {
+          "name": "validateRangeHeader",
+          "params": [
+            "rangeHeader"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 41
+        },
+        {
+          "name": "errorStatus",
+          "params": [
+            "err"
+          ],
+          "returnType": "int",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "writeError",
+          "params": [
+            "w",
+            "status",
+            "msg"
+          ],
+          "exported": false,
+          "lineCount": 5
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "strconv",
+          "specifiers": [
+            "strconv"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        }
+      ],
+      "exports": [
+        "ServeStream"
+      ],
+      "totalLines": 133,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/proxy_test.go": {
+      "filePath": "internal/stream/proxy_test.go",
+      "contentHash": "7090a4f4bf6042cfd20a7930e0e508c5cf0d2b888329c061f9699754b55db2d5",
+      "functions": [
+        {
+          "name": "Stream",
+          "params": [
+            "_",
+            "_",
+            "rangeHeader"
+          ],
+          "returnType": "(*Result, error)",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "bodyResult",
+          "params": [
+            "body",
+            "ctype",
+            "status",
+            "length",
+            "cr",
+            "ar"
+          ],
+          "returnType": "*Result",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "serveProxy",
+          "params": [
+            "t",
+            "backend",
+            "track",
+            "rangeHeader"
+          ],
+          "returnType": "*httptest.ResponseRecorder",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "testTrack",
+          "params": [],
+          "returnType": "*Track",
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "TestProxyFullStream",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "TestProxyRange206",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "TestProxyInvalidRange416",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "TestProxyValidRanges",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "TestProxyUpstream416",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestProxyNotFound404",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestProxyServiceError502",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestProxyDefaultStatusZero",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [
+        {
+          "name": "mockBackend",
+          "methods": [
+            "Stream"
+          ],
+          "properties": [
+            "res",
+            "err",
+            "got",
+            "calls"
+          ],
+          "exported": false,
+          "lineCount": 6
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/http/httptest",
+          "specifiers": [
+            "httptest"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "Stream",
+        "TestProxyFullStream",
+        "TestProxyRange206",
+        "TestProxyInvalidRange416",
+        "TestProxyValidRanges",
+        "TestProxyUpstream416",
+        "TestProxyNotFound404",
+        "TestProxyServiceError502",
+        "TestProxyDefaultStatusZero"
+      ],
+      "totalLines": 167,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/stream.go": {
+      "filePath": "internal/stream/stream.go",
+      "contentHash": "e0d9e3a939f000216a6a3ac01e0907a2930d33386706980b4797f01e4edc88b5",
+      "functions": [],
+      "classes": [
+        {
+          "name": "Track",
+          "methods": [],
+          "properties": [
+            "ID",
+            "Title",
+            "Artist"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "Result",
+          "methods": [],
+          "properties": [
+            "Body",
+            "ContentType",
+            "Status",
+            "ContentLength",
+            "ContentRange",
+            "AcceptRanges"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "StreamBackend",
+          "methods": [
+            "Stream"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        }
+      ],
+      "exports": [
+        "Track",
+        "Result",
+        "StreamBackend"
+      ],
+      "totalLines": 70,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/ytdlp.go": {
+      "filePath": "internal/stream/ytdlp.go",
+      "contentHash": "2115463ba909861ceeb98fd01069af0fa36deab402933347ae20fbbc14fbc1a7",
+      "functions": [
+        {
+          "name": "Search",
+          "params": [
+            "ctx",
+            "query"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "runner",
+          "params": [],
+          "returnType": "Runner",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "client",
+          "params": [],
+          "returnType": "*http.Client",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "ttl",
+          "params": [],
+          "returnType": "time.Duration",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "cacheRef",
+          "params": [],
+          "returnType": "*Cache",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "SetCache",
+          "params": [
+            "c"
+          ],
+          "returnType": "*Cache",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "cacheKey",
+          "params": [
+            "t"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "searchQuery",
+          "params": [
+            "t"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "resolveURL",
+          "params": [
+            "ctx",
+            "t"
+          ],
+          "returnType": "(string, error)",
+          "exported": false,
+          "lineCount": 23
+        },
+        {
+          "name": "searchURL",
+          "params": [
+            "ctx",
+            "t"
+          ],
+          "returnType": "(string, error)",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "parseFirstSearchResult",
+          "params": [
+            "out"
+          ],
+          "returnType": "(*searchResult, error)",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "firstJSONLine",
+          "params": [
+            "out"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": false,
+          "lineCount": 17
+        },
+        {
+          "name": "Stream",
+          "params": [
+            "ctx",
+            "t",
+            "rangeHeader"
+          ],
+          "returnType": "(*Result, error)",
+          "exported": true,
+          "lineCount": 34
+        },
+        {
+          "name": "formatInt",
+          "params": [
+            "n"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "Runner",
+          "methods": [
+            "Search"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "ytdlpRunner",
+          "methods": [
+            "Search"
+          ],
+          "properties": [
+            "bin"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "searchResult",
+          "methods": [],
+          "properties": [
+            "URL"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "YTDLP",
+          "methods": [
+            "runner",
+            "client",
+            "ttl",
+            "cacheRef",
+            "SetCache",
+            "resolveURL",
+            "searchURL",
+            "Stream"
+          ],
+          "properties": [
+            "Runner",
+            "Client",
+            "Bin",
+            "CacheTTL",
+            "mu",
+            "cache"
+          ],
+          "exported": true,
+          "lineCount": 16
+        }
+      ],
+      "imports": [
+        {
+          "source": "bufio",
+          "specifiers": [
+            "bufio"
+          ]
+        },
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "os/exec",
+          "specifiers": [
+            "exec"
+          ]
+        },
+        {
+          "source": "strconv",
+          "specifiers": [
+            "strconv"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Runner",
+        "Search",
+        "YTDLP",
+        "SetCache",
+        "Stream"
+      ],
+      "totalLines": 257,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/ytdlp_live_test.go": {
+      "filePath": "internal/stream/ytdlp_live_test.go",
+      "contentHash": "fdfb72ca7348e3c889fccf88d59889f27990da71f6df925aff1486b39852f32a",
+      "functions": [
+        {
+          "name": "skipIfNoLiveStream",
+          "params": [
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "TestYtdlpSearchLive",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 15
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "os/exec",
+          "specifiers": [
+            "exec"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "TestYtdlpSearchLive"
+      ],
+      "totalLines": 44,
+      "hasStructuralAnalysis": true
+    },
+    "internal/stream/ytdlp_test.go": {
+      "filePath": "internal/stream/ytdlp_test.go",
+      "contentHash": "b62ee0a75f3c04061d93c101a89b9cfc073bac5882b8055fd38ca9298ed1bf26",
+      "functions": [
+        {
+          "name": "Search",
+          "params": [
+            "_",
+            "query"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "TestYtdlpResolveURL",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestYtdlpQueryFallbackTitle",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestYtdlpRunnerError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestYtdlpEmptyOutput",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestYtdlpBadJSON",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestYtdlpNoURL",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestYtdlpFirstLineOnly",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestYtdlpCacheReuse",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "TestYtdlpConcurrentResolve",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "TestYtdlpStream",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 30
+        },
+        {
+          "name": "TestYtdlpStreamForwardsRange",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "TestYtdlpStreamUpstreamError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "TestYtdlpDefaultRunner",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestYtdlpConfiguredBin",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestYtdlpNegativeTTLDisablesCache",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "TestSearchQuerySpace",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "TestYtdlpRunnerSearch",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "TestYtdlpRunnerSearchExecError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "TestYtdlpStreamDerivesContentRange",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "TestYtdlpCachedNonString",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestFirstJSONLineLongToken",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        }
+      ],
+      "classes": [
+        {
+          "name": "fakeRunner",
+          "methods": [
+            "Search"
+          ],
+          "properties": [
+            "out",
+            "err",
+            "got"
+          ],
+          "exported": false,
+          "lineCount": 5
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/http/httptest",
+          "specifiers": [
+            "httptest"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Search",
+        "TestYtdlpResolveURL",
+        "TestYtdlpQueryFallbackTitle",
+        "TestYtdlpRunnerError",
+        "TestYtdlpEmptyOutput",
+        "TestYtdlpBadJSON",
+        "TestYtdlpNoURL",
+        "TestYtdlpFirstLineOnly",
+        "TestYtdlpCacheReuse",
+        "TestYtdlpConcurrentResolve",
+        "TestYtdlpStream",
+        "TestYtdlpStreamForwardsRange",
+        "TestYtdlpStreamUpstreamError",
+        "TestYtdlpDefaultRunner",
+        "TestYtdlpConfiguredBin",
+        "TestYtdlpNegativeTTLDisablesCache",
+        "TestSearchQuerySpace",
+        "TestYtdlpRunnerSearch",
+        "TestYtdlpRunnerSearchExecError",
+        "TestYtdlpStreamDerivesContentRange",
+        "TestYtdlpCachedNonString",
+        "TestFirstJSONLineLongToken"
+      ],
+      "totalLines": 357,
+      "hasStructuralAnalysis": true
+    },
+    "cmd/token-vk/jsondec.go": {
+      "filePath": "cmd/token-vk/jsondec.go",
+      "contentHash": "a0e424d286393a2911146cb1394010c5c72445bb32385c75aa76721141f9847e",
+      "functions": [
+        {
+          "name": "jsonDecode",
+          "params": [
+            "r",
+            "v"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 4
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 12,
+      "hasStructuralAnalysis": true
+    }
+  }
+}

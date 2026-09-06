@@ -4,3 +4,10 @@ bin/
 coverage/
 .env
 .env.*
+
+# Understand Anything
+.ua/intermediate/
+.ua/diff-overlay.json
+.ua/.trash*
+.ua/tmp/
+.claude/launch.json
