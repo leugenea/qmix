@@ -48,3 +48,25 @@ func TestSpotifyOEmbedLive(t *testing.T) {
 		t.Fatal("live resolve returned empty title")
 	}
 }
+
+// TestSpotifyAPILive is a gated integration test for the Client Credentials
+// path (#8): a real token is fetched from accounts.spotify.com and the real
+// Web API resolves a known track. It runs only when both app credentials are
+// configured (CI job `integration` provides them); otherwise it is skipped.
+func TestSpotifyAPILive(t *testing.T) {
+	skipIfNoToken(t, "QMIX_SPOTIFY_CLIENT_ID", "QMIX_SPOTIFY_CLIENT_SECRET")
+	s := &Spotify{Config: ConfigFromEnv()}
+	tr, err := s.Resolve(context.Background(), "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC")
+	if err != nil {
+		t.Fatalf("live api resolve: %v", err)
+	}
+	if tr.Title == "" {
+		t.Fatal("live api resolve returned empty title")
+	}
+	if tr.DurationSec <= 0 {
+		t.Fatalf("live api resolve duration = %d, want > 0", tr.DurationSec)
+	}
+	if tr.Artist == "" {
+		t.Fatal("live api resolve returned empty artist")
+	}
+}
