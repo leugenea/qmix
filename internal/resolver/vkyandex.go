@@ -41,7 +41,7 @@ func (v *VKYandex) client() *http.Client {
 	if v.Client != nil {
 		return v.Client
 	}
-	return http.DefaultClient
+	return defaultClient
 }
 
 // Resolve fetches the page and tries to extract a title.

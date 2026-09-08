@@ -59,7 +59,9 @@ type YTDLP struct {
 	// Runner drives the YouTube search. If nil, the default yt-dlp exec runner
 	// is used. Tests inject a fake runner returning fixture JSON.
 	Runner Runner
-	// Client performs the audio GET. If nil, http.DefaultClient is used.
+	// Client performs the audio GET. If nil, streamClient is used: the
+	// response-header timeout bounds hung upstreams, but the audio body is
+	// never cut (a whole-request timeout would kill long streams).
 	Client *http.Client
 	// Bin overrides the yt-dlp executable path for the default runner.
 	Bin string
@@ -84,12 +86,29 @@ func (b *YTDLP) runner() Runner {
 	return ytdlpRunner{bin: bin}
 }
 
-// client returns the configured HTTP client or the default.
+// streamHeaderTimeout bounds only the upstream handshake and response headers
+// (qmix#40). The audio body streams for the length of the track, so a
+// whole-request Client.Timeout would cut long streams mid-playback.
+const streamHeaderTimeout = 10 * time.Second
+
+// streamClient is the fallback HTTP client for the audio GET. Its transport
+// is a clone of http.DefaultTransport with only the response-header timeout
+// added, so streaming connections keep the standard library's pooling and
+// TLS defaults.
+var streamClient = &http.Client{
+	Transport: func() http.RoundTripper {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.ResponseHeaderTimeout = streamHeaderTimeout
+		return tr
+	}(),
+}
+
+// client returns the configured HTTP client or the streaming default.
 func (b *YTDLP) client() *http.Client {
 	if b.Client != nil {
 		return b.Client
 	}
-	return http.DefaultClient
+	return streamClient
 }
 
 // ttl returns the effective cache TTL.

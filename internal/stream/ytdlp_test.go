@@ -235,8 +235,8 @@ func TestYtdlpDefaultRunner(t *testing.T) {
 	} else if r.bin != ytdlpBin {
 		t.Fatalf("bin = %q, want %q", r.bin, ytdlpBin)
 	}
-	if b.client() != http.DefaultClient {
-		t.Fatal("default client should be http.DefaultClient")
+	if b.client() != streamClient {
+		t.Fatal("default client should be streamClient (response-header timeout only, qmix#40)")
 	}
 }
 
@@ -352,5 +352,25 @@ func TestFirstJSONLineLongToken(t *testing.T) {
 	}
 	if r.URL != url {
 		t.Fatal("long-line url mismatch")
+	}
+}
+
+// TestYTDLP_DefaultClientHeaderTimeoutOnly pins the audit fix (qmix#40): the
+// streaming fallback must time out hung upstreams on response headers but
+// never cut the audio body (Client.Timeout stays zero).
+func TestYTDLP_DefaultClientHeaderTimeoutOnly(t *testing.T) {
+	c := (&YTDLP{}).client()
+	if c == http.DefaultClient {
+		t.Fatal("fallback client is http.DefaultClient")
+	}
+	if c.Timeout != 0 {
+		t.Fatalf("Client.Timeout = %v, want 0 (streaming bodies)", c.Timeout)
+	}
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport is %T, want *http.Transport", c.Transport)
+	}
+	if tr.ResponseHeaderTimeout != streamHeaderTimeout {
+		t.Fatalf("ResponseHeaderTimeout = %v, want %v", tr.ResponseHeaderTimeout, streamHeaderTimeout)
 	}
 }

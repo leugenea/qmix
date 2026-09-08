@@ -55,7 +55,7 @@ func (s *Spotify) client() *http.Client {
 	if s.Client != nil {
 		return s.Client
 	}
-	return http.DefaultClient
+	return defaultClient
 }
 
 func (s *Spotify) endpoint() string {

@@ -376,8 +376,8 @@ func TestResolver_DomainOf(t *testing.T) {
 // TestResolver_SpotifyCustomNameAndDefaults covers default client/endpoint/name.
 func TestResolver_SpotifyCustomNameAndDefaults(t *testing.T) {
 	s := &Spotify{Name: "sp"}
-	if s.client() != http.DefaultClient {
-		t.Fatal("default client should be http.DefaultClient")
+	if s.client() != defaultClient {
+		t.Fatal("default client should be defaultClient (bounded by httpTimeout, qmix#40)")
 	}
 	if s.endpoint() != spotifyOEmbedEndpoint {
 		t.Fatalf("endpoint = %q", s.endpoint())
@@ -401,8 +401,8 @@ func TestResolver_SpotifyCustomNameAndDefaults(t *testing.T) {
 
 // TestResolver_VKYandexClientDefault verifies the default http client.
 func TestResolver_VKYandexClientDefault(t *testing.T) {
-	if (&VKYandex{}).client() != http.DefaultClient {
-		t.Fatal("default client should be http.DefaultClient")
+	if (&VKYandex{}).client() != defaultClient {
+		t.Fatal("default client should be defaultClient (bounded by httpTimeout, qmix#40)")
 	}
 }
 
@@ -412,5 +412,27 @@ func TestResolver_ErrorMessages(t *testing.T) {
 	_, err := v.Resolve(context.Background(), "https://vk.com/audio1")
 	if !strings.Contains(err.Error(), "vk") {
 		t.Fatalf("err = %q, want mention of vk", err)
+	}
+}
+
+// TestResolver_DefaultClientHasTimeout pins the audit fix (qmix#40): the
+// resolver fallback clients must not be http.DefaultClient and must carry a
+// whole-request timeout, so a hung upstream releases the request.
+func TestResolver_DefaultClientHasTimeout(t *testing.T) {
+	cases := []struct {
+		name   string
+		client func() *http.Client
+	}{
+		{"spotify", (&Spotify{}).client},
+		{"vkyandex", (&VKYandex{}).client},
+	}
+	for _, tc := range cases {
+		c := tc.client()
+		if c == http.DefaultClient {
+			t.Fatalf("%s: fallback client is http.DefaultClient", tc.name)
+		}
+		if c.Timeout != httpTimeout {
+			t.Fatalf("%s: Timeout = %v, want %v", tc.name, c.Timeout, httpTimeout)
+		}
 	}
 }

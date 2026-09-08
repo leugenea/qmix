@@ -58,11 +58,26 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// readHeaderTimeout bounds reading request headers only (qmix#40): a
+// slowloris-style client cannot hold sockets indefinitely, while a full
+// WriteTimeout would cut long-lived SSE responses.
+const readHeaderTimeout = 10 * time.Second
+
+// newHTTPServer builds the production HTTP server for addr. It is split out
+// of Run so the timeout configuration is testable.
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+	}
+}
+
 // Run wires the backend and serves until the listener fails. It is the
 // production entry point; addr comes from QMIX_ADDR (see cmd/qmix).
 func Run(addr string) error {
 	a := NewApp()
 	defer a.Close()
 	log.Printf("qmix: listening on %s", addr)
-	return http.ListenAndServe(addr, a.Handler())
+	return newHTTPServer(addr, a.Handler()).ListenAndServe()
 }
