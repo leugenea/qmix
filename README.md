@@ -17,7 +17,7 @@
 - **token-vk v2** — токен api.vk.com со scope `audio` (разблокирует #9).
 - **token-ym** — мини-CLI для OAuth-токена Яндекс Музыки через device-flow, без sqlite (закрывает #12).
 - **Интеграционные тесты** основных сценариев — обязательная job `integration-mandatory` в CI.
-- Свежий тулчейн: Go 1.25 / alpine 3.22, compose в рамках деплой-ограничений (порт 8180, `mem_limit`, `restart: on-failure:3`).
+- Свежий тулчейн: Go 1.25 / alpine 3.24, compose в рамках деплой-ограничений (порт 8180, `mem_limit`, `restart: on-failure:3`).
 
 Дальше:
 
