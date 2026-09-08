@@ -1,11 +1,11 @@
 {
   "version": "1.0.0",
-  "gitCommitHash": "f33382aa5d6009b92fa7a1afeb2284d5a1cc4dd6",
-  "generatedAt": "2026-09-06T06:06:14.293Z",
+  "gitCommitHash": "2798069f205e1ac1b63821cd26fac9a608e46ee0",
+  "generatedAt": "2026-09-08T05:29:02.010Z",
   "files": {
     ".github/workflows/ci.yml": {
       "filePath": ".github/workflows/ci.yml",
-      "contentHash": "f24adb789d7d93c01e7c02f7e5dd337e59b1c65ba06af064ea87c2bc236fca67",
+      "contentHash": "2aa074409d9fcdf2505d6b003bd93e9ea20df00b4c65f69fb0846463ca085e0b",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -15,7 +15,7 @@
     },
     ".github/workflows/live.yml": {
       "filePath": ".github/workflows/live.yml",
-      "contentHash": "ae8f094e34b5f9dc10f1efdf18824f97a0214d324b62c13f89127211deef288d",
+      "contentHash": "de13a44dfecd6b01fecb5adef54e1a39607af829e8c4543ea329de2e919ce98c",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -25,17 +25,17 @@
     },
     "ARCHITECTURE.md": {
       "filePath": "ARCHITECTURE.md",
-      "contentHash": "36ae34be37a29fda93e1bfeaf59451e06435a2b2341d20da0e606d2f839cce2b",
+      "contentHash": "ed204a9a811d115922ae9c8e07c98a7887b5066410363cea7add0880d6b965e4",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 215,
+      "totalLines": 216,
       "hasStructuralAnalysis": false
     },
     "Dockerfile": {
       "filePath": "Dockerfile",
-      "contentHash": "73048a86a34ed03b4a8cdf01834ccdc6e6d0140950d3f1c0c97892ce3533fd97",
+      "contentHash": "d1d20eeaf80903eff862eb34e81869aeebb839d7c95acae3441250dfb80a1951",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -55,12 +55,12 @@
     },
     "README.md": {
       "filePath": "README.md",
-      "contentHash": "67706ea241673b93ba683abf368fe8a62cb1b7325bbb004e7ca520090dafd7d5",
+      "contentHash": "0fa40a652939cce4cde98e730a027da763b9c3969cc8e12c0d8eade8221c4881",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 225,
+      "totalLines": 301,
       "hasStructuralAnalysis": false
     },
     "cmd/qmix/main.go": {
@@ -145,7 +145,7 @@
     },
     "cmd/token-vk/main.go": {
       "filePath": "cmd/token-vk/main.go",
-      "contentHash": "35698b9c36077f52e1addcde8b7744383a05521eacc3a14ccf93323faaf6bc7c",
+      "contentHash": "5a9054821b530ff81187b91a4921eff7b46b6f35d4b7005944e76d124f8f0170",
       "functions": [
         {
           "name": "result",
@@ -205,7 +205,7 @@
           ],
           "returnType": "error",
           "exported": false,
-          "lineCount": 57
+          "lineCount": 75
         },
         {
           "name": "main",
@@ -232,10 +232,12 @@
             "Need2FA",
             "ValidationType",
             "BadCode",
+            "UserID",
+            "ExpiresIn",
             "Err"
           ],
           "exported": false,
-          "lineCount": 12
+          "lineCount": 19
         },
         {
           "name": "tokenResponse",
@@ -244,6 +246,8 @@
           ],
           "properties": [
             "AccessToken",
+            "UserID",
+            "ExpiresIn",
             "Error",
             "ErrorType",
             "ErrorDescription",
@@ -252,7 +256,7 @@
             "CaptchaSID"
           ],
           "exported": false,
-          "lineCount": 9
+          "lineCount": 11
         },
         {
           "name": "httpDoer",
@@ -341,12 +345,12 @@
       "exports": [
         "Auth"
       ],
-      "totalLines": 265,
+      "totalLines": 292,
       "hasStructuralAnalysis": true
     },
     "cmd/token-vk/main_test.go": {
       "filePath": "cmd/token-vk/main_test.go",
-      "contentHash": "cb19a5d4cae717afb17b162ad7a3fd38d63a2ae25098c5b61ab790a8ac3a6a38",
+      "contentHash": "1fc932c520d9675565bb23340fe9a3e66d6dd3d86dab38cb8d9788fd755065a9",
       "functions": [
         {
           "name": "Auth",
@@ -367,7 +371,7 @@
           ],
           "returnType": "*authResult",
           "exported": false,
-          "lineCount": 1
+          "lineCount": 4
         },
         {
           "name": "twofaRes",
@@ -604,6 +608,46 @@
           "returnType": "*bufio.Reader",
           "exported": false,
           "lineCount": 3
+        },
+        {
+          "name": "TestVkFetcherAuthCarriesExpiry",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestVkFetcherAuthOmittedExpiry",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestRunWarnsOnExpiringToken",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "TestRunSilentOnNonExpiringToken",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestRunWarnsOnUnknownExpiry",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 16
         }
       ],
       "classes": [
@@ -721,19 +765,24 @@
         "Do",
         "TestValidationHint",
         "TestReadLine",
-        "TestReadLineEOF"
+        "TestReadLineEOF",
+        "TestVkFetcherAuthCarriesExpiry",
+        "TestVkFetcherAuthOmittedExpiry",
+        "TestRunWarnsOnExpiringToken",
+        "TestRunSilentOnNonExpiringToken",
+        "TestRunWarnsOnUnknownExpiry"
       ],
-      "totalLines": 526,
+      "totalLines": 620,
       "hasStructuralAnalysis": true
     },
     "docker-compose.yml": {
       "filePath": "docker-compose.yml",
-      "contentHash": "30367f4530b38294ec26028499deb3477947bf19fdc2fca7d50d3c9193e83b4b",
+      "contentHash": "68317bb3e5049da1245bb9ff0a4dcf21ea534f127c3ed7daa839227511166547",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 15,
+      "totalLines": 16,
       "hasStructuralAnalysis": false
     },
     "go.mod": {
@@ -874,7 +923,7 @@
     },
     "internal/resolver/harness_test.go": {
       "filePath": "internal/resolver/harness_test.go",
-      "contentHash": "8b4085e006df2fa63e6bcdb5efbb5518195e197264938bc6006d8bd392ff6ed2",
+      "contentHash": "91e97672290d083dab5f16ff47870cfa807e9a714464934c4309efbbc58e35a9",
       "functions": [
         {
           "name": "skipIfNoToken",
@@ -907,6 +956,14 @@
           ],
           "exported": true,
           "lineCount": 10
+        },
+        {
+          "name": "TestSpotifyAPILive",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 17
         }
       ],
       "classes": [],
@@ -933,9 +990,10 @@
       "exports": [
         "TestSkipIfNoTokenMissing",
         "TestSkipIfNoTokenPresent",
-        "TestSpotifyOEmbedLive"
+        "TestSpotifyOEmbedLive",
+        "TestSpotifyAPILive"
       ],
-      "totalLines": 51,
+      "totalLines": 73,
       "hasStructuralAnalysis": true
     },
     "internal/resolver/resolver.go": {
@@ -1406,7 +1464,7 @@
     },
     "internal/resolver/spotify.go": {
       "filePath": "internal/resolver/spotify.go",
-      "contentHash": "2cb257643cd07c3e20f37a6b9b14c8c603d28d2bac1111bd4adbb48b8c4deb14",
+      "contentHash": "d9a8176a0dcc630a3f428d9a2efb318a87308d79592903fa42353034ae11fcd7",
       "functions": [
         {
           "name": "client",
@@ -1423,11 +1481,41 @@
           "lineCount": 6
         },
         {
+          "name": "tokenURL",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "apiBase",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
           "name": "name",
           "params": [],
           "returnType": "string",
           "exported": false,
           "lineCount": 6
+        },
+        {
+          "name": "trackID",
+          "params": [
+            "rawurl"
+          ],
+          "returnType": "(string, bool)",
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "hasCredentials",
+          "params": [],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 3
         },
         {
           "name": "Resolve",
@@ -1437,7 +1525,37 @@
           ],
           "returnType": "(*Track, error)",
           "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "resolveViaOEmbed",
+          "params": [
+            "ctx",
+            "rawurl"
+          ],
+          "returnType": "(*Track, error)",
+          "exported": false,
           "lineCount": 34
+        },
+        {
+          "name": "token",
+          "params": [
+            "ctx"
+          ],
+          "returnType": "(string, error)",
+          "exported": false,
+          "lineCount": 36
+        },
+        {
+          "name": "resolveViaAPI",
+          "params": [
+            "ctx",
+            "id",
+            "rawurl"
+          ],
+          "returnType": "(*Track, error)",
+          "exported": false,
+          "lineCount": 42
         }
       ],
       "classes": [
@@ -1446,17 +1564,28 @@
           "methods": [
             "client",
             "endpoint",
+            "tokenURL",
+            "apiBase",
             "name",
-            "Resolve"
+            "hasCredentials",
+            "Resolve",
+            "resolveViaOEmbed",
+            "token",
+            "resolveViaAPI"
           ],
           "properties": [
             "Client",
             "Endpoint",
             "Name",
-            "Config"
+            "Config",
+            "TokenURL",
+            "APIBase",
+            "tokenMu",
+            "accessToken",
+            "expiresAt"
           ],
           "exported": true,
-          "lineCount": 11
+          "lineCount": 22
         },
         {
           "name": "oembedResponse",
@@ -1468,6 +1597,27 @@
           ],
           "exported": false,
           "lineCount": 5
+        },
+        {
+          "name": "tokenResponse",
+          "methods": [],
+          "properties": [
+            "AccessToken",
+            "ExpiresIn"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "apiTrack",
+          "methods": [],
+          "properties": [
+            "Name",
+            "DurationMs",
+            "Artists"
+          ],
+          "exported": false,
+          "lineCount": 7
         }
       ],
       "imports": [
@@ -1512,13 +1662,31 @@
           "specifiers": [
             "url"
           ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
         }
       ],
       "exports": [
         "Spotify",
         "Resolve"
       ],
-      "totalLines": 96,
+      "totalLines": 267,
       "hasStructuralAnalysis": true
     },
     "internal/resolver/vkyandex.go": {
@@ -4900,6 +5068,800 @@
       ],
       "exports": [],
       "totalLines": 12,
+      "hasStructuralAnalysis": true
+    },
+    "cmd/token-ym/main.go": {
+      "filePath": "cmd/token-ym/main.go",
+      "contentHash": "a53b935852853373713b4df86c5cd65e038f02c91c7be5f87e1cc5f21ad0d269",
+      "functions": [
+        {
+          "name": "postForm",
+          "params": [
+            "ctx",
+            "endpoint",
+            "vals"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "requestCodes",
+          "params": [
+            "ctx",
+            "cfg"
+          ],
+          "returnType": "(*confirmationCodes, error)",
+          "exported": false,
+          "lineCount": 19
+        },
+        {
+          "name": "pollTokens",
+          "params": [
+            "ctx",
+            "codes"
+          ],
+          "returnType": "(*tokenResponse, error)",
+          "exported": false,
+          "lineCount": 56
+        },
+        {
+          "name": "run",
+          "params": [
+            "ctx",
+            "stdout",
+            "cfg",
+            "f"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "defaultFlow",
+          "params": [],
+          "returnType": "deviceFlow",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "main",
+          "params": [],
+          "exported": false,
+          "lineCount": 13
+        }
+      ],
+      "classes": [
+        {
+          "name": "httpDoer",
+          "methods": [
+            "Do"
+          ],
+          "properties": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "deviceFlow",
+          "methods": [
+            "postForm",
+            "requestCodes",
+            "pollTokens"
+          ],
+          "properties": [
+            "do",
+            "codeURL",
+            "tokenURL",
+            "sleep",
+            "pollTimeout"
+          ],
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "flowConfig",
+          "methods": [],
+          "properties": [
+            "deviceID",
+            "deviceName"
+          ],
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "confirmationCodes",
+          "methods": [],
+          "properties": [
+            "DeviceCode",
+            "UserCode",
+            "VerificationURL",
+            "Interval",
+            "ExpiresIn"
+          ],
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "tokenResponse",
+          "methods": [],
+          "properties": [
+            "AccessToken",
+            "RefreshToken",
+            "TokenType",
+            "ExpiresIn",
+            "Error",
+            "ErrorDescription"
+          ],
+          "exported": false,
+          "lineCount": 8
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/url",
+          "specifiers": [
+            "url"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 237,
+      "hasStructuralAnalysis": true
+    },
+    "cmd/token-ym/main_test.go": {
+      "filePath": "cmd/token-ym/main_test.go",
+      "contentHash": "c53c63e28eb652f2cc608a62828798dec653581ed5256f13ceb158bf85273bce",
+      "functions": [
+        {
+          "name": "ok",
+          "params": [
+            "body"
+          ],
+          "returnType": "resp",
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Do",
+          "params": [
+            "req"
+          ],
+          "returnType": "(*http.Response, error)",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "sleep",
+          "params": [
+            "d"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "newFlow",
+          "params": [
+            "d",
+            "s"
+          ],
+          "returnType": "deviceFlow",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "codesJSON",
+          "params": [
+            "interval"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "testCfg",
+          "params": [],
+          "returnType": "flowConfig",
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "TestRunSuccess",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "TestRunSuccessPendingThenToken",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "TestRunExpiredToken",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "TestRunAccessDenied",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "TestRunInvalidGrant",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "TestRunInvalidClient",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "TestRunSlowDownThenToken",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "TestRunOtherError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "TestRunErrorWithoutCode",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "TestPollingTimeout",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "TestPollTokensDoError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "Do",
+          "params": [],
+          "returnType": "(*http.Response, error)",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "TestPollTokensBadJSON",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestRequestCodesSuccess",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "TestRequestCodesBadJSON",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "TestRequestCodesEmptyFields",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "TestRequestCodesDoError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestRunRequestCodesFailure",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "TestPollTokensIntervalFallback",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "TestPostFormNewRequestError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestDefaultFlowSetsSleep",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 12
+        }
+      ],
+      "classes": [
+        {
+          "name": "fakeDoer",
+          "methods": [
+            "Do"
+          ],
+          "properties": [
+            "resps",
+            "calls",
+            "reqs",
+            "bodies"
+          ],
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "resp",
+          "methods": [],
+          "properties": [
+            "status",
+            "body"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "fakeSleep",
+          "methods": [
+            "sleep"
+          ],
+          "properties": [
+            "got"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "errDoer",
+          "methods": [
+            "Do"
+          ],
+          "properties": [],
+          "exported": false,
+          "lineCount": 1
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/url",
+          "specifiers": [
+            "url"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Do",
+        "TestRunSuccess",
+        "TestRunSuccessPendingThenToken",
+        "TestRunExpiredToken",
+        "TestRunAccessDenied",
+        "TestRunInvalidGrant",
+        "TestRunInvalidClient",
+        "TestRunSlowDownThenToken",
+        "TestRunOtherError",
+        "TestRunErrorWithoutCode",
+        "TestPollingTimeout",
+        "TestPollTokensDoError",
+        "Do",
+        "TestPollTokensBadJSON",
+        "TestRequestCodesSuccess",
+        "TestRequestCodesBadJSON",
+        "TestRequestCodesEmptyFields",
+        "TestRequestCodesDoError",
+        "TestRunRequestCodesFailure",
+        "TestPollTokensIntervalFallback",
+        "TestPostFormNewRequestError",
+        "TestDefaultFlowSetsSleep"
+      ],
+      "totalLines": 377,
+      "hasStructuralAnalysis": true
+    },
+    "internal/resolver/spotify_api_test.go": {
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "contentHash": "17da274393efbb10c538eea72f7c6aba61279695be21eb962b2ca1ad8ffccdaf",
+      "functions": [
+        {
+          "name": "newSpotifyTestRig",
+          "params": [],
+          "returnType": "*spotifyTestRig",
+          "exported": false,
+          "lineCount": 27
+        },
+        {
+          "name": "resolver",
+          "params": [],
+          "returnType": "*Spotify",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "TestResolver_SpotifyAPISuccess",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 49
+        },
+        {
+          "name": "TestResolver_SpotifyAPITokenCached",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "TestResolver_SpotifyTokenExpiredRefetches",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "TestResolver_SpotifyToken4xx",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_SpotifyTokenBadJSON",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestResolver_SpotifyTokenEmpty",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestResolver_SpotifyTokenTransportError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestResolver_SpotifyAPI401",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestResolver_SpotifyAPIBadJSON",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestResolver_SpotifyAPIEmptyName",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestResolver_SpotifyAPITransportError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestResolver_SpotifyAlbumFallsBackToOEmbed",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "TestResolver_SpotifyIntlTrackUsesAPI",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "TestResolver_SpotifyOnlyClientID",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "TestResolver_SpotifyInvalidURLFallsBackToOEmbed",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "TestResolver_SpotifyCredsOEmbedStillWorked",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "TestSpotifyTrackID",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 29
+        },
+        {
+          "name": "TestSpotifyErrorsHideCredentials",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 27
+        }
+      ],
+      "classes": [
+        {
+          "name": "spotifyTestRig",
+          "methods": [
+            "resolver"
+          ],
+          "properties": [
+            "ts",
+            "tokenHits",
+            "apiHits",
+            "tokenStatus",
+            "tokenBody",
+            "apiStatus",
+            "apiBody"
+          ],
+          "exported": false,
+          "lineCount": 10
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/http/httptest",
+          "specifiers": [
+            "httptest"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "sync/atomic",
+          "specifiers": [
+            "atomic"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "TestResolver_SpotifyAPISuccess",
+        "TestResolver_SpotifyAPITokenCached",
+        "TestResolver_SpotifyTokenExpiredRefetches",
+        "TestResolver_SpotifyToken4xx",
+        "TestResolver_SpotifyTokenBadJSON",
+        "TestResolver_SpotifyTokenEmpty",
+        "TestResolver_SpotifyTokenTransportError",
+        "TestResolver_SpotifyAPI401",
+        "TestResolver_SpotifyAPIBadJSON",
+        "TestResolver_SpotifyAPIEmptyName",
+        "TestResolver_SpotifyAPITransportError",
+        "TestResolver_SpotifyAlbumFallsBackToOEmbed",
+        "TestResolver_SpotifyIntlTrackUsesAPI",
+        "TestResolver_SpotifyOnlyClientID",
+        "TestResolver_SpotifyInvalidURLFallsBackToOEmbed",
+        "TestResolver_SpotifyCredsOEmbedStillWorked",
+        "TestSpotifyTrackID",
+        "TestSpotifyErrorsHideCredentials"
+      ],
+      "totalLines": 435,
       "hasStructuralAnalysis": true
     }
   }

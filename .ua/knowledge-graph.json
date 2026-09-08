@@ -16,8 +16,8 @@
       "GitHub Actions"
     ],
     "description": "QMix — коллаборативный музыкальный плеер на Go: хост поднимает комнату, участники кидают ссылки из VK / Яндекс Музыки / Spotify в общую очередь, а бэкенд резолвит треки и стримит аудио через yt-dlp с поддержкой HTTP Range и SSE-синхронизации состояния комнаты.",
-    "analyzedAt": "2026-09-06T06:06:14.281Z",
-    "gitCommitHash": "f33382aa5d6009b92fa7a1afeb2284d5a1cc4dd6"
+    "analyzedAt": "2026-09-08T05:29:02.004Z",
+    "gitCommitHash": "2798069f205e1ac1b63821cd26fac9a608e46ee0"
   },
   "nodes": [
     {
@@ -1898,57 +1898,6 @@
       "complexity": "simple"
     },
     {
-      "id": "file:internal/resolver/harness_test.go",
-      "type": "file",
-      "name": "harness_test.go",
-      "filePath": "internal/resolver/harness_test.go",
-      "summary": "Тестовая обвязка для интеграционных проверок с реальными кредами: хелпер skipIfNoToken пропускает тест при отсутствии переменных окружения, плюс gated live-тест против настоящего Spotify oEmbed.",
-      "tags": [
-        "test",
-        "test-harness",
-        "integration-test",
-        "credentials"
-      ],
-      "complexity": "simple",
-      "languageNotes": "Типичный для Go приём: t.Skipf вместо провала теста, чтобы CI оставался зелёным при отсутствии секретов."
-    },
-    {
-      "id": "function:internal/resolver/harness_test.go:skipIfNoToken",
-      "type": "function",
-      "name": "skipIfNoToken",
-      "filePath": "internal/resolver/harness_test.go",
-      "lineRange": [
-        13,
-        20
-      ],
-      "summary": "Хелпер-гейт: пропускает тест, если хотя бы одна из перечисленных переменных окружения не задана или пуста.",
-      "tags": [
-        "test-harness",
-        "utility",
-        "test",
-        "environment"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
-      "type": "function",
-      "name": "TestSpotifyOEmbedLive",
-      "filePath": "internal/resolver/harness_test.go",
-      "lineRange": [
-        41,
-        50
-      ],
-      "summary": "Live-тест против настоящего endpoint-а Spotify oEmbed: выполняется только при заданном QMIX_SPOTIFY_CLIENT_ID и требует непустого заголовка трека.",
-      "tags": [
-        "test",
-        "integration-test",
-        "spotify",
-        "network"
-      ],
-      "complexity": "simple"
-    },
-    {
       "id": "file:internal/resolver/resolver_test.go",
       "type": "file",
       "name": "resolver_test.go",
@@ -2267,60 +2216,6 @@
         "spotify",
         "defaults",
         "zero-value"
-      ],
-      "complexity": "moderate"
-    },
-    {
-      "id": "file:internal/resolver/spotify.go",
-      "type": "file",
-      "name": "spotify.go",
-      "filePath": "internal/resolver/spotify.go",
-      "summary": "Резолвер ссылок Spotify через публичный анонимный oEmbed API: возвращает title и author_name как артиста. Длительность трека oEmbed не отдаёт, поэтому DurationSec остаётся нулём — метаданные никогда не додумываются.",
-      "tags": [
-        "resolver",
-        "spotify",
-        "http-client",
-        "api-integration",
-        "oembed",
-        "tested"
-      ],
-      "complexity": "moderate",
-      "languageNotes": "Ленивые геттеры client()/endpoint()/name() позволяют использовать нулевое значение структуры как рабочий продакшн-резолвер и одновременно подменять зависимости в тестах."
-    },
-    {
-      "id": "class:internal/resolver/spotify.go:Spotify",
-      "type": "class",
-      "name": "Spotify",
-      "filePath": "internal/resolver/spotify.go",
-      "lineRange": [
-        21,
-        31
-      ],
-      "summary": "Структура резолвера Spotify с опциональными полями Client, Endpoint, Name и Config. Нулевое значение работает как анонимный резолвер на дефолтном oEmbed-эндпоинте.",
-      "tags": [
-        "resolver",
-        "spotify",
-        "data-model",
-        "dependency-injection"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "function:internal/resolver/spotify.go:Resolve",
-      "type": "function",
-      "name": "Resolve",
-      "filePath": "internal/resolver/spotify.go",
-      "lineRange": [
-        62,
-        95
-      ],
-      "summary": "Выполняет GET-запрос к oEmbed-эндпоинту с URL трека в query-параметре, разбирает JSON и возвращает Track. Любой не-200 статус, битый JSON или пустой title дают ошибку, обёрнутую ErrService.",
-      "tags": [
-        "resolver",
-        "spotify",
-        "http-client",
-        "error-handling",
-        "serialization"
       ],
       "complexity": "moderate"
     },
@@ -3792,126 +3687,6 @@
       "complexity": "simple"
     },
     {
-      "id": "service:Dockerfile",
-      "type": "service",
-      "name": "Dockerfile",
-      "filePath": "Dockerfile",
-      "summary": "Multi-stage сборка образа QMix: стадия на golang:1.23-alpine компилирует статический бинарник из cmd/qmix, финальный alpine:3.20 добавляет закреплённый yt-dlp, непривилегированного пользователя и открывает порт 8080.",
-      "tags": [
-        "containerization",
-        "infrastructure",
-        "deployment",
-        "multi-stage",
-        "go-build"
-      ],
-      "complexity": "simple",
-      "languageNotes": "Multi-stage build с CGO_ENABLED=0 даёт статический бинарник, поэтому runtime-слой ограничивается alpine + yt-dlp. Версия yt-dlp жёстко закреплена (2024.12.03-r0), чтобы обновление происходило только осознанно."
-    },
-    {
-      "id": "service:Dockerfile:build",
-      "type": "service",
-      "name": "build",
-      "filePath": "Dockerfile",
-      "summary": "Первая стадия сборки на golang:1.23-alpine: подтягивает зависимости через go mod download и компилирует статический бинарник /bin/qmix из пакета ./cmd/qmix.",
-      "tags": [
-        "build-system",
-        "containerization",
-        "go-build",
-        "multi-stage"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "service:Dockerfile:alpine",
-      "type": "service",
-      "name": "alpine",
-      "filePath": "Dockerfile",
-      "summary": "Финальная runtime-стадия на alpine:3.20: устанавливает закреплённый yt-dlp, создаёт пользователя qmix, копирует бинарник из стадии build, экспонирует 8080 и задаёт ENTRYPOINT.",
-      "tags": [
-        "containerization",
-        "deployment",
-        "runtime",
-        "security"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "service:docker-compose.yml",
-      "type": "service",
-      "name": "docker-compose.yml",
-      "filePath": "docker-compose.yml",
-      "summary": "Compose-описание локального запуска: единственный сервис backend собирается из корневого Dockerfile, публикует порт 8080 и пробрасывает прокси-переменные окружения.",
-      "tags": [
-        "orchestration",
-        "infrastructure",
-        "configuration",
-        "deployment"
-      ],
-      "complexity": "simple",
-      "languageNotes": "Проброс HTTP_PROXY/HTTPS_PROXY/NO_PROXY через синтаксис ${VAR:-} нужен для окружений, где YouTube доступен только через прокси: его используют и yt-dlp, и аудио-прокси."
-    },
-    {
-      "id": "service:docker-compose.yml:backend",
-      "type": "service",
-      "name": "backend",
-      "filePath": "docker-compose.yml",
-      "summary": "Единственный compose-сервис QMix: собирается из локального контекста, слушает :8080 через QMIX_ADDR, перезапускается политикой unless-stopped.",
-      "tags": [
-        "orchestration",
-        "deployment",
-        "configuration",
-        "backend"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "pipeline:.github/workflows/ci.yml",
-      "type": "pipeline",
-      "name": "ci.yml",
-      "filePath": ".github/workflows/ci.yml",
-      "summary": "Основной GitHub Actions workflow на push в main и pull request: job ci (gofmt, go vet, build, тесты с -race и порогом покрытия 95%), обязательный integration-mandatory через make test-integration, необязательный integration с секретами и job docker, который собирает образ и проверяет наличие yt-dlp плюс ответ /healthz.",
-      "tags": [
-        "ci-cd",
-        "infrastructure",
-        "test",
-        "quality-gate",
-        "containerization"
-      ],
-      "complexity": "moderate",
-      "languageNotes": "Покрытие проверяется не плагином, а awk-гейтом поверх go tool cover -func, что даёт жёсткий порог 95% без внешних сервисов. Job с внешними секретами помечен continue-on-error, поэтому нестабильные внешние API не роняют основной сигнал CI."
-    },
-    {
-      "id": "pipeline:.github/workflows/live.yml",
-      "type": "pipeline",
-      "name": "live.yml",
-      "filePath": ".github/workflows/live.yml",
-      "summary": "Отдельный workflow live smoke на self-hosted раннере с меткой nas (домашний IP): ставит свежий standalone-бинарник yt-dlp, пробует поисковый запрос к YouTube напрямую и запускает Live-тесты пакета internal/stream.",
-      "tags": [
-        "ci-cd",
-        "monitoring",
-        "test",
-        "self-hosted",
-        "smoke-test"
-      ],
-      "complexity": "moderate",
-      "languageNotes": "Вынесен в отдельный файл именно для того, чтобы основной пайплайн не вставал в очередь при офлайн-NAS; continue-on-error и timeout-minutes: 15 изолируют сбой. Флаг -race сознательно опущен — race-гейт живёт в ci.yml на ubuntu-latest, а на хосте раннера может не быть C-тулчейна."
-    },
-    {
-      "id": "document:ARCHITECTURE.md",
-      "type": "document",
-      "name": "ARCHITECTURE.md",
-      "filePath": "ARCHITECTURE.md",
-      "summary": "Архитектурный документ QMix из 11 разделов: обзор, границы задачи, стек, компоненты, модель данных, поверхность HTTP API, интерфейсы плагинов-резолверов, управление состоянием комнаты и деплой. Задаёт контракт между бэкендом, плагинами музыкальных сервисов и клиентом.",
-      "tags": [
-        "documentation",
-        "architecture",
-        "api-schema",
-        "design-doc"
-      ],
-      "complexity": "moderate",
-      "languageNotes": "Документ ведётся на русском языке с англоязычными заголовками разделов; описывает plugin-интерфейсы резолверов треков как основную точку расширения."
-    },
-    {
       "id": "pipeline:Makefile",
       "type": "pipeline",
       "name": "Makefile",
@@ -3976,20 +3751,6 @@
       "complexity": "simple"
     },
     {
-      "id": "document:README.md",
-      "type": "document",
-      "name": "README.md",
-      "filePath": "README.md",
-      "summary": "Основная документация проекта QMix: статус разработки, устройство стриминга через yt-dlp, запуск интеграционных тестов, а также подробная инструкция по получению токена VK через `cmd/token-vk` (password grant `oauth.vk.com` со scope `audio,offline` от имени клиента VK for Android) и токена Яндекс Музыки через `synchro`, плюс правила безопасности при работе с секретами.",
-      "tags": [
-        "documentation",
-        "entry-point",
-        "authentication",
-        "security"
-      ],
-      "complexity": "moderate"
-    },
-    {
       "id": "config:go.mod",
       "type": "config",
       "name": "go.mod",
@@ -4038,110 +3799,691 @@
       "complexity": "simple"
     },
     {
+      "id": "file:internal/resolver/spotify_api_test.go",
+      "type": "file",
+      "name": "spotify_api_test.go",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "summary": "Полный набор тестов для резолвера Spotify: мокает через httptest эндпоинты OAuth2-токена и Web API, проверяет happy-path Client Credentials, кэширование и обновление токена, обработку ошибок 4xx/пустого тела/сетевых сбоев, откат к анонимному oEmbed для нетрековых и неразбираемых ссылок, а также то, что тексты ошибок никогда не содержат client ID/secret.",
+      "tags": [
+        "test",
+        "spotify",
+        "oauth2",
+        "http-mock",
+        "resolver"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Использует httptest.Server для эмуляции token-эндпоинта и Web API и atomic-счётчики обращений для проверки кэширования токена (#8)."
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:newSpotifyTestRig",
+      "type": "function",
+      "name": "newSpotifyTestRig",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        28,
+        54
+      ],
+      "summary": "Конструктор тестового стенда: поднимает два httptest-сервера (token и API), атомарно считает обращения к каждому и позволяет настраивать код статуса и тело ответа.",
+      "tags": [
+        "test-helper",
+        "http-mock",
+        "fixture"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPISuccess",
+      "type": "function",
+      "name": "TestResolver_SpotifyAPISuccess",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        67,
+        115
+      ],
+      "summary": "Проверяет полный happy-path Client Credentials: Basic Auth на token-эндпоинте, Bearer-токен на Web API и итоговый Track с названием, всеми артистами и длительностью.",
+      "tags": [
+        "test",
+        "spotify",
+        "client-credentials",
+        "happy-path"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPITokenCached",
+      "type": "function",
+      "name": "TestResolver_SpotifyAPITokenCached",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        119,
+        138
+      ],
+      "summary": "Проверяет, что второй вызов Resolve переиспользует закэшированный access-токен и не обращается повторно к token-эндпоинту.",
+      "tags": [
+        "test",
+        "caching",
+        "token",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenExpiredRefetches",
+      "type": "function",
+      "name": "TestResolver_SpotifyTokenExpiredRefetches",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        142,
+        155
+      ],
+      "summary": "Проверяет, что после истечения срока действия токена резолвер запрашивает новый токен заново.",
+      "tags": [
+        "test",
+        "token-expiry",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyToken4xx",
+      "type": "function",
+      "name": "TestResolver_SpotifyToken4xx",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        158,
+        168
+      ],
+      "summary": "Проверяет, что ответ 4xx от token-эндпоинта оборачивается в ErrService.",
+      "tags": [
+        "test",
+        "error-handling",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenBadJSON",
+      "type": "function",
+      "name": "TestResolver_SpotifyTokenBadJSON",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        171,
+        180
+      ],
+      "summary": "Проверяет обработку невалидного JSON в ответе token-эндпоинта.",
+      "tags": [
+        "test",
+        "error-handling",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenEmpty",
+      "type": "function",
+      "name": "TestResolver_SpotifyTokenEmpty",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        183,
+        192
+      ],
+      "summary": "Проверяет, что пустой access_token в ответе token-эндпоинта трактуется как ошибка сервиса.",
+      "tags": [
+        "test",
+        "error-handling",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenTransportError",
+      "type": "function",
+      "name": "TestResolver_SpotifyTokenTransportError",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        195,
+        204
+      ],
+      "summary": "Проверяет обработку сетевой ошибки транспорта при обращении к token-эндпоинту.",
+      "tags": [
+        "test",
+        "error-handling",
+        "transport",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPI401",
+      "type": "function",
+      "name": "TestResolver_SpotifyAPI401",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        207,
+        217
+      ],
+      "summary": "Проверяет обработку ответа 401 Unauthorized от Web API.",
+      "tags": [
+        "test",
+        "error-handling",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPIBadJSON",
+      "type": "function",
+      "name": "TestResolver_SpotifyAPIBadJSON",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        220,
+        229
+      ],
+      "summary": "Проверяет обработку невалидного JSON в ответе Web API.",
+      "tags": [
+        "test",
+        "error-handling",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPIEmptyName",
+      "type": "function",
+      "name": "TestResolver_SpotifyAPIEmptyName",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        232,
+        241
+      ],
+      "summary": "Проверяет, что пустое имя трека в ответе Web API трактуется как ошибка сервиса.",
+      "tags": [
+        "test",
+        "error-handling",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPITransportError",
+      "type": "function",
+      "name": "TestResolver_SpotifyAPITransportError",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        244,
+        253
+      ],
+      "summary": "Проверяет обработку сетевой ошибки транспорта при обращении к Web API.",
+      "tags": [
+        "test",
+        "error-handling",
+        "transport",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAlbumFallsBackToOEmbed",
+      "type": "function",
+      "name": "TestResolver_SpotifyAlbumFallsBackToOEmbed",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        257,
+        281
+      ],
+      "summary": "Проверяет, что при наличии credentials ссылка на альбом (не трек) не уходит в Web API, а разрешается через анонимный oEmbed.",
+      "tags": [
+        "test",
+        "fallback",
+        "oembed",
+        "spotify"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyIntlTrackUsesAPI",
+      "type": "function",
+      "name": "TestResolver_SpotifyIntlTrackUsesAPI",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        285,
+        299
+      ],
+      "summary": "Проверяет, что ссылка на трек с локализованным префиксом пути (например intl-ru) всё равно распознаётся и резолвится через Web API.",
+      "tags": [
+        "test",
+        "url-parsing",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyOnlyClientID",
+      "type": "function",
+      "name": "TestResolver_SpotifyOnlyClientID",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        303,
+        326
+      ],
+      "summary": "Проверяет, что при заданном только Client ID (без секрета) резолвер не пытается использовать Web API и откатывается к oEmbed.",
+      "tags": [
+        "test",
+        "fallback",
+        "oembed",
+        "spotify"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyInvalidURLFallsBackToOEmbed",
+      "type": "function",
+      "name": "TestResolver_SpotifyInvalidURLFallsBackToOEmbed",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        330,
+        353
+      ],
+      "summary": "Проверяет, что неразбираемая ссылка на трек при заданных credentials всё равно откатывается к анонимному oEmbed вместо ошибки.",
+      "tags": [
+        "test",
+        "fallback",
+        "oembed",
+        "spotify"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyCredsOEmbedStillWorked",
+      "type": "function",
+      "name": "TestResolver_SpotifyCredsOEmbedStillWorked",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        358,
+        372
+      ],
+      "summary": "Проверяет, что путь oEmbed продолжает корректно работать, даже когда credentials заданы, но ссылка не на трек.",
+      "tags": [
+        "test",
+        "oembed",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestSpotifyTrackID",
+      "type": "function",
+      "name": "TestSpotifyTrackID",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        376,
+        404
+      ],
+      "summary": "Табличный тест для функции trackID: проверяет извлечение id трека из разных форматов ссылок и отказ для ссылок на альбом/плейлист.",
+      "tags": [
+        "test",
+        "url-parsing",
+        "table-driven",
+        "spotify"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/resolver/spotify_api_test.go:TestSpotifyErrorsHideCredentials",
+      "type": "function",
+      "name": "TestSpotifyErrorsHideCredentials",
+      "filePath": "internal/resolver/spotify_api_test.go",
+      "lineRange": [
+        408,
+        434
+      ],
+      "summary": "Проверяет, что тексты ошибок токена и Web API никогда не содержат client ID и client secret.",
+      "tags": [
+        "test",
+        "security",
+        "credential-leak",
+        "spotify"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:internal/resolver/harness_test.go",
+      "type": "file",
+      "name": "harness_test.go",
+      "filePath": "internal/resolver/harness_test.go",
+      "summary": "Гейтед (opt-in) интеграционный тестовый набор для Spotify: пропускает тесты, если нужные переменные окружения не заданы, иначе резолвит реальный трек через анонимный oEmbed и через полный путь Client Credentials Web API (#8).",
+      "tags": [
+        "test",
+        "integration",
+        "spotify",
+        "gated-test"
+      ],
+      "complexity": "simple",
+      "languageNotes": "Паттерн skip-by-env-var (t.Setenv/t.Skipf) держит CI зелёным без секретов; расширен в этом коммите тестом на боевой Client Credentials путь."
+    },
+    {
+      "id": "function:internal/resolver/harness_test.go:skipIfNoToken",
+      "type": "function",
+      "name": "skipIfNoToken",
+      "filePath": "internal/resolver/harness_test.go",
+      "lineRange": [
+        13,
+        20
+      ],
+      "summary": "Пропускает тест, если хотя бы одна из переданных переменных окружения не задана — общий гейт для live-интеграционных тестов Spotify.",
+      "tags": [
+        "test-helper",
+        "gated-test",
+        "environment"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
+      "type": "function",
+      "name": "TestSpotifyOEmbedLive",
+      "filePath": "internal/resolver/harness_test.go",
+      "lineRange": [
+        41,
+        50
+      ],
+      "summary": "Гейтед интеграционный тест анонимного oEmbed-пути против реального Spotify.",
+      "tags": [
+        "test",
+        "integration",
+        "oembed",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/harness_test.go:TestSpotifyAPILive",
+      "type": "function",
+      "name": "TestSpotifyAPILive",
+      "filePath": "internal/resolver/harness_test.go",
+      "lineRange": [
+        56,
+        72
+      ],
+      "summary": "Гейтед интеграционный тест полного пути Client Credentials (#8): получает реальный access-токен и резолвит трек через боевой Web API, проверяя название, длительность и артиста.",
+      "tags": [
+        "test",
+        "integration",
+        "client-credentials",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:internal/resolver/spotify.go",
+      "type": "file",
+      "name": "spotify.go",
+      "filePath": "internal/resolver/spotify.go",
+      "summary": "Резолвер Spotify-ссылок: без credentials использует анонимный публичный oEmbed API (название и, если есть, автор — без длительности); при заданных QMIX_SPOTIFY_CLIENT_ID/SECRET получает токен по OAuth2 Client Credentials и резолвит трек через официальный Web API (название, полный список артистов, точная длительность), кэшируя токен до истечения срока (#8). Ссылки на альбом/плейлист и неразбираемые URL всегда откатываются на oEmbed.",
+      "tags": [
+        "resolver",
+        "spotify",
+        "oauth2",
+        "client-credentials",
+        "http-client",
+        "tested"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Кэш токена защищён sync.Mutex для потокобезопасного резолвинга при параллельных запросах комнаты; тексты ошибок нарочно не включают учётные данные (см. TestSpotifyErrorsHideCredentials)."
+    },
+    {
+      "id": "class:internal/resolver/spotify.go:Spotify",
+      "type": "class",
+      "name": "Spotify",
+      "filePath": "internal/resolver/spotify.go",
+      "lineRange": [
+        31,
+        52
+      ],
+      "summary": "Структура резолвера Spotify: хранит HTTP-клиент, переопределяемые для тестов эндпоинты (oEmbed/token/API), Config с client credentials и потокобезопасный кэш access-токена с временем истечения.",
+      "tags": [
+        "data-model",
+        "resolver",
+        "spotify",
+        "oauth2"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/resolver/spotify.go:trackID",
+      "type": "function",
+      "name": "trackID",
+      "filePath": "internal/resolver/spotify.go",
+      "lineRange": [
+        114,
+        128
+      ],
+      "summary": "Извлекает id трека из ссылки Spotify по пути /track/{id}, поддерживая локализованные префиксы (например intl-ru); для ссылок на альбом/плейлист или неразбираемых URL возвращает ok=false.",
+      "tags": [
+        "url-parsing",
+        "utility",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify.go:Resolve",
+      "type": "function",
+      "name": "Resolve",
+      "filePath": "internal/resolver/spotify.go",
+      "lineRange": [
+        139,
+        146
+      ],
+      "summary": "Точка входа резолвинга (реализация Resolver): выбирает Web API, если заданы credentials и ссылка ведёт на трек, иначе — анонимный oEmbed.",
+      "tags": [
+        "entry-point",
+        "resolver",
+        "dispatch",
+        "spotify"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/resolver/spotify.go:resolveViaOEmbed",
+      "type": "function",
+      "name": "resolveViaOEmbed",
+      "filePath": "internal/resolver/spotify.go",
+      "lineRange": [
+        149,
+        182
+      ],
+      "summary": "Резолвит трек через анонимный oEmbed-эндпоинт: формирует запрос, парсит title/author_name из ответа и возвращает ошибку сервиса при пустом заголовке или сбое запроса.",
+      "tags": [
+        "http-client",
+        "oembed",
+        "spotify"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/resolver/spotify.go:token",
+      "type": "function",
+      "name": "token",
+      "filePath": "internal/resolver/spotify.go",
+      "lineRange": [
+        187,
+        222
+      ],
+      "summary": "Возвращает закэшированный app-level bearer-токен либо получает новый через OAuth2 Client Credentials (Basic Auth клиентскими credentials), сохраняя его в кэше под мьютексом до истечения срока действия.",
+      "tags": [
+        "oauth2",
+        "token-cache",
+        "client-credentials",
+        "concurrency"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/resolver/spotify.go:resolveViaAPI",
+      "type": "function",
+      "name": "resolveViaAPI",
+      "filePath": "internal/resolver/spotify.go",
+      "lineRange": [
+        225,
+        266
+      ],
+      "summary": "Резолвит трек по id через официальный Web API: получает bearer-токен, делает запрос к /v1/tracks/{id}, собирает список артистов через запятую и округляет длительность из миллисекунд до секунд.",
+      "tags": [
+        "http-client",
+        "web-api",
+        "spotify"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "service:Dockerfile",
+      "type": "service",
+      "name": "Dockerfile",
+      "filePath": "Dockerfile",
+      "summary": "Multi-stage сборка Docker-образа qmix: build stage на golang:1.25-alpine компилирует бинарник, а финальный runtime-образ на alpine:3.22 включает закреплённую версию yt-dlp, необходимую внутреннему стриминг-бэкенду для резолвинга аудио с YouTube.",
+      "tags": [
+        "containerization",
+        "infrastructure",
+        "deployment",
+        "multi-stage",
+        "go"
+      ],
+      "complexity": "simple",
+      "languageNotes": "Multi-stage build отделяет тулчейн сборки Go от минимального runtime-образа; версия yt-dlp закреплена явно (2025.11.12-r0) с комментарием о намеренном обновлении, а процесс в контейнере запускается от непривилегированного пользователя qmix."
+    },
+    {
+      "id": "service:Dockerfile:build",
+      "type": "service",
+      "name": "build",
+      "summary": "Build stage на базе golang:1.25-alpine: загружает Go-зависимости (go mod download) и собирает бинарник qmix из ./cmd/qmix с отключённым CGO.",
+      "tags": [
+        "build-stage",
+        "go",
+        "containerization"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:Dockerfile:alpine",
+      "type": "service",
+      "name": "alpine",
+      "summary": "Финальный runtime stage на alpine:3.22: устанавливает закреплённую версию yt-dlp для стриминга YouTube, создаёт непривилегированного пользователя qmix, копирует собранный бинарник и объявляет его точкой входа контейнера на порту 8080.",
+      "tags": [
+        "runtime-stage",
+        "containerization",
+        "security",
+        "alpine"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "service:docker-compose.yml",
+      "type": "service",
+      "name": "docker-compose.yml",
+      "filePath": "docker-compose.yml",
+      "summary": "Docker Compose конфигурация для запуска сервиса backend qmix: собирает образ из локального Dockerfile, публикует порт 8180 наружу (внутренний 8080), пробрасывает прокси-переменные для yt-dlp и задаёт ограничения деплоя — restart policy on-failure:3 и лимит памяти 512m.",
+      "tags": [
+        "orchestration",
+        "infrastructure",
+        "deployment",
+        "docker-compose"
+      ],
+      "complexity": "simple",
+      "languageNotes": "Значения HTTP_PROXY/HTTPS_PROXY/NO_PROXY подставляются из окружения хоста с пустым значением по умолчанию (\"${VAR:-}\") — для сред, где YouTube доступен только через прокси."
+    },
+    {
+      "id": "service:docker-compose.yml:backend",
+      "type": "service",
+      "name": "backend",
+      "summary": "Единственный сервис compose-файла: строит образ из Dockerfile текущего каталога, публикует порт 8180→8080, настраивает прокси-переменные для yt-dlp и задаёт restart: on-failure:3 с лимитом памяти 512m в соответствии с ограничениями деплоя.",
+      "tags": [
+        "service-definition",
+        "networking",
+        "resource-limits"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "pipeline:.github/workflows/ci.yml",
+      "type": "pipeline",
+      "name": "ci.yml",
+      "filePath": ".github/workflows/ci.yml",
+      "summary": "Основной CI-workflow GitHub Actions на push в main и pull request, состоящий из четырёх job'ов: (1) ci — линтует (gofmt + go vet), собирает и тестирует код с race-детектором и гейтом покрытия ≥95%; (2) integration-mandatory — обязательные интеграционные сценарии (healthz, комнаты, SSE, mock-резолвер, фейковый yt-dlp) без сети и секретов; (3) integration — гейтированные секретами тесты реальных провайдеров (VK, Яндекс.Музыка, Spotify) с continue-on-error; (4) docker — собирает образ, проверяет наличие yt-dlp и корректный запуск /healthz.",
+      "tags": [
+        "ci-cd",
+        "testing",
+        "deployment",
+        "docker",
+        "go"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Job integration-mandatory обязан быть зелёным без сети и секретов, тогда как integration и docker-смоук используют continue-on-error, чтобы нестабильные внешние API или отсутствующие секреты не блокировали основной pipeline; гейт покрытия реализован через awk-скрипт поверх вывода go tool cover."
+    },
+    {
+      "id": "pipeline:.github/workflows/live.yml",
+      "type": "pipeline",
+      "name": "live.yml",
+      "filePath": ".github/workflows/live.yml",
+      "summary": "Отдельный workflow 'live' (qmix#18) с единственным job'ом live-nas для смоук-теста реального стриминга YouTube на self-hosted runner 'nas': устанавливает свежий standalone-билд yt-dlp с GitHub Releases, делает пробный поиск на YouTube для диагностики поломки экстрактора и запускает реальный тест стриминга (QMIX_STREAM_LIVE=1) в internal/stream. Запускается вручную, еженедельно по расписанию и на push/pull request в main, но никогда не блокирует основной CI благодаря continue-on-error.",
+      "tags": [
+        "ci-cd",
+        "self-hosted-runner",
+        "smoke-test",
+        "youtube",
+        "scheduled"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Флаг -race намеренно опущен: race-гейт живёт в ci.yml на ubuntu-latest, а self-hosted runner может не иметь C-тулчейна для него; standalone-билд yt-dlp используется вместо pip-версии, так как pip резолвил устаревший релиз на этом runner'е."
+    },
+    {
+      "id": "document:ARCHITECTURE.md",
+      "type": "document",
+      "name": "ARCHITECTURE.md",
+      "filePath": "ARCHITECTURE.md",
+      "summary": "Архитектурный документ QMix: описывает MVP-скоуп, стек, компоненты (Backend, Resolver-плагин, StreamBackend-плагин, TV-приложение, PWA), модель данных (Room/Track/Queue), REST/SSE API, интерфейсы плагинов Resolver и StreamBackend, стратегию хранения состояния in-memory и параметры деплоя через docker-compose с CI-пайплайнами.",
+      "tags": [
+        "архитектура",
+        "документация",
+        "дизайн-система",
+        "api-схема",
+        "деплой"
+      ],
+      "complexity": "moderate",
+      "languageNotes": "Документ фиксирует Go-интерфейсы Resolver и StreamBackend прямо в тексте как контракт для плагинной архитектуры резолвинга и стриминга."
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "Главный README проекта QMix: статус вех (M0–M3 готовы, стриминг через yt-dlp работает, впереди M4 TV-приложение, M5 PWA, M6 Definition of Done), описание HTTP Range-стриминга, интеграционных тестов, инструкции запуска и подробный гайд по получению и ротации токенов сервисов VK/Яндекс Музыка/Spotify через утилиты cmd/token-vk и cmd/token-ym.",
+      "tags": [
+        "документация",
+        "entry-point",
+        "onboarding",
+        "токены",
+        "ci-cd"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Содержит машиночитаемые примеры вывода CLI-утилит (access_token=..., user_id=..., expires_in=...) и таблицы состояний expires_in для token-vk."
+    },
+    {
       "id": "file:cmd/token-vk/main.go",
       "type": "file",
       "name": "main.go",
       "filePath": "cmd/token-vk/main.go",
-      "summary": "CLI-утилита token-vk v2: полностью переписана с использования библиотеки vkmauth на прямой password grant `oauth.vk.com/token` со scope `audio,offline`, импersonируя официальный клиент VK for Android, чтобы полученный токен работал с методами `api.vk.com` вроде `audio.getById`. Логин, пароль и код 2FA читаются только из stdin, токен печатается в stdout в машиночитаемом виде и нигде не логируется.",
+      "summary": "CLI-утилита для получения VK OAuth-токена через password grant (эмулируя официальный клиент VK for Android): интерактивно запрашивает логин, пароль и 2FA-код со stdin. В текущей версии дополнительно извлекает expires_in и user_id из ответа VK и различает отсутствующий expires_in от явного нуля.",
       "tags": [
         "entry-point",
         "cli",
+        "oauth2",
+        "vk-api",
         "authentication",
-        "oauth",
-        "security",
         "tested"
       ],
-      "complexity": "moderate",
-      "languageNotes": "Тестируемость достигается классическим для Go приёмом: вся бизнес-логика вынесена в `run(stdin, stdout, stderr, fetcher)` с интерфейсами-сидами `tokenFetcher` и `httpDoer`, а `main` лишь подставляет реальные os.Stdin/Stdout/Stderr и `http.DefaultClient`."
-    },
-    {
-      "id": "class:cmd/token-vk/main.go:tokenFetcher",
-      "type": "class",
-      "name": "tokenFetcher",
-      "filePath": "cmd/token-vk/main.go",
-      "lineRange": [
-        46,
-        50
-      ],
-      "summary": "Интерфейс, абстрагирующий один шаг VK-авторизации (`Auth`), чтобы тесты могли подставлять мок вместо реального похода в сеть.",
-      "tags": [
-        "type-definition",
-        "abstraction",
-        "dependency-injection",
-        "authentication"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "class:cmd/token-vk/main.go:authResult",
-      "type": "class",
-      "name": "authResult",
-      "filePath": "cmd/token-vk/main.go",
-      "lineRange": [
-        54,
-        65
-      ],
-      "summary": "Структура-результат одной попытки авторизации: либо токен, либо запрос кода 2FA (с типом доставки), либо признак неверного кода, либо терминальная ошибка.",
-      "tags": [
-        "data-model",
-        "authentication",
-        "type-definition"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "class:cmd/token-vk/main.go:tokenResponse",
-      "type": "class",
-      "name": "tokenResponse",
-      "filePath": "cmd/token-vk/main.go",
-      "lineRange": [
-        69,
-        77
-      ],
-      "summary": "Структура, отражающая сырой JSON-ответ `oauth.vk.com/token` — успешный и ошибочный варианты используют одну и ту же форму; метод `result()` превращает её в `authResult`.",
-      "tags": [
-        "data-model",
-        "json",
-        "serialization",
-        "authentication"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "class:cmd/token-vk/main.go:httpDoer",
-      "type": "class",
-      "name": "httpDoer",
-      "filePath": "cmd/token-vk/main.go",
-      "lineRange": [
-        111,
-        113
-      ],
-      "summary": "Минимальный интерфейс вокруг `*http.Client`, позволяющий тестам подменять сетевой транспорт фикстурами вместо реальных HTTP-запросов.",
-      "tags": [
-        "type-definition",
-        "abstraction",
-        "dependency-injection",
-        "http"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "class:cmd/token-vk/main.go:vkFetcher",
-      "type": "class",
-      "name": "vkFetcher",
-      "filePath": "cmd/token-vk/main.go",
-      "lineRange": [
-        117,
-        117
-      ],
-      "summary": "Продакшен-реализация `tokenFetcher`, выполняющая password grant `oauth.vk.com/token` от имени клиента VK for Android; при запросе 2FA дополнительно пытается инициировать доставку кода через `auth.validatePhone`.",
-      "tags": [
-        "service",
-        "authentication",
-        "http",
-        "oauth"
-      ],
-      "complexity": "moderate"
+      "complexity": "complex",
+      "languageNotes": "ExpiresIn объявлен как *int, чтобы отличить отсутствие поля в JSON-ответе VK (nil) от явного значения 0 (неистекающий offline-токен) — иначе поведение по умолчанию Go (nil -> 0) скрыло бы эту разницу."
     },
     {
       "id": "function:cmd/token-vk/main.go:result",
@@ -4149,14 +4491,14 @@
       "name": "result",
       "filePath": "cmd/token-vk/main.go",
       "lineRange": [
-        80,
-        108
+        89,
+        117
       ],
-      "summary": "Метод `tokenResponse.result()` — превращает сырой JSON-ответ VK в `authResult`, различая успех, запрос 2FA, неверный код, неверные креды, flood control и капчу по кодам ошибок VK.",
+      "summary": "Метод tokenResponse.result преобразует сырой JSON-ответ oauth.vk.com/token в authResult, сопоставляя коды ошибок VK (need_validation, invalid_request, invalid_client, флуд-контроль, капча) с соответствующими терминальными или промежуточными состояниями.",
       "tags": [
-        "authentication",
+        "parsing",
         "error-handling",
-        "data-model"
+        "vk-api"
       ],
       "complexity": "moderate"
     },
@@ -4166,15 +4508,14 @@
       "name": "Auth",
       "filePath": "cmd/token-vk/main.go",
       "lineRange": [
-        122,
-        155
+        131,
+        164
       ],
-      "summary": "Метод `vkFetcher.Auth` — выполняет одну попытку password grant с опциональным кодом 2FA, парсит ответ через `tokenResponse.result()` и, если VK запросил валидацию, дополнительно инициирует отправку кода через `auth.validatePhone` (best effort).",
+      "summary": "Метод vkFetcher.Auth выполняет один запрос password grant к oauth.vk.com/token; при ответе need_validation с validation_sid дополнительно инициирует доставку кода через auth.validatePhone.",
       "tags": [
-        "authentication",
-        "oauth",
-        "http",
-        "api-handler"
+        "oauth2",
+        "api-handler",
+        "vk-api"
       ],
       "complexity": "moderate"
     },
@@ -4184,14 +4525,13 @@
       "name": "post",
       "filePath": "cmd/token-vk/main.go",
       "lineRange": [
-        159,
-        172
+        168,
+        181
       ],
-      "summary": "Метод `vkFetcher.post` — отправляет form-encoded POST-запрос с User-Agent клиента VK for Android и возвращает тело ответа.",
+      "summary": "Отправляет form-encoded POST-запрос с заголовками, имитирующими VK Android-клиент, и возвращает тело ответа.",
       "tags": [
-        "http",
-        "utility",
-        "authentication"
+        "http-client",
+        "utility"
       ],
       "complexity": "simple"
     },
@@ -4201,31 +4541,13 @@
       "name": "validationHint",
       "filePath": "cmd/token-vk/main.go",
       "lineRange": [
-        175,
-        188
-      ],
-      "summary": "Возвращает человекочитаемое описание канала доставки кода 2FA (SMS, приложение-аутентификатор, входящий звонок или общее «VK»).",
-      "tags": [
-        "utility",
-        "cli",
-        "authentication"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "function:cmd/token-vk/main.go:readLine",
-      "type": "function",
-      "name": "readLine",
-      "filePath": "cmd/token-vk/main.go",
-      "lineRange": [
-        191,
+        184,
         197
       ],
-      "summary": "Читает одну строку из `bufio.Reader` и возвращает её без окружающих пробелов и перевода строки.",
+      "summary": "Формирует человекочитаемую подсказку о канале доставки кода подтверждения (SMS, приложение-аутентификатор, звонок или неизвестный тип).",
       "tags": [
         "utility",
-        "cli",
-        "input-parsing"
+        "formatting"
       ],
       "complexity": "simple"
     },
@@ -4235,122 +4557,47 @@
       "name": "run",
       "filePath": "cmd/token-vk/main.go",
       "lineRange": [
-        202,
-        258
+        211,
+        285
       ],
-      "summary": "Основной интерактивный сценарий CLI: запрашивает логин и пароль, валидирует их непустоту, в цикле вызывает `fetcher.Auth`, обрабатывает запрос 2FA и неверный код повторным запросом, печатает `access_token` в stdout при успехе и человекочитаемую ошибку в stderr при отказе.",
+      "summary": "Главный интерактивный цикл: запрашивает логин/пароль/2FA-код со stdin, вызывает fetcher.Auth и печатает access_token, user_id и expires_in — с явным 'unknown' и предупреждением, если VK не вернул срок жизни токена, либо предупреждением, если токен истечёт.",
       "tags": [
         "entry-point",
-        "authentication",
         "cli",
-        "error-handling",
-        "validation"
+        "interactive",
+        "oauth2"
       ],
       "complexity": "complex"
     },
     {
-      "id": "function:cmd/token-vk/main.go:main",
-      "type": "function",
-      "name": "main",
+      "id": "class:cmd/token-vk/main.go:vkFetcher",
+      "type": "class",
+      "name": "vkFetcher",
       "filePath": "cmd/token-vk/main.go",
       "lineRange": [
-        260,
-        264
+        126,
+        126
       ],
-      "summary": "Точка входа CLI: подставляет реальные os.Stdin/Stdout/Stderr и продакшен-`vkFetcher` на базе `http.DefaultClient` в `run`, завершаясь с кодом 1 при ошибке.",
+      "summary": "Продакшн-реализация интерфейса tokenFetcher поверх password grant VK, объединяющая методы Auth и post; при 2FA дополнительно инициирует доставку кода подтверждения.",
       "tags": [
-        "entry-point",
-        "cli",
-        "process-exit"
+        "service",
+        "vk-api",
+        "oauth2"
       ],
-      "complexity": "simple"
+      "complexity": "moderate"
     },
     {
       "id": "file:cmd/token-vk/main_test.go",
       "type": "file",
       "name": "main_test.go",
       "filePath": "cmd/token-vk/main_test.go",
-      "summary": "Полное тестовое покрытие переписанной v2 CLI: интерактивный флоу `run` (успех, 2FA, неверный код, пустые/битые вводы, ошибки fetcher-а), разбор `tokenResponse.result()` по всем веткам ошибок VK (в т.ч. flood control и капча) и HTTP-поведение `vkFetcher` (заголовки, тело запроса, инициирование `auth.validatePhone`, сетевые ошибки).",
+      "summary": "Модульные тесты token-vk: покрывают run() (успех, 2FA, неверный код, ошибки чтения, предупреждения об истечении токена), tokenResponse.result (маппинг ошибок VK), vkFetcher.Auth (через HTTP-фикстуры) и вспомогательные validationHint/readLine.",
       "tags": [
         "test",
-        "unit-test",
-        "mocking",
-        "authentication",
-        "http"
+        "oauth2",
+        "vk-api"
       ],
-      "complexity": "complex",
-      "languageNotes": "Сеть полностью герметизирована через мок `httpDoer` (`fakeDoer`/`errDoer`), а JSON-фикстуры разбираются through `jsonUnmarshal`, которая делегирует в новый `jsonDecode` из `jsondec.go` — прямое структурное следствие выделения этого хелпера в отдельный файл."
-    },
-    {
-      "id": "class:cmd/token-vk/main_test.go:mockFetcher",
-      "type": "class",
-      "name": "mockFetcher",
-      "filePath": "cmd/token-vk/main_test.go",
-      "lineRange": [
-        16,
-        21
-      ],
-      "summary": "Тестовый дубль `tokenFetcher`: отдаёт заранее заданную последовательность `authResult`, запоминает переданный код 2FA и число вызовов.",
-      "tags": [
-        "test",
-        "mocking",
-        "test-double",
-        "authentication"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "class:cmd/token-vk/main_test.go:fakeDoer",
-      "type": "class",
-      "name": "fakeDoer",
-      "filePath": "cmd/token-vk/main_test.go",
-      "lineRange": [
-        331,
-        335
-      ],
-      "summary": "Тестовый дубль `httpDoer`: возвращает по очереди заранее заданные тела HTTP-ответов и запоминает все входящие запросы для последующих проверок заголовков и тела.",
-      "tags": [
-        "test",
-        "mocking",
-        "test-double",
-        "http"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "class:cmd/token-vk/main_test.go:errDoer",
-      "type": "class",
-      "name": "errDoer",
-      "filePath": "cmd/token-vk/main_test.go",
-      "lineRange": [
-        483,
-        483
-      ],
-      "summary": "Тестовый дубль `httpDoer`, всегда возвращающий сетевую ошибку — используется для проверки обработки отказа транспорта.",
-      "tags": [
-        "test",
-        "mocking",
-        "test-double",
-        "error-handling"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "function:cmd/token-vk/main_test.go:Auth",
-      "type": "function",
-      "name": "Auth",
-      "filePath": "cmd/token-vk/main_test.go",
-      "lineRange": [
-        23,
-        33
-      ],
-      "summary": "Метод `mockFetcher.Auth`, реализующий интерфейс `tokenFetcher` в тестах: возвращает следующий результат из заранее заданного списка, запоминая переданный код.",
-      "tags": [
-        "test",
-        "mocking",
-        "authentication"
-      ],
-      "complexity": "simple"
+      "complexity": "complex"
     },
     {
       "id": "function:cmd/token-vk/main_test.go:TestRunSuccess",
@@ -4358,16 +4605,15 @@
       "name": "TestRunSuccess",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        39,
-        55
+        45,
+        61
       ],
-      "summary": "Проверяет успешный путь `run` без 2FA: access_token печатается в stdout, stderr остаётся пустым.",
+      "summary": "Проверяет успешный сценарий run() без 2FA — access_token и user_id корректно выводятся в stdout.",
       "tags": [
         "test",
-        "happy-path",
-        "authentication"
+        "happy-path"
       ],
-      "complexity": "simple"
+      "complexity": "moderate"
     },
     {
       "id": "function:cmd/token-vk/main_test.go:TestRun2FASuccess",
@@ -4375,16 +4621,15 @@
       "name": "TestRun2FASuccess",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        57,
-        76
+        63,
+        82
       ],
-      "summary": "Проверяет флоу с запросом 2FA: подсказка о канале доставки кода печатается в stdout, а после ввода кода токен успешно получен.",
+      "summary": "Проверяет run() при запросе 2FA-кода: код вводится со stdin и авторизация после этого завершается успешно.",
       "tags": [
         "test",
-        "authentication",
-        "cli"
+        "2fa"
       ],
-      "complexity": "simple"
+      "complexity": "moderate"
     },
     {
       "id": "function:cmd/token-vk/main_test.go:TestRunBadCodeThenSuccess",
@@ -4392,16 +4637,16 @@
       "name": "TestRunBadCodeThenSuccess",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        78,
-        95
+        84,
+        101
       ],
-      "summary": "Проверяет, что при неверном коде 2FA пользователю предлагается ввести код заново, и при повторном вводе авторизация проходит успешно.",
+      "summary": "Проверяет повторный ввод кода после ответа BadCode от VK и последующий успешный вход.",
       "tags": [
         "test",
-        "authentication",
-        "error-handling"
+        "2fa",
+        "retry"
       ],
-      "complexity": "simple"
+      "complexity": "moderate"
     },
     {
       "id": "function:cmd/token-vk/main_test.go:TestRunEmptyLogin",
@@ -4409,14 +4654,13 @@
       "name": "TestRunEmptyLogin",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        97,
-        106
+        103,
+        112
       ],
-      "summary": "Проверяет, что пустой введённый логин прерывает `run` с ошибкой валидации.",
+      "summary": "Проверяет, что run() завершается ошибкой при пустом логине.",
       "tags": [
         "test",
-        "validation",
-        "error-handling"
+        "validation"
       ],
       "complexity": "simple"
     },
@@ -4426,14 +4670,13 @@
       "name": "TestRunEmptyPassword",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        108,
-        117
+        114,
+        123
       ],
-      "summary": "Проверяет, что пустой введённый пароль прерывает `run` с ошибкой валидации.",
+      "summary": "Проверяет, что run() завершается ошибкой при пустом пароле.",
       "tags": [
         "test",
-        "validation",
-        "error-handling"
+        "validation"
       ],
       "complexity": "simple"
     },
@@ -4443,14 +4686,13 @@
       "name": "TestRunReadLoginError",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        119,
-        128
+        125,
+        134
       ],
-      "summary": "Проверяет обёртывание ошибки чтения логина (обрыв входного потока) в сообщение вида `read login: ...`.",
+      "summary": "Проверяет обработку ошибки чтения логина со stdin.",
       "tags": [
         "test",
-        "error-handling",
-        "input-parsing"
+        "error-handling"
       ],
       "complexity": "simple"
     },
@@ -4460,14 +4702,13 @@
       "name": "TestRunReadPasswordError",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        130,
-        139
+        136,
+        145
       ],
-      "summary": "Проверяет обёртывание ошибки чтения пароля, когда поток обрывается сразу после логина.",
+      "summary": "Проверяет обработку ошибки чтения пароля со stdin.",
       "tags": [
         "test",
-        "error-handling",
-        "input-parsing"
+        "error-handling"
       ],
       "complexity": "simple"
     },
@@ -4477,16 +4718,15 @@
       "name": "TestRunFetcherError",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        141,
-        157
+        147,
+        163
       ],
-      "summary": "Проверяет, что терминальная ошибка от fetcher-а пробрасывается наверх, печатается в stderr и не приводит к появлению токена в stdout.",
+      "summary": "Проверяет, что ошибка транспортного уровня из fetcher.Auth корректно пробрасывается run() и логируется в stderr.",
       "tags": [
         "test",
-        "error-handling",
-        "authentication"
+        "error-handling"
       ],
-      "complexity": "simple"
+      "complexity": "moderate"
     },
     {
       "id": "function:cmd/token-vk/main_test.go:TestRunTerminalAuthError",
@@ -4494,16 +4734,15 @@
       "name": "TestRunTerminalAuthError",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        159,
-        174
+        165,
+        180
       ],
-      "summary": "Проверяет обработку терминальной ошибки авторизации (`res.Err`), возвращаемой без ошибки транспорта — сообщение должно попасть в stderr.",
+      "summary": "Проверяет обработку терминальной ошибки авторизации (например, неверный логин или пароль).",
       "tags": [
         "test",
-        "error-handling",
-        "authentication"
+        "error-handling"
       ],
-      "complexity": "simple"
+      "complexity": "moderate"
     },
     {
       "id": "function:cmd/token-vk/main_test.go:TestRunEmptyCode",
@@ -4511,14 +4750,14 @@
       "name": "TestRunEmptyCode",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        176,
-        186
+        182,
+        192
       ],
-      "summary": "Проверяет, что пустой введённый код 2FA прерывает `run` с ошибкой валидации.",
+      "summary": "Проверяет, что run() завершается ошибкой при пустом коде 2FA.",
       "tags": [
         "test",
         "validation",
-        "error-handling"
+        "2fa"
       ],
       "complexity": "simple"
     },
@@ -4528,14 +4767,14 @@
       "name": "TestRunReadCodeError",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        188,
-        198
+        194,
+        204
       ],
-      "summary": "Проверяет обёртывание ошибки чтения кода 2FA в сообщение вида `read code: ...`.",
+      "summary": "Проверяет обработку ошибки чтения кода 2FA со stdin.",
       "tags": [
         "test",
         "error-handling",
-        "input-parsing"
+        "2fa"
       ],
       "complexity": "simple"
     },
@@ -4545,13 +4784,12 @@
       "name": "TestRunUnexpectedResult",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        200,
-        213
+        206,
+        219
       ],
-      "summary": "Проверяет защитную ветку `run`, когда `authResult` не содержит ни токена, ни запроса 2FA, ни ошибки — считается непредвиденным результатом.",
+      "summary": "Проверяет обработку случая, когда fetcher возвращает результат без токена, ошибки и запроса 2FA.",
       "tags": [
         "test",
-        "error-handling",
         "edge-case"
       ],
       "complexity": "simple"
@@ -4562,52 +4800,16 @@
       "name": "TestTokenResponseResult",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        215,
-        321
+        221,
+        327
       ],
-      "summary": "Табличный тест метода `tokenResponse.result()`, покрывающий все ветки JSON-ответа VK: успешный токен, `need_validation`, `invalid_request` (неверный код), `invalid_client`, flood control, `password_bruteforce_attempt`, `need_captcha` и произвольная неизвестная ошибка.",
+      "summary": "Табличный тест tokenResponse.result, покрывающий все ветки ошибок VK (need_validation, invalid_request, invalid_client, флуд-контроль, капча, произвольная ошибка) и успешный маппинг токена.",
       "tags": [
         "test",
         "table-driven",
-        "authentication",
         "error-handling"
       ],
       "complexity": "complex"
-    },
-    {
-      "id": "function:cmd/token-vk/main_test.go:jsonUnmarshal",
-      "type": "function",
-      "name": "jsonUnmarshal",
-      "filePath": "cmd/token-vk/main_test.go",
-      "lineRange": [
-        325,
-        327
-      ],
-      "summary": "Тестовый хелпер, разбирающий JSON-строку через `strings.NewReader` и общий `jsonDecode` из `jsondec.go` — связывает тесты `tokenResponse.result()` с новым вынесенным JSON-декодером.",
-      "tags": [
-        "test",
-        "utility",
-        "json",
-        "helper"
-      ],
-      "complexity": "simple"
-    },
-    {
-      "id": "function:cmd/token-vk/main_test.go:Do",
-      "type": "function",
-      "name": "Do",
-      "filePath": "cmd/token-vk/main_test.go",
-      "lineRange": [
-        337,
-        344
-      ],
-      "summary": "Метод `fakeDoer.Do`, реализующий `httpDoer` в тестах: отдаёт по очереди заранее заданные тела ответов и сохраняет входящий запрос для последующих проверок.",
-      "tags": [
-        "test",
-        "mocking",
-        "http"
-      ],
-      "complexity": "simple"
     },
     {
       "id": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthSuccess",
@@ -4615,17 +4817,16 @@
       "name": "TestVkFetcherAuthSuccess",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        346,
-        387
+        352,
+        393
       ],
-      "summary": "Проверяет успешный `vkFetcher.Auth`: корректные заголовки (Content-Type, User-Agent) и тело form-encoded запроса (client_id, grant_type=password, scope=audio,offline, 2fa_supported, force_sms) при успешном ответе с access_token.",
+      "summary": "Проверяет, что vkFetcher.Auth формирует корректный HTTP-запрос (заголовки, тело формы) и парсит успешный ответ VK.",
       "tags": [
         "test",
-        "http",
-        "authentication",
-        "assertion"
+        "http-client",
+        "vk-api"
       ],
-      "complexity": "moderate"
+      "complexity": "complex"
     },
     {
       "id": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthWithCode",
@@ -4633,14 +4834,13 @@
       "name": "TestVkFetcherAuthWithCode",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        389,
-        399
+        395,
+        405
       ],
-      "summary": "Проверяет, что при передаче кода 2FA в `Auth` параметр `code` действительно попадает в тело HTTP-запроса.",
+      "summary": "Проверяет, что код 2FA передаётся в теле запроса password grant.",
       "tags": [
         "test",
-        "http",
-        "authentication"
+        "2fa"
       ],
       "complexity": "simple"
     },
@@ -4650,15 +4850,14 @@
       "name": "TestVkFetcher2FATriggersValidatePhone",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        401,
-        425
+        407,
+        431
       ],
-      "summary": "Проверяет, что при ответе `need_validation` с непустым `validation_sid` `Auth` дополнительно отправляет второй запрос на `auth.validatePhone` с этим SID.",
+      "summary": "Проверяет, что при need_validation с validation_sid выполняется дополнительный вызов auth.validatePhone для доставки кода.",
       "tags": [
         "test",
-        "http",
-        "authentication",
-        "side-effect"
+        "2fa",
+        "vk-api"
       ],
       "complexity": "moderate"
     },
@@ -4668,16 +4867,15 @@
       "name": "TestVkFetcher2FAValidatePhoneFailureIgnored",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        427,
-        442
+        433,
+        448
       ],
-      "summary": "Проверяет, что ошибка второго запроса `auth.validatePhone` не является фатальной — `Auth` всё равно возвращает результат с запросом 2FA (best effort).",
+      "summary": "Проверяет, что ошибка вызова auth.validatePhone не является фатальной для Auth — код может прийти иным способом.",
       "tags": [
         "test",
-        "error-handling",
-        "authentication"
+        "resilience"
       ],
-      "complexity": "simple"
+      "complexity": "moderate"
     },
     {
       "id": "function:cmd/token-vk/main_test.go:TestVkFetcher2FANoSID",
@@ -4685,13 +4883,12 @@
       "name": "TestVkFetcher2FANoSID",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        444,
-        457
+        450,
+        463
       ],
-      "summary": "Проверяет, что при `need_validation` без `validation_sid` дополнительный запрос `auth.validatePhone` не отправляется.",
+      "summary": "Проверяет, что при отсутствии validation_sid дополнительный запрос на доставку кода не выполняется.",
       "tags": [
         "test",
-        "authentication",
         "edge-case"
       ],
       "complexity": "simple"
@@ -4702,14 +4899,13 @@
       "name": "TestVkFetcherBadJSON",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        459,
-        466
+        465,
+        472
       ],
-      "summary": "Проверяет, что битый JSON в теле ответа VK превращается в понятную ошибку разбора `parse VK response: ...`.",
+      "summary": "Проверяет обработку невалидного JSON в ответе VK.",
       "tags": [
         "test",
-        "error-handling",
-        "json"
+        "error-handling"
       ],
       "complexity": "simple"
     },
@@ -4719,14 +4915,13 @@
       "name": "TestVkFetcherDoError",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        468,
-        474
+        474,
+        480
       ],
-      "summary": "Проверяет, что сетевая ошибка транспорта (`errDoer`) пробрасывается из `Auth` наверх без паники.",
+      "summary": "Проверяет пробрасывание ошибки HTTP-транспорта из vkFetcher.Auth.",
       "tags": [
         "test",
-        "error-handling",
-        "http"
+        "error-handling"
       ],
       "complexity": "simple"
     },
@@ -4736,14 +4931,13 @@
       "name": "TestVkFetcherNewRequestError",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        476,
-        481
+        482,
+        487
       ],
-      "summary": "Проверяет обработку ошибки построения HTTP-запроса (например, невалидный URL контекста) в `vkFetcher.post`.",
+      "summary": "Проверяет обработку ошибки построения HTTP-запроса в vkFetcher.Auth.",
       "tags": [
         "test",
-        "error-handling",
-        "http"
+        "error-handling"
       ],
       "complexity": "simple"
     },
@@ -4753,14 +4947,13 @@
       "name": "TestValidationHint",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        489,
-        502
+        495,
+        508
       ],
-      "summary": "Табличный тест `validationHint`, проверяющий все известные типы доставки кода (sms, 2fa_app, 2fa_callreset, пустой, неизвестный).",
+      "summary": "Проверяет соответствие типов validation_type человекочитаемым подсказкам (SMS, приложение-аутентификатор, звонок и т.д.).",
       "tags": [
         "test",
-        "table-driven",
-        "utility"
+        "formatting"
       ],
       "complexity": "simple"
     },
@@ -4770,14 +4963,13 @@
       "name": "TestReadLine",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        504,
-        513
+        510,
+        519
       ],
-      "summary": "Проверяет, что `readLine` обрезает пробелы и перевод строки и последовательно читает несколько строк из одного ридера.",
+      "summary": "Проверяет чтение и обрезку строки из bufio.Reader функцией readLine.",
       "tags": [
         "test",
-        "utility",
-        "input-parsing"
+        "utility"
       ],
       "complexity": "simple"
     },
@@ -4787,14 +4979,549 @@
       "name": "TestReadLineEOF",
       "filePath": "cmd/token-vk/main_test.go",
       "lineRange": [
-        515,
-        520
+        521,
+        526
       ],
-      "summary": "Проверяет, что `readLine` возвращает ошибку по достижении конца входного потока.",
+      "summary": "Проверяет, что readLine возвращает ошибку EOF при пустом вводе.",
       "tags": [
         "test",
-        "error-handling",
         "edge-case"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthCarriesExpiry",
+      "type": "function",
+      "name": "TestVkFetcherAuthCarriesExpiry",
+      "filePath": "cmd/token-vk/main_test.go",
+      "lineRange": [
+        536,
+        549
+      ],
+      "summary": "Проверяет, что ненулевой expires_in из ответа VK корректно передаётся в authResult.",
+      "tags": [
+        "test",
+        "expiry"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthOmittedExpiry",
+      "type": "function",
+      "name": "TestVkFetcherAuthOmittedExpiry",
+      "filePath": "cmd/token-vk/main_test.go",
+      "lineRange": [
+        554,
+        564
+      ],
+      "summary": "Проверяет, что отсутствие поля expires_in в ответе VK даёт nil, а не 0, в authResult.",
+      "tags": [
+        "test",
+        "expiry",
+        "edge-case"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-vk/main_test.go:TestRunWarnsOnExpiringToken",
+      "type": "function",
+      "name": "TestRunWarnsOnExpiringToken",
+      "filePath": "cmd/token-vk/main_test.go",
+      "lineRange": [
+        568,
+        583
+      ],
+      "summary": "Проверяет, что run() выводит предупреждение в stderr, когда VK вернул ненулевой expires_in — токен рано или поздно истечёт.",
+      "tags": [
+        "test",
+        "expiry",
+        "warning"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-vk/main_test.go:TestRunSilentOnNonExpiringToken",
+      "type": "function",
+      "name": "TestRunSilentOnNonExpiringToken",
+      "filePath": "cmd/token-vk/main_test.go",
+      "lineRange": [
+        587,
+        600
+      ],
+      "summary": "Проверяет, что run() не выводит предупреждений, когда expires_in равен 0 (offline-токен, не истекает).",
+      "tags": [
+        "test",
+        "expiry"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-vk/main_test.go:TestRunWarnsOnUnknownExpiry",
+      "type": "function",
+      "name": "TestRunWarnsOnUnknownExpiry",
+      "filePath": "cmd/token-vk/main_test.go",
+      "lineRange": [
+        604,
+        619
+      ],
+      "summary": "Проверяет, что run() печатает 'expires_in=unknown' и предупреждение, когда VK вообще не вернул поле expires_in.",
+      "tags": [
+        "test",
+        "expiry",
+        "warning"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:cmd/token-ym/main.go",
+      "type": "file",
+      "name": "main.go",
+      "filePath": "cmd/token-ym/main.go",
+      "summary": "Новая CLI-утилита для получения OAuth-токена Yandex Music через device-authorization-grant (device flow): запрашивает device_code/user_code через oauth.yandex.ru/device/code, затем опрашивает /token с интервалом, заданным сервером, до подтверждения пользователем.",
+      "tags": [
+        "entry-point",
+        "cli",
+        "oauth2",
+        "device-flow",
+        "yandex-music",
+        "tested"
+      ],
+      "complexity": "complex",
+      "languageNotes": "sleep инжектируется как отдельный тип sleeper (func(time.Duration)) вместо прямого вызова time.Sleep, что делает цикл опроса тестируемым без реального ожидания; production-путь собирает эту зависимость в defaultFlow()."
+    },
+    {
+      "id": "function:cmd/token-ym/main.go:postForm",
+      "type": "function",
+      "name": "postForm",
+      "filePath": "cmd/token-ym/main.go",
+      "lineRange": [
+        96,
+        108
+      ],
+      "summary": "Отправляет form-encoded POST-запрос на заданный endpoint и возвращает тело ответа; используется и для запроса кодов, и для опроса токена.",
+      "tags": [
+        "http-client",
+        "utility"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main.go:requestCodes",
+      "type": "function",
+      "name": "requestCodes",
+      "filePath": "cmd/token-ym/main.go",
+      "lineRange": [
+        111,
+        129
+      ],
+      "summary": "Выполняет первый шаг device flow — POST на /device/code — и парсит device_code, user_code и verification_url из ответа Яндекса, требуя, чтобы все три поля были заполнены.",
+      "tags": [
+        "oauth2",
+        "device-flow",
+        "api-handler"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main.go:pollTokens",
+      "type": "function",
+      "name": "pollTokens",
+      "filePath": "cmd/token-ym/main.go",
+      "lineRange": [
+        134,
+        189
+      ],
+      "summary": "Выполняет второй шаг device flow — циклический опрос /token с grant_type=device_code — обрабатывая authorization_pending, slow_down, expired_token, invalid_grant, access_denied и invalid_client, с жёстким дедлайном по времени жизни кодов подтверждения.",
+      "tags": [
+        "oauth2",
+        "device-flow",
+        "polling"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:cmd/token-ym/main.go:run",
+      "type": "function",
+      "name": "run",
+      "filePath": "cmd/token-ym/main.go",
+      "lineRange": [
+        194,
+        208
+      ],
+      "summary": "Оркестрирует device flow целиком: запрашивает коды, печатает verification_url и user_code, дожидается токена через pollTokens и выводит access_token/refresh_token в stdout.",
+      "tags": [
+        "entry-point",
+        "cli",
+        "oauth2"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main.go:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "cmd/token-ym/main.go",
+      "lineRange": [
+        224,
+        236
+      ],
+      "summary": "Точка входа: собирает flowConfig с фиксированными device_id/device_name ('qmix-token-ym') и вызывает run() с продакшн-реализацией defaultFlow(), завершаясь с кодом 1 при ошибке.",
+      "tags": [
+        "entry-point",
+        "cli"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:cmd/token-ym/main.go:deviceFlow",
+      "type": "class",
+      "name": "deviceFlow",
+      "filePath": "cmd/token-ym/main.go",
+      "lineRange": [
+        56,
+        62
+      ],
+      "summary": "Структура device flow, объединяющая HTTP-транспорт, URL обоих эндпоинтов, инжектируемую функцию сна и таймаут опроса; несёт методы postForm, requestCodes и pollTokens, что делает весь flow тестируемым без реальной сети.",
+      "tags": [
+        "service",
+        "oauth2",
+        "device-flow"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:cmd/token-ym/main_test.go",
+      "type": "file",
+      "name": "main_test.go",
+      "filePath": "cmd/token-ym/main_test.go",
+      "summary": "Модульные тесты token-ym: покрывают run() (успех, ожидание подтверждения, истёкший код, access_denied, invalid_grant/client, slow_down, ошибки без кода), pollTokens (таймаут опроса, fallback интервала, ошибки JSON/транспорта), requestCodes и регрессию #33 для defaultFlow.",
+      "tags": [
+        "test",
+        "oauth2",
+        "device-flow"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunSuccess",
+      "type": "function",
+      "name": "TestRunSuccess",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        62,
+        85
+      ],
+      "summary": "Проверяет успешный сценарий run(): коды запрошены, токен получен с первой попытки опроса.",
+      "tags": [
+        "test",
+        "happy-path"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunSuccessPendingThenToken",
+      "type": "function",
+      "name": "TestRunSuccessPendingThenToken",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        87,
+        111
+      ],
+      "summary": "Проверяет, что run() продолжает опрос после authorization_pending и в итоге получает токен.",
+      "tags": [
+        "test",
+        "polling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunExpiredToken",
+      "type": "function",
+      "name": "TestRunExpiredToken",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        113,
+        130
+      ],
+      "summary": "Проверяет обработку истёкшего/невалидного кода подтверждения (expired_token/invalid_grant).",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunAccessDenied",
+      "type": "function",
+      "name": "TestRunAccessDenied",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        132,
+        143
+      ],
+      "summary": "Проверяет обработку отказа пользователя подтвердить код (access_denied).",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunInvalidGrant",
+      "type": "function",
+      "name": "TestRunInvalidGrant",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        145,
+        156
+      ],
+      "summary": "Проверяет обработку ошибки invalid_grant от /token.",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunInvalidClient",
+      "type": "function",
+      "name": "TestRunInvalidClient",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        158,
+        169
+      ],
+      "summary": "Проверяет обработку ошибки invalid_client (неверные client_id/client_secret).",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunSlowDownThenToken",
+      "type": "function",
+      "name": "TestRunSlowDownThenToken",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        171,
+        186
+      ],
+      "summary": "Проверяет, что ответ slow_down приводит к дополнительной паузе перед повторным запросом, после чего токен успешно получен.",
+      "tags": [
+        "test",
+        "polling",
+        "rate-limiting"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunOtherError",
+      "type": "function",
+      "name": "TestRunOtherError",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        188,
+        199
+      ],
+      "summary": "Проверяет обработку неизвестного кода ошибки от /token.",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunErrorWithoutCode",
+      "type": "function",
+      "name": "TestRunErrorWithoutCode",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        201,
+        212
+      ],
+      "summary": "Проверяет обработку ответа без access_token и без поля error.",
+      "tags": [
+        "test",
+        "edge-case"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestPollingTimeout",
+      "type": "function",
+      "name": "TestPollingTimeout",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        214,
+        233
+      ],
+      "summary": "Проверяет, что pollTokens прекращает опрос и возвращает ошибку по истечении дедлайна, если сервер бесконечно отвечает authorization_pending.",
+      "tags": [
+        "test",
+        "timeout",
+        "polling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestPollTokensDoError",
+      "type": "function",
+      "name": "TestPollTokensDoError",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        235,
+        242
+      ],
+      "summary": "Проверяет пробрасывание ошибки HTTP-транспорта из pollTokens.",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestPollTokensBadJSON",
+      "type": "function",
+      "name": "TestPollTokensBadJSON",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        248,
+        258
+      ],
+      "summary": "Проверяет обработку невалидного JSON в ответе /token.",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRequestCodesSuccess",
+      "type": "function",
+      "name": "TestRequestCodesSuccess",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        260,
+        285
+      ],
+      "summary": "Проверяет, что requestCodes формирует корректный запрос к /device/code и парсит device_code/user_code/verification_url из ответа.",
+      "tags": [
+        "test",
+        "device-flow"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRequestCodesBadJSON",
+      "type": "function",
+      "name": "TestRequestCodesBadJSON",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        287,
+        294
+      ],
+      "summary": "Проверяет обработку невалидного JSON в ответе /device/code.",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRequestCodesEmptyFields",
+      "type": "function",
+      "name": "TestRequestCodesEmptyFields",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        296,
+        312
+      ],
+      "summary": "Проверяет, что отсутствие обязательных полей (device_code/user_code/verification_url) в ответе трактуется как ошибка.",
+      "tags": [
+        "test",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRequestCodesDoError",
+      "type": "function",
+      "name": "TestRequestCodesDoError",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        314,
+        320
+      ],
+      "summary": "Проверяет пробрасывание ошибки HTTP-транспорта из requestCodes.",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestRunRequestCodesFailure",
+      "type": "function",
+      "name": "TestRunRequestCodesFailure",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        322,
+        330
+      ],
+      "summary": "Проверяет, что run() прекращает выполнение и возвращает ошибку, если requestCodes завершился неудачно.",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestPollTokensIntervalFallback",
+      "type": "function",
+      "name": "TestPollTokensIntervalFallback",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        332,
+        351
+      ],
+      "summary": "Проверяет, что при interval<=0 в ответе Яндекса используется резервный интервал опроса (5 секунд).",
+      "tags": [
+        "test",
+        "edge-case",
+        "polling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestPostFormNewRequestError",
+      "type": "function",
+      "name": "TestPostFormNewRequestError",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        353,
+        359
+      ],
+      "summary": "Проверяет обработку ошибки построения HTTP-запроса в postForm.",
+      "tags": [
+        "test",
+        "error-handling"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:cmd/token-ym/main_test.go:TestDefaultFlowSetsSleep",
+      "type": "function",
+      "name": "TestDefaultFlowSetsSleep",
+      "filePath": "cmd/token-ym/main_test.go",
+      "lineRange": [
+        365,
+        376
+      ],
+      "summary": "Регрессионный тест на issue #33 — проверяет, что defaultFlow() всегда устанавливает поле sleep, чтобы не упасть на nil sleeper при первом ответе authorization_pending.",
+      "tags": [
+        "test",
+        "regression"
       ],
       "complexity": "simple"
     }
@@ -5942,27 +6669,6 @@
       "weight": 0.8
     },
     {
-      "source": "file:internal/resolver/harness_test.go",
-      "target": "function:internal/resolver/harness_test.go:skipIfNoToken",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:internal/resolver/harness_test.go",
-      "target": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:internal/resolver/harness_test.go",
-      "target": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
       "source": "file:internal/resolver/resolver_test.go",
       "target": "function:internal/resolver/resolver_test.go:TestResolver_SpotifyOEmbed",
       "type": "contains",
@@ -6159,27 +6865,6 @@
       "weight": 0.8
     },
     {
-      "source": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
-      "target": "function:internal/resolver/harness_test.go:skipIfNoToken",
-      "type": "calls",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
-      "target": "function:internal/resolver/spotify.go:Resolve",
-      "type": "calls",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "function:internal/resolver/resolver_test.go:TestResolver_SpotifyOEmbed",
-      "target": "function:internal/resolver/spotify.go:Resolve",
-      "type": "calls",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
       "source": "function:internal/resolver/resolver_test.go:TestResolver_YouTube",
       "target": "function:internal/resolver/youtube.go:Resolve",
       "type": "calls",
@@ -6210,13 +6895,6 @@
     {
       "source": "file:internal/resolver/default.go",
       "target": "file:internal/resolver/config.go",
-      "type": "depends_on",
-      "direction": "forward",
-      "weight": 0.6
-    },
-    {
-      "source": "file:internal/resolver/default.go",
-      "target": "file:internal/resolver/spotify.go",
       "type": "depends_on",
       "direction": "forward",
       "weight": 0.6
@@ -6262,34 +6940,6 @@
       "type": "tested_by",
       "direction": "forward",
       "weight": 0.5
-    },
-    {
-      "source": "file:internal/resolver/spotify.go",
-      "target": "class:internal/resolver/spotify.go:Spotify",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:internal/resolver/spotify.go",
-      "target": "function:internal/resolver/spotify.go:Resolve",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:internal/resolver/spotify.go",
-      "target": "class:internal/resolver/spotify.go:Spotify",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:internal/resolver/spotify.go",
-      "target": "function:internal/resolver/spotify.go:Resolve",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
     },
     {
       "source": "file:internal/resolver/vkyandex.go",
@@ -6661,20 +7311,6 @@
       "type": "depends_on",
       "direction": "forward",
       "weight": 0.6
-    },
-    {
-      "source": "file:internal/resolver/spotify.go",
-      "target": "file:internal/resolver/resolver_test.go",
-      "type": "tested_by",
-      "direction": "forward",
-      "weight": 0.5
-    },
-    {
-      "source": "file:internal/resolver/spotify.go",
-      "target": "file:internal/resolver/harness_test.go",
-      "type": "tested_by",
-      "direction": "forward",
-      "weight": 0.5
     },
     {
       "source": "file:internal/resolver/vkyandex.go",
@@ -7328,97 +7964,6 @@
       "weight": 0.5
     },
     {
-      "source": "service:Dockerfile",
-      "target": "service:Dockerfile:build",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "service:Dockerfile",
-      "target": "service:Dockerfile:alpine",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "service:Dockerfile",
-      "target": "file:cmd/qmix/main.go",
-      "type": "deploys",
-      "direction": "forward",
-      "weight": 0.7
-    },
-    {
-      "source": "service:Dockerfile:build",
-      "target": "file:cmd/qmix/main.go",
-      "type": "deploys",
-      "direction": "forward",
-      "weight": 0.7
-    },
-    {
-      "source": "service:docker-compose.yml",
-      "target": "service:docker-compose.yml:backend",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "service:docker-compose.yml",
-      "target": "service:Dockerfile",
-      "type": "depends_on",
-      "direction": "forward",
-      "weight": 0.6
-    },
-    {
-      "source": "service:docker-compose.yml:backend",
-      "target": "service:Dockerfile",
-      "type": "depends_on",
-      "direction": "forward",
-      "weight": 0.6
-    },
-    {
-      "source": "pipeline:.github/workflows/ci.yml",
-      "target": "service:Dockerfile",
-      "type": "depends_on",
-      "direction": "forward",
-      "weight": 0.6
-    },
-    {
-      "source": "pipeline:.github/workflows/ci.yml",
-      "target": "file:cmd/qmix/main.go",
-      "type": "triggers",
-      "direction": "forward",
-      "weight": 0.6
-    },
-    {
-      "source": "pipeline:.github/workflows/live.yml",
-      "target": "file:internal/stream/ytdlp_live_test.go",
-      "type": "triggers",
-      "direction": "forward",
-      "weight": 0.6
-    },
-    {
-      "source": "pipeline:.github/workflows/live.yml",
-      "target": "file:internal/stream/ytdlp.go",
-      "type": "triggers",
-      "direction": "forward",
-      "weight": 0.6
-    },
-    {
-      "source": "pipeline:.github/workflows/live.yml",
-      "target": "pipeline:.github/workflows/ci.yml",
-      "type": "related",
-      "direction": "forward",
-      "weight": 0.5
-    },
-    {
-      "source": "document:ARCHITECTURE.md",
-      "target": "file:cmd/qmix/main.go",
-      "type": "documents",
-      "direction": "forward",
-      "weight": 0.5
-    },
-    {
       "source": "pipeline:Makefile",
       "target": "file:cmd/qmix/main.go",
       "type": "triggers",
@@ -7510,22 +8055,8 @@
       "weight": 0.6
     },
     {
-      "source": "file:internal/resolver/spotify.go",
-      "target": "file:internal/resolver/resolver.go",
-      "type": "depends_on",
-      "direction": "forward",
-      "weight": 0.6
-    },
-    {
       "source": "file:internal/resolver/youtube.go",
       "target": "file:internal/resolver/resolver.go",
-      "type": "depends_on",
-      "direction": "forward",
-      "weight": 0.6
-    },
-    {
-      "source": "file:internal/resolver/spotify.go",
-      "target": "file:internal/resolver/config.go",
       "type": "depends_on",
       "direction": "forward",
       "weight": 0.6
@@ -7545,11 +8076,662 @@
       "weight": 0.6
     },
     {
-      "source": "config:go.mod",
-      "target": "file:cmd/token-vk/main.go",
-      "type": "configures",
+      "source": "file:cmd/token-vk/jsondec.go",
+      "target": "function:cmd/token-vk/jsondec.go:jsonDecode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:newSpotifyTestRig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPISuccess",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPITokenCached",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenExpiredRefetches",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyToken4xx",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenBadJSON",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenEmpty",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenTransportError",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPI401",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPIBadJSON",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPIEmptyName",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPITransportError",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAlbumFallsBackToOEmbed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyIntlTrackUsesAPI",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyOnlyClientID",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyInvalidURLFallsBackToOEmbed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyCredsOEmbedStillWorked",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestSpotifyTrackID",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestSpotifyErrorsHideCredentials",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPISuccess",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPITokenCached",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenExpiredRefetches",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyToken4xx",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenBadJSON",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenEmpty",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenTransportError",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPI401",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPIBadJSON",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPIEmptyName",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPITransportError",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAlbumFallsBackToOEmbed",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyIntlTrackUsesAPI",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyOnlyClientID",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyInvalidURLFallsBackToOEmbed",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyCredsOEmbedStillWorked",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestSpotifyTrackID",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify_api_test.go",
+      "target": "function:internal/resolver/spotify_api_test.go:TestSpotifyErrorsHideCredentials",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPISuccess",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPITokenCached",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenExpiredRefetches",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyToken4xx",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenBadJSON",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenEmpty",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyTokenTransportError",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPI401",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPIBadJSON",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPIEmptyName",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAPITransportError",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyAlbumFallsBackToOEmbed",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyIntlTrackUsesAPI",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyOnlyClientID",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyInvalidURLFallsBackToOEmbed",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestResolver_SpotifyCredsOEmbedStillWorked",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestSpotifyErrorsHideCredentials",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify_api_test.go:TestSpotifyTrackID",
+      "target": "function:internal/resolver/spotify.go:trackID",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/harness_test.go",
+      "target": "function:internal/resolver/harness_test.go:skipIfNoToken",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/harness_test.go",
+      "target": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/harness_test.go",
+      "target": "function:internal/resolver/harness_test.go:TestSpotifyAPILive",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/harness_test.go",
+      "target": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/harness_test.go",
+      "target": "function:internal/resolver/harness_test.go:TestSpotifyAPILive",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
+      "target": "function:internal/resolver/harness_test.go:skipIfNoToken",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/harness_test.go:TestSpotifyAPILive",
+      "target": "function:internal/resolver/harness_test.go:skipIfNoToken",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/harness_test.go:TestSpotifyOEmbedLive",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/harness_test.go:TestSpotifyAPILive",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/harness_test.go:TestSpotifyAPILive",
+      "target": "function:internal/resolver/config.go:ConfigFromEnv",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "class:internal/resolver/spotify.go:Spotify",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "function:internal/resolver/spotify.go:trackID",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "function:internal/resolver/spotify.go:resolveViaOEmbed",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "function:internal/resolver/spotify.go:token",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "function:internal/resolver/spotify.go:resolveViaAPI",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "class:internal/resolver/spotify.go:Spotify",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "function:internal/resolver/spotify.go:Resolve",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:internal/resolver/spotify.go:Spotify",
+      "target": "class:internal/resolver/resolver.go:Resolver",
+      "type": "implements",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "file:internal/resolver/resolver.go",
+      "type": "depends_on",
       "direction": "forward",
       "weight": 0.6
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "file:internal/resolver/config.go",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:internal/resolver/default.go",
+      "target": "file:internal/resolver/spotify.go",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "function:internal/resolver/spotify.go:Resolve",
+      "target": "function:internal/resolver/spotify.go:trackID",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify.go:Resolve",
+      "target": "function:internal/resolver/spotify.go:resolveViaAPI",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify.go:Resolve",
+      "target": "function:internal/resolver/spotify.go:resolveViaOEmbed",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/resolver/spotify.go:resolveViaAPI",
+      "target": "function:internal/resolver/spotify.go:token",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "file:internal/resolver/spotify_api_test.go",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "file:internal/resolver/spotify.go",
+      "target": "file:internal/resolver/harness_test.go",
+      "type": "tested_by",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "service:Dockerfile",
+      "target": "service:Dockerfile:build",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "service:Dockerfile",
+      "target": "service:Dockerfile:alpine",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "service:docker-compose.yml",
+      "target": "service:docker-compose.yml:backend",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "service:docker-compose.yml",
+      "target": "service:Dockerfile",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "pipeline:.github/workflows/ci.yml",
+      "target": "service:Dockerfile",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "pipeline:.github/workflows/live.yml",
+      "target": "pipeline:.github/workflows/ci.yml",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:ARCHITECTURE.md",
+      "target": "file:cmd/qmix/main.go",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:ARCHITECTURE.md",
+      "target": "service:Dockerfile",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:ARCHITECTURE.md",
+      "target": "pipeline:.github/workflows/ci.yml",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:ARCHITECTURE.md",
+      "target": "pipeline:.github/workflows/live.yml",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
     },
     {
       "source": "document:README.md",
@@ -7567,52 +8749,38 @@
     },
     {
       "source": "document:README.md",
-      "target": "document:ARCHITECTURE.md",
-      "type": "related",
+      "target": "file:cmd/token-ym/main.go",
+      "type": "documents",
       "direction": "forward",
       "weight": 0.5
     },
     {
-      "source": "file:cmd/token-vk/jsondec.go",
-      "target": "function:cmd/token-vk/jsondec.go:jsonDecode",
-      "type": "contains",
+      "source": "document:README.md",
+      "target": "service:Dockerfile",
+      "type": "documents",
       "direction": "forward",
-      "weight": 1
+      "weight": 0.5
     },
     {
-      "source": "file:cmd/token-vk/main.go",
-      "target": "class:cmd/token-vk/main.go:tokenFetcher",
-      "type": "contains",
+      "source": "document:README.md",
+      "target": "pipeline:.github/workflows/ci.yml",
+      "type": "documents",
       "direction": "forward",
-      "weight": 1
+      "weight": 0.5
     },
     {
-      "source": "file:cmd/token-vk/main.go",
-      "target": "class:cmd/token-vk/main.go:authResult",
-      "type": "contains",
+      "source": "document:README.md",
+      "target": "pipeline:.github/workflows/live.yml",
+      "type": "documents",
       "direction": "forward",
-      "weight": 1
+      "weight": 0.5
     },
     {
-      "source": "file:cmd/token-vk/main.go",
-      "target": "class:cmd/token-vk/main.go:tokenResponse",
-      "type": "contains",
+      "source": "document:README.md",
+      "target": "document:ARCHITECTURE.md",
+      "type": "related",
       "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:cmd/token-vk/main.go",
-      "target": "class:cmd/token-vk/main.go:httpDoer",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:cmd/token-vk/main.go",
-      "target": "class:cmd/token-vk/main.go:vkFetcher",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
+      "weight": 0.5
     },
     {
       "source": "file:cmd/token-vk/main.go",
@@ -7644,13 +8812,6 @@
     },
     {
       "source": "file:cmd/token-vk/main.go",
-      "target": "function:cmd/token-vk/main.go:readLine",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:cmd/token-vk/main.go",
       "target": "function:cmd/token-vk/main.go:run",
       "type": "contains",
       "direction": "forward",
@@ -7658,7 +8819,7 @@
     },
     {
       "source": "file:cmd/token-vk/main.go",
-      "target": "function:cmd/token-vk/main.go:main",
+      "target": "class:cmd/token-vk/main.go:vkFetcher",
       "type": "contains",
       "direction": "forward",
       "weight": 1
@@ -7671,39 +8832,11 @@
       "weight": 0.8
     },
     {
-      "source": "class:cmd/token-vk/main.go:vkFetcher",
-      "target": "class:cmd/token-vk/main.go:tokenFetcher",
-      "type": "implements",
+      "source": "file:cmd/token-vk/main.go",
+      "target": "file:cmd/token-vk/main_test.go",
+      "type": "tested_by",
       "direction": "forward",
-      "weight": 0.9
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "class:cmd/token-vk/main_test.go:mockFetcher",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "class:cmd/token-vk/main_test.go:fakeDoer",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "class:cmd/token-vk/main_test.go:errDoer",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:Auth",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
+      "weight": 0.5
     },
     {
       "source": "file:cmd/token-vk/main_test.go",
@@ -7798,20 +8931,6 @@
     },
     {
       "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:jsonUnmarshal",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:Do",
-      "type": "contains",
-      "direction": "forward",
-      "weight": 1
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
       "target": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthSuccess",
       "type": "contains",
       "direction": "forward",
@@ -7889,255 +9008,227 @@
     },
     {
       "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunSuccess",
-      "type": "exports",
+      "target": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthCarriesExpiry",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
       "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRun2FASuccess",
-      "type": "exports",
+      "target": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthOmittedExpiry",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
       "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunBadCodeThenSuccess",
-      "type": "exports",
+      "target": "function:cmd/token-vk/main_test.go:TestRunWarnsOnExpiringToken",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
       "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunEmptyLogin",
-      "type": "exports",
+      "target": "function:cmd/token-vk/main_test.go:TestRunSilentOnNonExpiringToken",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
       "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunEmptyPassword",
-      "type": "exports",
+      "target": "function:cmd/token-vk/main_test.go:TestRunWarnsOnUnknownExpiry",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunReadLoginError",
-      "type": "exports",
+      "source": "file:cmd/token-ym/main.go",
+      "target": "function:cmd/token-ym/main.go:postForm",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunReadPasswordError",
-      "type": "exports",
+      "source": "file:cmd/token-ym/main.go",
+      "target": "function:cmd/token-ym/main.go:requestCodes",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunFetcherError",
-      "type": "exports",
+      "source": "file:cmd/token-ym/main.go",
+      "target": "function:cmd/token-ym/main.go:pollTokens",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunTerminalAuthError",
-      "type": "exports",
+      "source": "file:cmd/token-ym/main.go",
+      "target": "function:cmd/token-ym/main.go:run",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunEmptyCode",
-      "type": "exports",
+      "source": "file:cmd/token-ym/main.go",
+      "target": "function:cmd/token-ym/main.go:main",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunReadCodeError",
-      "type": "exports",
+      "source": "file:cmd/token-ym/main.go",
+      "target": "class:cmd/token-ym/main.go:deviceFlow",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.8
+      "weight": 1
     },
     {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestRunUnexpectedResult",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestTokenResponseResult",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:Do",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthSuccess",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthWithCode",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestVkFetcher2FATriggersValidatePhone",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestVkFetcher2FAValidatePhoneFailureIgnored",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestVkFetcher2FANoSID",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestVkFetcherBadJSON",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestVkFetcherDoError",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestVkFetcherNewRequestError",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestValidationHint",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestReadLine",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main_test.go",
-      "target": "function:cmd/token-vk/main_test.go:TestReadLineEOF",
-      "type": "exports",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "class:cmd/token-vk/main_test.go:mockFetcher",
-      "target": "class:cmd/token-vk/main.go:tokenFetcher",
-      "type": "implements",
-      "direction": "forward",
-      "weight": 0.9
-    },
-    {
-      "source": "class:cmd/token-vk/main_test.go:fakeDoer",
-      "target": "class:cmd/token-vk/main.go:httpDoer",
-      "type": "implements",
-      "direction": "forward",
-      "weight": 0.9
-    },
-    {
-      "source": "class:cmd/token-vk/main_test.go:errDoer",
-      "target": "class:cmd/token-vk/main.go:httpDoer",
-      "type": "implements",
-      "direction": "forward",
-      "weight": 0.9
-    },
-    {
-      "source": "function:cmd/token-vk/main_test.go:jsonUnmarshal",
-      "target": "function:cmd/token-vk/jsondec.go:jsonDecode",
-      "type": "calls",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "function:cmd/token-vk/main_test.go:TestRunSuccess",
-      "target": "function:cmd/token-vk/main.go:run",
-      "type": "calls",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "function:cmd/token-vk/main_test.go:TestValidationHint",
-      "target": "function:cmd/token-vk/main.go:validationHint",
-      "type": "calls",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "function:cmd/token-vk/main_test.go:TestReadLine",
-      "target": "function:cmd/token-vk/main.go:readLine",
-      "type": "calls",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "function:cmd/token-vk/main_test.go:TestTokenResponseResult",
-      "target": "function:cmd/token-vk/main.go:result",
-      "type": "calls",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "function:cmd/token-vk/main_test.go:TestVkFetcherAuthSuccess",
-      "target": "function:cmd/token-vk/main.go:Auth",
-      "type": "calls",
-      "direction": "forward",
-      "weight": 0.8
-    },
-    {
-      "source": "file:cmd/token-vk/main.go",
-      "target": "file:cmd/token-vk/main_test.go",
+      "source": "file:cmd/token-ym/main.go",
+      "target": "file:cmd/token-ym/main_test.go",
       "type": "tested_by",
       "direction": "forward",
       "weight": 0.5
     },
     {
-      "source": "file:cmd/token-vk/jsondec.go",
-      "target": "file:cmd/token-vk/main_test.go",
-      "type": "tested_by",
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunSuccess",
+      "type": "contains",
       "direction": "forward",
-      "weight": 0.5
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunSuccessPendingThenToken",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunExpiredToken",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunAccessDenied",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunInvalidGrant",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunInvalidClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunSlowDownThenToken",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunOtherError",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunErrorWithoutCode",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestPollingTimeout",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestPollTokensDoError",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestPollTokensBadJSON",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRequestCodesSuccess",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRequestCodesBadJSON",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRequestCodesEmptyFields",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRequestCodesDoError",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestRunRequestCodesFailure",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestPollTokensIntervalFallback",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestPostFormNewRequestError",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:cmd/token-ym/main_test.go",
+      "target": "function:cmd/token-ym/main_test.go:TestDefaultFlowSetsSleep",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
     },
     {
       "source": "file:cmd/qmix/main.go",
@@ -8552,10 +9643,12 @@
     {
       "id": "layer:entry",
       "name": "Точки входа",
-      "description": "Тонкие бинарники из cmd/: запуск HTTP-сервера QMix с адресом из QMIX_ADDR и вспомогательная CLI-утилита получения VK-токена.",
+      "description": "Тонкие бинарники из cmd/: запуск HTTP-сервера QMix с адресом из QMIX_ADDR, CLI получения VK-токена через password grant (с вынесенным JSON-декодером jsondec.go) и новая CLI-утилита token-ym для получения токена Яндекс Музыки через device flow.",
       "nodeIds": [
         "file:cmd/qmix/main.go",
-        "file:cmd/token-vk/main.go"
+        "file:cmd/token-vk/main.go",
+        "file:cmd/token-vk/jsondec.go",
+        "file:cmd/token-ym/main.go"
       ]
     },
     {
@@ -8581,14 +9674,14 @@
     {
       "id": "layer:resolver",
       "name": "Слой резолверов ссылок",
-      "description": "Подсистема распознавания ссылок музыкальных сервисов: контракт Resolver с Mux-маршрутизацией по доменам, чтение кредов из окружения и реализации для Spotify, YouTube и VK / Яндекс Музыки.",
+      "description": "Подсистема распознавания ссылок музыкальных сервисов: контракт Resolver с Mux-маршрутизацией по доменам, чтение кредов из окружения и реализации для YouTube, VK/Яндекс Музыки и полностью реализованного Spotify — анонимный oEmbed либо точный резолвинг через OAuth2 Client Credentials Web API с кэшированием токена (#8).",
       "nodeIds": [
         "file:internal/resolver/resolver.go",
-        "file:internal/resolver/default.go",
         "file:internal/resolver/config.go",
-        "file:internal/resolver/spotify.go",
+        "file:internal/resolver/default.go",
+        "file:internal/resolver/vkyandex.go",
         "file:internal/resolver/youtube.go",
-        "file:internal/resolver/vkyandex.go"
+        "file:internal/resolver/spotify.go"
       ]
     },
     {
@@ -8597,54 +9690,55 @@
       "description": "Доставка звука: контракт StreamBackend, yt-dlp реализация с TTL-кэшем и singleflight, HTTP-прокси с поддержкой Range (200/206/416) и конфигурация из QMIX_YTDLP_BIN / QMIX_STREAM_CACHE_TTL.",
       "nodeIds": [
         "file:internal/stream/stream.go",
-        "file:internal/stream/ytdlp.go",
-        "file:internal/stream/proxy.go",
         "file:internal/stream/cache.go",
-        "file:internal/stream/config.go"
+        "file:internal/stream/config.go",
+        "file:internal/stream/proxy.go",
+        "file:internal/stream/ytdlp.go"
       ]
     },
     {
       "id": "layer:test",
       "name": "Тестовый слой",
-      "description": "Unit-, интеграционные и gated live-тесты всех пакетов: сквозные сценарии комнаты через реальный сокет, проверки Range-стриминга, кэша, резолверов и точек входа.",
+      "description": "Unit-, интеграционные и gated live-тесты всех пакетов: сквозные сценарии комнаты через реальный сокет, проверки Range-стриминга, кэша, резолверов (включая мокнутые OAuth2/Web API тесты Spotify и gated-тест #8) и CLI точек входа cmd/qmix, cmd/token-vk и нового cmd/token-ym.",
       "nodeIds": [
-        "file:internal/server/server_test.go",
         "file:internal/server/stream_integration_test.go",
         "file:internal/server/integration_mandatory_test.go",
         "file:internal/server/resolver_integration_test.go",
+        "file:internal/server/server_test.go",
         "file:internal/stream/cache_test.go",
         "file:internal/stream/config_test.go",
         "file:internal/stream/proxy_test.go",
         "file:internal/stream/ytdlp_test.go",
         "file:internal/stream/ytdlp_live_test.go",
-        "file:internal/resolver/resolver_test.go",
         "file:internal/resolver/config_test.go",
+        "file:internal/resolver/resolver_test.go",
+        "file:internal/resolver/spotify_api_test.go",
         "file:internal/resolver/harness_test.go",
         "file:cmd/qmix/main_test.go",
         "file:cmd/token-vk/main_test.go",
-        "file:cmd/token-vk/jsondec.go"
+        "file:cmd/token-ym/main_test.go"
       ]
     },
     {
       "id": "layer:infrastructure",
       "name": "Инфраструктура и сборка",
-      "description": "Контейнеризация и автоматизация QMix: multi-stage Dockerfile с закреплённым yt-dlp, compose-запуск backend'а, Makefile-цели разработки, манифест Go-модуля и GitHub Actions workflow'ы CI и live smoke.",
+      "description": "Контейнеризация и автоматизация QMix: multi-stage Dockerfile с закреплённым yt-dlp, compose-запуск backend'а, Makefile-цели разработки, беззависимый манифест Go-модуля (vkmauth и его транзитивные зависимости удалены после перехода token-vk на password grant) и GitHub Actions workflow'ы CI и еженедельного live smoke.",
       "nodeIds": [
+        "pipeline:Makefile",
+        "config:go.mod",
         "service:Dockerfile",
         "service:Dockerfile:build",
         "service:Dockerfile:alpine",
         "service:docker-compose.yml",
         "service:docker-compose.yml:backend",
-        "pipeline:Makefile",
         "pipeline:.github/workflows/ci.yml",
-        "pipeline:.github/workflows/live.yml",
-        "config:go.mod"
+        "pipeline:.github/workflows/live.yml"
       ]
     },
     {
       "id": "layer:documentation",
       "name": "Документация",
-      "description": "Архитектурный контракт проекта и пользовательская документация: описание компонентов, HTTP API и модели данных, а также инструкции по запуску, тестам и работе с токенами сервисов.",
+      "description": "Архитектурный контракт проекта и пользовательская документация: описание компонентов, HTTP API и модели данных, а также инструкции по запуску, тестам и получению/ротации токенов сервисов VK, Яндекс Музыки и Spotify через утилиты cmd/token-vk и cmd/token-ym.",
       "nodeIds": [
         "document:ARCHITECTURE.md",
         "document:README.md"
@@ -8655,140 +9749,144 @@
     {
       "order": 1,
       "title": "Обзор проекта",
-      "description": "QMix — коллаборативный музыкальный плеер: хост поднимает комнату, друзья кидают ссылки из VK, Яндекс Музыки и Spotify в общую очередь, а бэкенд резолвит метаданные трека и стримит аудио. README описывает текущий статус проекта (M0 — каркас), принцип работы стриминга через эндпоинт GET /rooms/{code}/current/stream с поддержкой HTTP Range и обязательный уровень интеграционных тестов через make test-integration. Это стартовая точка тура — дальше мы проследим, как эти идеи реализованы в коде, шаг за шагом.",
+      "description": "README.md — точка входа в документацию QMix: коллаборативного музыкального плеера, где хост поднимает комнату, а участники добавляют треки из VK, Яндекс Музыки и Spotify в общую очередь, которую бэкенд резолвит и стримит. Документ фиксирует статус вех (M0–M3 готовы, стриминг через yt-dlp работает) и служит дорожной картой для всего тура — от точки входа в код до резолверов и инфраструктуры. Обратите внимание: раздел «Дальше» в README слегка устарел — там Spotify (#8) всё ещё числится незавершённым, хотя на деле резолвинг через OAuth2 Client Credentials уже полностью реализован (см. шаг 7).",
       "nodeIds": [
         "document:README.md"
       ]
     },
     {
       "order": 2,
-      "title": "Архитектурный контракт",
-      "description": "ARCHITECTURE.md фиксирует одиннадцать разделов проектного контракта: обзор системы, стек, компоненты, модель данных, поверхность HTTP API и интерфейсы плагинов-резолверов. Этот документ — граница между бэкендом, плагинами музыкальных сервисов и клиентом, и именно на него будет опираться каждый следующий шаг тура. В отличие от README, который объясняет «что и зачем», этот файл описывает «как устроено» на уровне интерфейсов.",
-      "nodeIds": [
-        "document:ARCHITECTURE.md"
-      ]
-    },
-    {
-      "order": 3,
-      "title": "Точка входа",
-      "description": "main.go — тончайшая обвязка запуска бинарника QMix: читает адрес прослушивания из переменной окружения QMIX_ADDR и сразу передаёт управление server.Run. Вся бизнес-логика намеренно вынесена в пакет internal/server — типичное для Go разделение ответственности: cmd/ отвечает только за сборку и запуск. Дальше тур пройдёт по графу зависимостей примерно в том же порядке, в котором main.go подключает остальные пакеты.",
+      "title": "Точка входа сервера",
+      "description": "cmd/qmix/main.go — тонкая обвязка запуска бэкенда: читает адрес прослушивания из переменной окружения QMIX_ADDR и передаёт управление в internal/server. Вся содержательная логика вынесена в отдельный пакет — классический для Go паттерн «тонкий main», который держит точку входа минимальной и легко тестируемой. Отсюда начинается граф зависимостей всего бэкенда — дальше мы пройдём по слоям API, состояния, резолверов и стриминга в том порядке, в котором их подключает именно этот файл.",
       "nodeIds": [
         "file:cmd/qmix/main.go"
       ],
-      "languageLesson": "В Go каталог internal/ — это языковая гарантия инкапсуляции: пакеты внутри него нельзя импортировать из кода за пределами родительского модуля, в отличие от cmd/, которая обычно содержит только тонкие точки входа (main.go)."
+      "languageLesson": "В Go принято делать main() максимально тонким — вся бизнес-логика живёт в импортируемых пакетах (internal/...), а cmd/*/main.go лишь связывает конфигурацию с точкой запуска. Каталог internal/ — это специальный механизм языка: пакеты внутри него нельзя импортировать из-за пределов модуля."
+    },
+    {
+      "order": 3,
+      "title": "API-слой комнат",
+      "description": "Продолжая от main.go, app.go — композиционный корень бэкенда: он собирает Store, SSE-Hub, резолвер и stream-backend в единый HTTP-обработчик и поднимает фоновый janitor комнат. handlers.go реализует REST-эндпоинты — создание комнаты, добавление трека с резолвом метаданных, skip, reorder — и переводит ошибки резолвера в HTTP-статусы. hub.go отвечает за SSE-рассылку: у каждого подписчика свой буферизованный канал, публикация неблокирующая, а начальный снапшот очереди и heartbeat-пинги держат клиентов синхронизированными в реальном времени.",
+      "nodeIds": [
+        "file:internal/server/app.go",
+        "file:internal/server/handlers.go",
+        "file:internal/server/hub.go"
+      ],
+      "languageLesson": "Server-Sent Events (SSE) — однонаправленный поток text/event-stream поверх обычного HTTP-соединения; для задач «сервер → множество слушателей», как рассылка событий комнаты, он проще WebSocket."
     },
     {
       "order": 4,
-      "title": "Композиционный корень",
-      "description": "app.go — композиционный корень бэкенда: здесь Store, SSE-Hub, резолвер-Mux и stream-backend собираются в один HTTP-обработчик App, поднимается фоновый janitor комнат и запускается сам сервер. Также здесь читается production-конфигурация yt-dlp из окружения — то есть app.go знает про все подсистемы, которые мы увидим в следующих шагах, а сами подсистемы про него не знают. Это явная сборка зависимостей (dependency injection без DI-фреймворка) — идиоматичный для Go подход.",
-      "nodeIds": [
-        "file:internal/server/app.go"
-      ]
-    },
-    {
-      "order": 5,
-      "title": "HTTP-обработчики комнаты",
-      "description": "handlers.go — самый «широкий» файл проекта по числу исходящих связей: здесь реализованы все REST-эндпоинты комнаты — создание, чтение состояния, добавление трека с резолвом метаданных, skip, reorder очереди, SSE-поток событий и проксирование аудио текущего трека. Тут же живут общие JSON-хелперы, проверка host-токена и отображение ошибок резолвера в HTTP-статусы (422 для невалидной ссылки, 502 для сбоя сервиса). handlers.go — точка стыковки API-слоя с доменной логикой из следующего шага и с резолверами, которые мы разберём чуть позже.",
-      "nodeIds": [
-        "file:internal/server/handlers.go"
-      ]
-    },
-    {
-      "order": 6,
       "title": "Слой состояния комнат",
-      "description": "Три небольших файла образуют доменное ядро комнаты. models.go определяет структуры комнаты, трека и состояния воспроизведения; store.go — потокобезопасное in-memory хранилище комнат под мьютексом с фоновым TTL-janitor'ом, вычищающим простаивающие комнаты; code.go генерирует человекочитаемые коды комнат (алфавит без похожих символов вроде 0/o/1/l) и host-токены. Именно эти структуры handlers.go из предыдущего шага читает и изменяет при каждом запросе.",
+      "description": "Под API-слоем лежит слой данных: models.go описывает доменные структуры — комнату с host-токеном и очередью, трек с метаданными от резолвера, состояние воспроизведения. store.go — in-memory хранилище комнат под мьютексом с фоновым janitor'ом, который по TTL вычищает опустевшие простаивающие комнаты (TTL и интервал уборки конфигурируемы, чтобы тесты работали на малых значениях). code.go генерирует читаемые идентификаторы комнат на алфавите без похожих символов (без 0, o, 1, l) и 32-символьные host-токены, которые защищают управляющие действия из шага 3.",
       "nodeIds": [
         "file:internal/server/models.go",
         "file:internal/server/store.go",
         "file:internal/server/code.go"
-      ],
-      "languageLesson": "In-memory store с sync.Mutex и фоновой горутиной-janitor'ом — простая Go-идиома там, где не нужна персистентность между перезапусками: TTL и интервал уборки конфигурируемы, чтобы тесты работали на малых значениях."
+      ]
     },
     {
-      "order": 7,
-      "title": "SSE-хаб синхронизации",
-      "description": "hub.go рассылает события состояния комнаты всем подключённым клиентам через Server-Sent Events: у каждого подписчика свой буферизованный канал, публикация неблокирующая — медленный клиент не тормозит остальных, а при подключении клиент сразу получает снапшот очереди и затем heartbeat-пинги. Это механизм, который держит у всех участников комнаты одну и ту же картину происходящего — ключевая идея «общей очереди» из README.",
-      "nodeIds": [
-        "file:internal/server/hub.go"
-      ],
-      "languageLesson": "Fan-out через буферизованные каналы (по каналу на подписчика) — стандартный Go-способ реализовать pub/sub без внешнего брокера сообщений; неблокирующая публикация (select с default-веткой) защищает хаб от медленных подписчиков."
-    },
-    {
-      "order": 8,
-      "title": "Контракт резолверов и сборка Mux",
-      "description": "resolver.go задаёт ядро подсистемы распознавания ссылок: структуру Track, интерфейс Resolver, sentinel-ошибки (ErrInvalid, ErrUnsupported, ErrNoAnonymous, ErrService) и Mux, маршрутизирующий ссылку к конкретному резолверу по домену. config.go читает креды VK/Яндекс/Spotify из переменных окружения QMIX_* (пустые значения — анонимный режим), а default.go собирает production Mux из трёх реализаций, которые мы разберём в следующем шаге. Это самый высокий fan-in во всём графе проекта — почти все резолверы и тесты зависят именно от этого контракта.",
+      "order": 5,
+      "title": "Контракт резолверов ссылок",
+      "description": "Когда участник добавляет трек (handlers.go из шага 3), запрос уходит в подсистему резолверов. resolver.go задаёт контракт: структуру Track, интерфейс Resolver, sentinel-ошибки (ErrInvalid, ErrUnsupported, ErrNoAnonymous, ErrService) и Mux, маршрутизирующий ссылку к конкретной реализации по домену. config.go читает учётные данные VK/Яндекс/Spotify из переменных окружения QMIX_* (пустые значения означают анонимный режим), а default.go собирает продакшн-Mux из трёх matcher-ов резолверов.",
       "nodeIds": [
         "file:internal/resolver/resolver.go",
         "file:internal/resolver/config.go",
         "file:internal/resolver/default.go"
       ],
-      "languageLesson": "Sentinel-ошибки (var ErrX = errors.New(...)) и небольшой интерфейс Resolver — идиоматичный Go-способ описать контракт плагинов вместо тяжёлой иерархии абстрактных классов."
+      "languageLesson": "Sentinel-ошибки (var ErrX = errors.New(...)) — идиоматичный в Go способ дать вызывающему коду проверять конкретную причину сбоя через errors.Is, не полагаясь на текст сообщения."
     },
     {
-      "order": 9,
-      "title": "Резолверы VK, Яндекс, Spotify и YouTube",
-      "description": "Три реализации интерфейса Resolver из предыдущего шага. spotify.go использует публичный анонимный oEmbed API (длительность трека oEmbed не отдаёт, поэтому она остаётся нулевой — метаданные никогда не додумываются); vkyandex.go — best-effort парсинг og:title регуляркой, поскольку у VK и Яндекс Музыки нет анонимного API, и на практике обе площадки часто отдают login-wall, так что резолвер честно возвращает ErrNoAnonymous; youtube.go оборачивает yt-dlp --dump-json, пряча внешний вызов за интерфейсом Runner, чтобы тесты подставляли фикстуры вместо реального бинаря. Общий паттерн: каждый резолвер честно сигнализирует о своих ограничениях через sentinel-ошибки Step 8, а не пытается угадать данные.",
+      "order": 6,
+      "title": "Резолверы YouTube и VK/Яндекс",
+      "description": "youtube.go резолвит ссылки поверх yt-dlp --skip-download --dump-json, пряча внешний вызов за интерфейсом Runner — это позволяет тестам подставлять фикстурный JSON вместо запуска реального бинаря. vkyandex.go — честный best-effort резолвер: у VK и Яндекс Музыки нет публичного анонимного API, поэтому он тянет HTML-страницу и вытаскивает og:title регуляркой, а на практике оба сервиса отдают login-wall, из-за чего резолвер возвращает ErrNoAnonymous. Это ограничение — прямая причина, почему в проекте появились отдельные CLI-утилиты token-vk и token-ym для получения авторизованных токенов (шаги 10–11).",
       "nodeIds": [
-        "file:internal/resolver/spotify.go",
         "file:internal/resolver/youtube.go",
         "file:internal/resolver/vkyandex.go"
       ]
     },
     {
-      "order": 10,
-      "title": "Контракт стриминга аудио",
-      "description": "stream.go задаёт границу между метаданными трека и источником аудио: интерфейс StreamBackend, структуры Track и Result, sentinel-ошибки ErrNotFound и ErrService — пакет stream намеренно не зависит от server, только наоборот. config.go рядом читает QMIX_YTDLP_BIN (путь к бинарю yt-dlp) и QMIX_STREAM_CACHE_TTL (TTL кэша разрезолвленных ссылок) из окружения; все значения имеют дефолты, поэтому пустое окружение сохраняет production-поведение. Этот контракт связывает app.go (Step 4) со стриминговой реализацией из следующего шага.",
+      "order": 7,
+      "title": "Spotify: полный резолвинг через OAuth2",
+      "description": "spotify.go — самая развитая реализация резолвера в проекте и главное изменение с прошлой версии тура. Без credentials он использует анонимный публичный oEmbed API (только название и, если есть, автор — без длительности); при заданных QMIX_SPOTIFY_CLIENT_ID/SECRET он получает токен по OAuth2 Client Credentials и резолвит трек через официальный Web API — с полным списком артистов и точной длительностью, кэшируя токен до истечения срока (#8). spotify_api_test.go мокает через httptest оба эндпоинта (токен и Web API) и отдельно проверяет, что тексты ошибок никогда не содержат client ID/secret — важная деталь безопасности для резолвера с реальными учётными данными.",
+      "nodeIds": [
+        "file:internal/resolver/spotify.go",
+        "file:internal/resolver/spotify_api_test.go"
+      ],
+      "languageLesson": "OAuth2 Client Credentials — grant-тип для server-to-server авторизации без участия пользователя: приложение обменивает собственные client_id/secret на access-токен, который затем кэшируется до истечения (expires_in), чтобы не запрашивать новый токен на каждый вызов."
+    },
+    {
+      "order": 8,
+      "title": "Контракт стриминга и yt-dlp backend",
+      "description": "После резолвинга метаданных (шаги 5–7) трек нужно физически проиграть — за это отвечает пакет stream. stream.go задаёт контракт: интерфейс StreamBackend, структуры Track и Result, sentinel-ошибки ErrNotFound/ErrService — пакет намеренно не зависит от server, только от собственных типов. ytdlp.go — production-реализация: она ищет трек на YouTube через yt-dlp --dump-json, извлекает прямую ссылку на аудио и кэширует её на ~5 минут, а config.go задаёт QMIX_YTDLP_BIN и QMIX_STREAM_CACHE_TTL с безопасными дефолтами.",
       "nodeIds": [
         "file:internal/stream/stream.go",
+        "file:internal/stream/ytdlp.go",
         "file:internal/stream/config.go"
       ]
     },
     {
-      "order": 11,
-      "title": "yt-dlp backend и TTL-кэш",
-      "description": "ytdlp.go — production-реализация StreamBackend: ищет трек на YouTube через yt-dlp --dump-json, извлекает прямую аудио-ссылку и кэширует её примерно на 5 минут, как описано в README. cache.go добавляет к этому TTL-кэшу singleflight: при одновременных промахах по одному ключу loader выполнится ровно один раз, а не по разу на каждый параллельный запрос — важная защита, когда несколько участников комнаты одновременно жмут skip на один и тот же трек. Запуск внешнего процесса вынесен в интерфейс Runner, поэтому unit-тесты подставляют фикстурный JSON вместо реального бинаря yt-dlp.",
+      "order": 9,
+      "title": "TTL-кэш и HTTP Range-прокси",
+      "description": "cache.go — TTL-кэш с встроенным singleflight: он хранит разрезолвленные аудио-URL из шага 8 и гарантирует, что при одновременных промахах по одному ключу loader выполнится ровно один раз, а не параллельно для каждого запроса. proxy.go — HTTP-прокси аудио, который валидирует клиентский заголовок Range, пробрасывает его в StreamBackend и воспроизводит для клиента статусы апстрима (200 целиком, 206 частично с Content-Range, 416 при некорректном диапазоне), отображая ErrNotFound в 404, а сбои апстрима — в 502. Именно эта пара файлов даёт плееру перемотку (seek) без повторной загрузки всего трека.",
       "nodeIds": [
-        "file:internal/stream/ytdlp.go",
-        "file:internal/stream/cache.go"
+        "file:internal/stream/cache.go",
+        "file:internal/stream/proxy.go"
       ],
-      "languageLesson": "Singleflight — известный Go-паттерн (в духе golang.org/x/sync/singleflight) дедупликации конкурентных запросов по одному ключу; здесь он реализован вручную поверх TTL-кэша, чтобы не бить лишний раз по yt-dlp и внешним сервисам."
+      "languageLesson": "Singleflight — паттерн дедупликации конкурентных вызовов: если несколько горутин одновременно запрашивают один и тот же ключ при промахе кэша, реальный loader выполнится один раз, а остальные дождутся его результата вместо дублирования дорогого запроса."
+    },
+    {
+      "order": 10,
+      "title": "CLI token-vk: password grant",
+      "description": "У VK, как мы видели в шаге 6, нет анонимного API — cmd/token-vk/main.go решает эту проблему: интерактивная CLI-утилита, эмулирующая официальный клиент VK for Android через OAuth password grant, запрашивает логин, пароль и 2FA-код со stdin. В текущей версии утилита дополнительно извлекает expires_in и user_id из ответа VK и явно различает отсутствующий expires_in от явного нуля — тонкость, важная для корректных предупреждений об истечении токена. jsondec.go — новый вспомогательный файл: единственная функция-обёртка над encoding/json для декодирования ответов из io.Reader, вынесенная отдельно, чтобы переиспользовать её и в продакшен-коде, и в тестовом хелпере для фикстур.",
+      "nodeIds": [
+        "file:cmd/token-vk/main.go",
+        "file:cmd/token-vk/jsondec.go"
+      ]
+    },
+    {
+      "order": 11,
+      "title": "CLI token-ym: device flow",
+      "description": "cmd/token-ym/main.go — новая утилита для получения OAuth-токена Яндекс Музыки, реализующая другой grant-тип — device-authorization-grant (device flow): она запрашивает device_code/user_code через oauth.yandex.ru/device/code, а затем опрашивает эндпоинт /token с интервалом, заданным сервером, пока пользователь не подтвердит вход на другом устройстве. В отличие от token-vk (шаг 10) с его password grant, здесь не нужно вводить пароль в терминал — пользователь подтверждает доступ в браузере, что безопаснее.",
+      "nodeIds": [
+        "file:cmd/token-ym/main.go"
+      ],
+      "languageLesson": "Device Authorization Grant (RFC 8628) — OAuth2-флоу для устройств без удобного ввода: приложение получает короткий user_code, показывает его пользователю, а само опрашивает (polling) сервер токенов до подтверждения или истечения кода — тот же флоу используют, например, приложения для Smart TV."
     },
     {
       "order": 12,
-      "title": "HTTP Range-прокси",
-      "description": "proxy.go валидирует клиентский заголовок Range, пробрасывает его в StreamBackend и корректно воспроизводит статусы и заголовки апстрима: 200 для полной отдачи, 206 с Content-Range для частичного запроса (перемотка), 416 для некорректного диапазона. Ошибки StreamBackend отображаются в HTTP: ErrNotFound → 404, ErrService → 502. Это последнее звено цепочки «ссылка → метаданные → аудио» из README — именно этот прокси обслуживает эндпоинт GET /rooms/{code}/current/stream из handlers.go (Step 5).",
-      "nodeIds": [
-        "file:internal/stream/proxy.go"
-      ],
-      "languageLesson": "HTTP Range-запросы (RFC 7233) — основа перемотки в аудио/видео плеерах: сервер должен уметь отдавать 206 Partial Content с корректным Content-Range и 416 Range Not Satisfiable для некорректного диапазона."
-    },
-    {
-      "order": 13,
       "title": "Обязательные интеграционные тесты",
-      "description": "Этот файл — обязательный интеграционный уровень (qmix#17): семь сквозных сценариев поверх полного App-обработчика через настоящий сокет (net.Listen, а не httptest) — healthz, весь жизненный цикл комнаты, SSE, резолвинг, стриминг и TTL. Тест полностью герметичен: yt-dlp подменён shell-скриптом, а аудио отдаёт локальный mock-upstream с поддержкой Range — то есть он проверяет ровно то взаимодействие компонентов, которое мы разобрали в Steps 3-12, без сети и секретов. Именно эта проверка обязательна в CI и не позволяет собрать компоненты неправильно.",
+      "description": "integration_mandatory_test.go — сквозной интеграционный уровень (qmix#17), который собирает воедино всё, что мы прошли в шагах 2–9: семь сценариев поверх полного App-хендлера через реальный сокет (net.Listen, а не httptest) — healthz, полный жизненный цикл комнаты, SSE, резолвинг, стриминг и TTL. Тест полностью герметичен: yt-dlp подменён shell-скриптом, а аудио отдаёт локальный mock-upstream с поддержкой Range — то есть проверяется реальная интеграция компонентов без сети и внешних сервисов. Этот файл — лучшая иллюстрация того, как всё увиденное ранее работает вместе в проде.",
       "nodeIds": [
         "file:internal/server/integration_mandatory_test.go"
       ]
     },
     {
-      "order": 14,
-      "title": "Контейнеризация и локальный запуск",
-      "description": "Dockerfile описывает multi-stage сборку образа: первая стадия на golang:1.23-alpine компилирует статический бинарник из cmd/qmix (Step 3), финальная стадия на alpine:3.20 добавляет закреплённую версию yt-dlp, непривилегированного пользователя и открывает порт 8080 — то есть в runtime-образ попадает ровно то, что нужно для работы yt-dlp backend'а из Step 11. docker-compose.yml оборачивает этот образ в единственный сервис backend для локального запуска, публикуя порт и пробрасывая переменные окружения, включая прокси-переменные, нужные для доступа к YouTube.",
+      "order": 13,
+      "title": "Контейнеризация",
+      "description": "Dockerfile описывает multi-stage сборку образа qmix: build stage на golang:1.25-alpine компилирует бинарник из main.go (шаг 2), а финальный runtime-образ на alpine:3.22 включает закреплённую версию yt-dlp — тот самый бинарь, который использует ytdlp.go (шаг 8) для резолвинга и стриминга аудио с YouTube. docker-compose.yml запускает этот образ как сервис backend: публикует порт 8180→8080, пробрасывает прокси-переменные для yt-dlp и задаёт ограничения деплоя — restart policy on-failure:3 и лимит памяти 512m.",
       "nodeIds": [
         "service:Dockerfile",
         "service:docker-compose.yml"
       ],
-      "languageLesson": "Multi-stage Docker-сборка разделяет build- и runtime-зависимости: компилятор Go и go mod download остаются в первой стадии, а в финальный образ копируется только бинарник — это резко уменьшает размер и площадь атаки продакшн-образа. Порядок слоёв важен для кэша: редко меняющиеся шаги (установка yt-dlp) ставятся раньше кода приложения."
+      "languageLesson": "Multi-stage Docker-сборка использует несколько инструкций FROM: build-стадия содержит весь тулчейн для компиляции, а в финальный образ копируется только готовый бинарник — это резко уменьшает размер продакшен-образа и убирает из него лишние инструменты сборки."
+    },
+    {
+      "order": 14,
+      "title": "CI/CD пайплайны",
+      "description": "ci.yml — основной workflow GitHub Actions на push в main и pull request из четырёх job'ов: ci (gofmt + go vet, сборка и тесты с race-детектором и гейтом покрытия ≥95%), integration-mandatory (герметичный сценарий из шага 12), integration (гейтированные секретами тесты реальных VK/Яндекс/Spotify с continue-on-error) и docker (сборка образа из шага 13 и проверка /healthz). live.yml — отдельный еженедельный workflow (qmix#18) для смоук-теста реального стриминга YouTube на self-hosted runner: ставит свежий yt-dlp, делает пробный поиск для диагностики поломки экстрактора и никогда не блокирует основной CI благодаря continue-on-error.",
+      "nodeIds": [
+        "pipeline:.github/workflows/ci.yml",
+        "pipeline:.github/workflows/live.yml"
+      ],
+      "languageLesson": "В GitHub Actions job'ы выполняются параллельно по умолчанию, а continue-on-error: true позволяет отделить обязательные проверки от «сигнальных» — job может упасть, но не помешает влиться пул-реквесту."
     },
     {
       "order": 15,
-      "title": "Сборка и CI",
-      "description": "Makefile — точка входа для локальной разработки: цели run, build, test, test-integration, lint и clean поверх стандартного Go-тулинга; интеграционные тесты из Step 13 вынесены в отдельную цель через build tag integration, чтобы не попадать в обычный go test ./... и не портить порог покрытия. ci.yml запускает тот же набор проверок в GitHub Actions на каждый push в main и pull request: gofmt, go vet, сборку, тесты с -race и порогом покрытия 95%, обязательный integration-mandatory через make test-integration, а также job docker, который собирает образ из Step 14 и проверяет наличие yt-dlp и ответ /healthz. Это завершающий шаг тура: он замыкает круг от README до автоматической проверки того, что всё разобранное здесь действительно работает вместе.",
+      "title": "Архитектурный документ",
+      "description": "ARCHITECTURE.md фиксирует архитектурный контракт проекта во всей полноте — те же компоненты, что мы прошли по шагам (Backend, Resolver-плагин, StreamBackend-плагин), но также описывает ещё не реализованные части: TV-приложение на Google TV и PWA для гостей. Документ формализует модель данных (Room/Track/Queue) и REST/SSE API — то, что в коде живёт в handlers.go и hub.go (шаг 3), — а также интерфейсы плагинов Resolver и StreamBackend, которые мы видели как resolver.go и stream.go (шаги 5, 8). Это подходящая точка для завершения тура: от README с общим статусом мы дошли до полной картины архитектуры, готовой принять следующие вехи M4–M6.",
       "nodeIds": [
-        "pipeline:Makefile",
-        "pipeline:.github/workflows/ci.yml"
-      ],
-      "languageLesson": "GitHub Actions: триггеры on задают события запуска, jobs выполняются параллельно (если явно не связаны через needs), а steps внутри job — последовательно; здесь job docker проверяет собранный образ curl-запросом к /healthz, а не только сам факт успешной сборки."
+        "document:ARCHITECTURE.md"
+      ]
     }
   ]
 }
