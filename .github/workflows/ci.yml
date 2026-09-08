@@ -75,6 +75,14 @@ jobs:
         run: docker build -t qmix:ci .
       - name: yt-dlp present in image
         run: docker run --rm --entrypoint sh qmix:ci -c 'yt-dlp --version'
+      - name: "libcrypto3/libssl3 patched (CVE-2026-14456, qmix#38)"
+        run: |
+          v=$(docker run --rm --entrypoint sh qmix:ci -c 'apk info libcrypto3 libssl3')
+          echo "installed: $v"
+          if echo "$v" | grep -q '3\.5\.7-'; then
+            echo "FAIL: libcrypto3/libssl3 3.5.7-r0 (CVE-2026-14456) still in image"
+            exit 1
+          fi
       - name: "Smoke: server boots and /healthz answers"
         run: |
           docker run -d --name qmix-smoke qmix:ci
