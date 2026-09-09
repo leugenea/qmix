@@ -96,3 +96,31 @@ func TestVKAPILive(t *testing.T) {
 		t.Fatalf("live vk resolve resolvedBy = %q, want vk", tr.ResolvedBy)
 	}
 }
+
+// TestYMAPILive is a gated integration test for the authenticated Yandex
+// Music path (qmix#10): the real goym client (api.music.yandex.net) resolves
+// a known public track link obtained via the share button. It runs only when
+// QMIX_YM_TOKEN is set; otherwise it is skipped so CI stays green without
+// the secret.
+func TestYMAPILive(t *testing.T) {
+	skipIfNoToken(t, "QMIX_YM_TOKEN")
+	v := &VKYandex{Config: ConfigFromEnv()}
+	// Public share link from issue qmix#10 (not a secret): query parameters
+	// from the share button must be ignored by the parser.
+	tr, err := v.Resolve(context.Background(), "https://music.yandex.ru/album/14599266/track/609676?utm_medium=copy_link&ref_id=3469c57a-0a9c-44ba-abeb-8293f2bb2fa7")
+	if err != nil {
+		t.Fatalf("live yandex resolve: %v", err)
+	}
+	if tr.Title == "" {
+		t.Fatal("live yandex resolve returned empty title")
+	}
+	if tr.Artist == "" {
+		t.Fatal("live yandex resolve returned empty artist")
+	}
+	if tr.DurationSec <= 0 {
+		t.Fatalf("live yandex resolve duration = %d, want > 0", tr.DurationSec)
+	}
+	if tr.ResolvedBy != "yandex" {
+		t.Fatalf("live yandex resolve resolvedBy = %q, want yandex", tr.ResolvedBy)
+	}
+}

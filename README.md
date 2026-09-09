@@ -18,13 +18,14 @@
 - **token-ym** — мини-CLI для OAuth-токена Яндекс Музыки через device-flow, без sqlite (закрывает #12).
 - **Авторизованный резолвинг Spotify** (#8) — Client Credentials (`accounts.spotify.com/api/token`) + Web API (`api.spotify.com`); oEmbed остаётся fallback без credentials.
 - **Авторизованный резолвинг VK** (#9) — audio-ссылки VK резолвятся через `audio.getById` (api.vk.com, v5.131, мобильный User-Agent клиента из `cmd/token-vk`); без токена `QMIX_VK_TOKEN` остаётся анонимный og-meta путь.
+- **Авторизованный резолвинг Яндекс Музыки** (#10) — трек-ссылки music.yandex.ru (`/album/{a}/track/{t}` и `/track/{t}`) резолвятся через поддерживаемый клиент `goym` (api.music.yandex.net, `GET /tracks/{id}`); без токена `QMIX_YM_TOKEN` остаётся анонимный og-meta путь.
 - **Интеграционные тесты** основных сценариев — обязательная job `integration-mandatory` в CI.
 - Свежий тулчейн: Go 1.25 / alpine 3.24, compose в рамках деплой-ограничений (порт 8180, `mem_limit`, `restart: on-failure:3`).
 
 Дальше:
 
 - **M4** — TV-приложение (Android TV), **M5** — PWA для гостей, **M6** — Definition of Done (E2E + v0.1.0).
-- Авторизованный резолвинг сервисов: Яндекс Музыка (#10; токен выдаёт `cmd/token-ym`).
+- Автообновление Яндекс-токена по `QMIX_YM_REFRESH_TOKEN` (goym не поддерживает refresh штатно — отдельная задача).
 
 ## Стриминг
 
