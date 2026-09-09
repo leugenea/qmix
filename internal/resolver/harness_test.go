@@ -70,3 +70,29 @@ func TestSpotifyAPILive(t *testing.T) {
 		t.Fatal("live api resolve returned empty artist")
 	}
 }
+
+// TestVKAPILive is a gated integration test for the authenticated VK path
+// (qmix#9): the real api.vk.com resolves a known public audio link via
+// audio.getById. It runs only when QMIX_VK_TOKEN is set; otherwise it is
+// skipped so CI stays green without the secret.
+func TestVKAPILive(t *testing.T) {
+	skipIfNoToken(t, "QMIX_VK_TOKEN")
+	v := &VKYandex{Config: ConfigFromEnv()}
+	// Public audio link from issue qmix#9 (not a secret).
+	tr, err := v.Resolve(context.Background(), "https://vk.ru/audio1132822_456240773_bb5b9b9640eed9638f")
+	if err != nil {
+		t.Fatalf("live vk resolve: %v", err)
+	}
+	if tr.Title == "" {
+		t.Fatal("live vk resolve returned empty title")
+	}
+	if tr.Artist == "" {
+		t.Fatal("live vk resolve returned empty artist")
+	}
+	if tr.DurationSec <= 0 {
+		t.Fatalf("live vk resolve duration = %d, want > 0", tr.DurationSec)
+	}
+	if tr.ResolvedBy != "vk" {
+		t.Fatalf("live vk resolve resolvedBy = %q, want vk", tr.ResolvedBy)
+	}
+}
