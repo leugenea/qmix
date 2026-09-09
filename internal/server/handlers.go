@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -34,6 +35,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /rooms", s.handleCreateRoom)
 	mux.HandleFunc("GET /rooms/{code}", s.handleGetRoom)
 	mux.HandleFunc("POST /rooms/{code}/queue", s.handleAddTrack)
+	mux.HandleFunc("POST /r/{code}/queue", s.handleGuestAddTrack)
 	mux.HandleFunc("POST /rooms/{code}/skip", s.handleSkip)
 	mux.HandleFunc("PATCH /rooms/{code}/queue", s.handleReorder)
 	mux.HandleFunc("GET /rooms/{code}/events", s.handleEvents)
@@ -132,24 +134,40 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	track := trackFromURL(req.URL)
-	if s.Resolver != nil {
-		meta, err := s.Resolver.Resolve(r.Context(), req.URL)
-		if err != nil {
-			status, msg := resolveError(err)
-			writeError(w, status, msg)
-			return
-		}
-		track = Track{
-			ID:          newTrackID(),
-			URL:         req.URL,
-			Title:       meta.Title,
-			Artist:      meta.Artist,
-			DurationSec: meta.DurationSec,
-			ResolvedBy:  meta.ResolvedBy,
-		}
+	track, err := s.trackFromRequest(r.Context(), req.URL)
+	if err != nil {
+		status, msg := resolveError(err)
+		writeError(w, status, msg)
+		return
 	}
 
+	track = s.appendTrack(room, track)
+	writeJSON(w, http.StatusCreated, track)
+}
+
+// trackFromRequest resolves rawurl into a track via the resolver. Without a
+// resolver it returns the pre-resolver stub (title == URL).
+func (s *Server) trackFromRequest(ctx context.Context, rawurl string) (Track, error) {
+	if s.Resolver == nil {
+		return trackFromURL(rawurl), nil
+	}
+	meta, err := s.Resolver.Resolve(ctx, rawurl)
+	if err != nil {
+		return Track{}, err
+	}
+	return Track{
+		ID:          newTrackID(),
+		URL:         rawurl,
+		Title:       meta.Title,
+		Artist:      meta.Artist,
+		DurationSec: meta.DurationSec,
+		ResolvedBy:  meta.ResolvedBy,
+	}, nil
+}
+
+// appendTrack appends the track to the room's queue, touches the room and
+// publishes a queue_updated event. It returns the appended track.
+func (s *Server) appendTrack(room *Room, track Track) Track {
 	s.store.mu.Lock()
 	room.Queue = append(room.Queue, track)
 	s.store.touch(room)
@@ -157,7 +175,7 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 	s.store.mu.Unlock()
 
 	s.hub.Publish(room.Code, "queue_updated", payload)
-	writeJSON(w, http.StatusCreated, track)
+	return track
 }
 
 // trackFromURL returns the pre-resolver stub track (title == URL).
@@ -176,6 +194,66 @@ func resolveError(err error) (int, string) {
 		return http.StatusUnprocessableEntity, err.Error()
 	default:
 		return http.StatusBadGateway, err.Error()
+	}
+}
+
+// guestError is the guest API error body: a machine-readable code for the
+// frontend plus a human-readable message for the snackbar.
+type guestError struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+}
+
+// writeGuestError writes a guest API error with the given status and code.
+func writeGuestError(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, guestError{Error: code, Message: msg})
+}
+
+// handleGuestAddTrack is the guest-facing POST /r/{code}/queue endpoint. It
+// adds a link to the room queue like handleAddTrack, but responses carry
+// machine-readable status codes for the guest UI.
+func (s *Server) handleGuestAddTrack(w http.ResponseWriter, r *http.Request) {
+	room := s.store.Get(r.PathValue("code"))
+	if room == nil {
+		writeGuestError(w, http.StatusNotFound, "room_not_found", "room not found")
+		return
+	}
+
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeGuestError(w, http.StatusBadRequest, "bad_request", "invalid json body")
+		return
+	}
+	if strings.TrimSpace(req.URL) == "" {
+		writeGuestError(w, http.StatusBadRequest, "invalid_url", "url must not be empty")
+		return
+	}
+
+	track, err := s.trackFromRequest(r.Context(), req.URL)
+	if err != nil {
+		status, code, msg := guestResolveError(err)
+		writeGuestError(w, status, code, msg)
+		return
+	}
+
+	track = s.appendTrack(room, track)
+	writeJSON(w, http.StatusCreated, map[string]interface{}{"status": "accepted", "track": track})
+}
+
+// guestResolveError maps a resolver failure to the guest API status, code and
+// human-readable message. Unlike the host API, an unparseable link is 400
+// invalid_url; unsupported and no-anonymous links are 422 unsupported_service;
+// upstream failures are 502 upstream_failure.
+func guestResolveError(err error) (int, string, string) {
+	switch {
+	case errors.Is(err, resolver.ErrInvalid):
+		return http.StatusBadRequest, "invalid_url", err.Error()
+	case errors.Is(err, resolver.ErrUnsupported), errors.Is(err, resolver.ErrNoAnonymous):
+		return http.StatusUnprocessableEntity, "unsupported_service", err.Error()
+	default:
+		return http.StatusBadGateway, "upstream_failure", err.Error()
 	}
 }
 
