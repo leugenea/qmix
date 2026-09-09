@@ -17,13 +17,14 @@
 - **token-vk v2** — токен api.vk.com со scope `audio` (разблокирует #9).
 - **token-ym** — мини-CLI для OAuth-токена Яндекс Музыки через device-flow, без sqlite (закрывает #12).
 - **Авторизованный резолвинг Spotify** (#8) — Client Credentials (`accounts.spotify.com/api/token`) + Web API (`api.spotify.com`); oEmbed остаётся fallback без credentials.
+- **Авторизованный резолвинг VK** (#9) — audio-ссылки VK резолвятся через `audio.getById` (api.vk.com, v5.131, мобильный User-Agent клиента из `cmd/token-vk`); без токена `QMIX_VK_TOKEN` остаётся анонимный og-meta путь.
 - **Интеграционные тесты** основных сценариев — обязательная job `integration-mandatory` в CI.
 - Свежий тулчейн: Go 1.25 / alpine 3.24, compose в рамках деплой-ограничений (порт 8180, `mem_limit`, `restart: on-failure:3`).
 
 Дальше:
 
 - **M4** — TV-приложение (Android TV), **M5** — PWA для гостей, **M6** — Definition of Done (E2E + v0.1.0).
-- Авторизованный резолвинг сервисов: Яндекс Музыка (#10; токен выдаёт `cmd/token-ym`); VK (#9) — в блоке.
+- Авторизованный резолвинг сервисов: Яндекс Музыка (#10; токен выдаёт `cmd/token-ym`).
 
 ## Стриминг
 

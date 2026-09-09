@@ -153,6 +153,12 @@ Spotify дополнительно поддерживает авторизова
 Web API (`api.spotify.com`) — полный список артистов и длительность;
 oEmbed остаётся fallback без credentials (и для не-трек ссылок).
 
+VK дополнительно поддерживает авторизованный путь (qmix#9): при заданном
+`QMIX_VK_TOKEN` audio-ссылки VK резолвятся через `audio.getById`
+(api.vk.com, v5.131, POST с токеном в теле и мобильным User-Agent
+клиента из `cmd/token-vk` — без него VK отдаёт заглушку вместо трека);
+без токена и для не-audio ссылок остаётся анонимный og-meta путь.
+
 **StreamBackend** — `track → audio stream`
 ```go
 type StreamBackend interface {
