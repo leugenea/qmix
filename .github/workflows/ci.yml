@@ -36,11 +36,12 @@ jobs:
           python3 .github/scripts/test_summary.py unit.xml "### Tests: ci" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish test report
         if: always()
-        uses: dorny/test-reporter@v1
+        uses: mikepenz/action-junit-report@v6.5.0
         with:
-          name: Tests
-          path: unit.xml
-          reporter: java-junit
+          check_name: Tests
+          report_paths: 'unit.xml'
+          include_passed: true
+          include_skipped: true
       - name: Coverage gate (>=95%)
         run: |
           go tool cover -func=coverage.out | tail -1
@@ -71,11 +72,12 @@ jobs:
           python3 .github/scripts/test_summary.py integration.xml "### Tests: integration-mandatory" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish test report
         if: always()
-        uses: dorny/test-reporter@v1
+        uses: mikepenz/action-junit-report@v6.5.0
         with:
-          name: Tests (integration-mandatory)
-          path: integration.xml
-          reporter: java-junit
+          check_name: Tests (integration-mandatory)
+          report_paths: 'integration.xml'
+          include_passed: true
+          include_skipped: true
 
   # Integration tests with real service credentials. The job always runs; the
   # gated tests skip themselves when the secrets are absent, so this job is
@@ -107,11 +109,12 @@ jobs:
           python3 .github/scripts/test_summary.py integration-gated.xml "### Tests: integration (gated)" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish test report
         if: always()
-        uses: dorny/test-reporter@v1
+        uses: mikepenz/action-junit-report@v6.5.0
         with:
-          name: Tests (integration-gated)
-          path: integration-gated.xml
-          reporter: java-junit
+          check_name: Tests (integration-gated)
+          report_paths: 'integration-gated.xml'
+          include_passed: true
+          include_skipped: true
 
   # Runtime image gate: yt-dlp must be present in the container (the
   # streaming backend needs it) and the server must boot and answer
