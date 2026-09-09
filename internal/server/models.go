@@ -13,8 +13,7 @@ type Room struct {
 }
 
 // Track is a single queue entry. Title, Artist, DurationSec and ResolvedBy are
-// filled by the resolver plugin from the source link (see ARCHITECTURE §7);
-// streamUrl is set by M3 (stream backend).
+// filled by the resolver plugin from the source link (see ARCHITECTURE §7).
 type Track struct {
 	ID          string `json:"id"`
 	URL         string `json:"url"`          // original source link
