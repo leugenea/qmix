@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# The "Tests*" check runs (qmix#47) are published by dorny/test-reporter,
+# which needs the checks API; everything else stays read-only.
+permissions:
+  contents: read
+  checks: write
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -19,8 +24,23 @@ jobs:
           go vet ./...
       - name: Build
         run: go build ./...
+      # gotestsum wraps go test to also emit a JUnit report for the "Tests"
+      # check (qmix#47); the go test flags themselves are unchanged.
       - name: Test
-        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
+        run: |
+          go run gotest.tools/gotestsum@v1.12.0 --junitfile unit.xml -- -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f unit.xml ] || exit 0
+          python3 .github/scripts/test_summary.py unit.xml "### Tests: ci" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish test report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Tests
+          path: unit.xml
+          reporter: gotestsum
       - name: Coverage gate (>=95%)
         run: |
           go tool cover -func=coverage.out | tail -1
@@ -39,8 +59,23 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+      # Args mirror `make test-integration`; gotestsum adds the JUnit report
+      # for the "Tests" check (qmix#47).
       - name: Integration tests (mandatory)
-        run: make test-integration
+        run: |
+          go run gotest.tools/gotestsum@v1.12.0 --junitfile integration.xml -- -race -tags=integration -run 'Integration' ./internal/server/...
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f integration.xml ] || exit 0
+          python3 .github/scripts/test_summary.py integration.xml "### Tests: integration-mandatory" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish test report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Tests (integration-mandatory)
+          path: integration.xml
+          reporter: gotestsum
 
   # Integration tests with real service credentials. The job always runs; the
   # gated tests skip themselves when the secrets are absent, so this job is
@@ -55,13 +90,28 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+      # gotestsum adds the JUnit report for the "Tests" check (qmix#47); the
+      # gated live tests show up as skipped when their secrets are absent.
       - name: Integration tests (gated by secrets)
         env:
           QMIX_VK_TOKEN: ${{ secrets.QMIX_VK_TOKEN }}
           QMIX_YM_TOKEN: ${{ secrets.QMIX_YM_TOKEN }}
           QMIX_SPOTIFY_CLIENT_ID: ${{ secrets.QMIX_SPOTIFY_CLIENT_ID }}
           QMIX_SPOTIFY_CLIENT_SECRET: ${{ secrets.QMIX_SPOTIFY_CLIENT_SECRET }}
-        run: go test -race -run 'Live|Integration' ./...
+        run: |
+          go run gotest.tools/gotestsum@v1.12.0 --junitfile integration-gated.xml -- -race -run 'Live|Integration' ./...
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f integration-gated.xml ] || exit 0
+          python3 .github/scripts/test_summary.py integration-gated.xml "### Tests: integration (gated)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish test report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Tests (integration-gated)
+          path: integration-gated.xml
+          reporter: gotestsum
 
   # Runtime image gate: yt-dlp must be present in the container (the
   # streaming backend needs it) and the server must boot and answer
