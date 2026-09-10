@@ -2,41 +2,320 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>qmix guest queue</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#211f26" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#fffbfe" media="(prefers-color-scheme: light)">
+  <meta name="description" content="Add music to a shared qmix queue.">
+  <link rel="manifest" href="/assets/guest.webmanifest">
+  <link rel="icon" href="/assets/qmix-192.svg" type="image/svg+xml">
+  <title>qmix · guest queue</title>
   <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { margin: 0 auto; max-width: 42rem; padding: 1.5rem; }
-    h1, h2 { line-height: 1.2; }
-    .card { border: 1px solid currentColor; border-radius: .75rem; padding: 1rem; margin-block: 1rem; }
-    form { display: flex; gap: .5rem; }
-    input { flex: 1; min-width: 0; padding: .75rem; }
-    button { padding: .75rem 1rem; }
-    ol { padding-left: 1.5rem; }
-    #message:empty { display: none; }
+    :root {
+      color-scheme: dark;
+      --md-sys-color-primary: #d0bcff;
+      --md-sys-color-on-primary: #381e72;
+      --md-sys-color-primary-container: #4f378b;
+      --md-sys-color-on-primary-container: #eaddff;
+      --md-sys-color-secondary-container: #4a4458;
+      --md-sys-color-on-secondary-container: #e8def8;
+      --md-sys-color-surface: #141218;
+      --md-sys-color-surface-container: #211f26;
+      --md-sys-color-surface-container-high: #2b2930;
+      --md-sys-color-on-surface: #e6e0e9;
+      --md-sys-color-on-surface-variant: #cac4d0;
+      --md-sys-color-outline: #938f99;
+      --md-sys-color-error: #ffb4ab;
+      --md-sys-color-error-container: #93000a;
+      --md-sys-color-on-error-container: #ffdad6;
+      --md-sys-color-inverse-surface: #e6e0e9;
+      --md-sys-color-inverse-on-surface: #322f35;
+      --md-sys-color-inverse-primary: #6750a4;
+      --page-max: 720px;
+      font-family: Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 280px;
+      min-height: 100vh;
+      min-height: 100dvh;
+      margin: 0;
+      color: var(--md-sys-color-on-surface);
+      background: var(--md-sys-color-surface);
+      font-size: 1rem;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input { font: inherit; }
+
+    .top-app-bar {
+      position: sticky;
+      z-index: 10;
+      top: 0;
+      display: flex;
+      align-items: center;
+      min-height: 64px;
+      padding: max(8px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) 8px max(20px, env(safe-area-inset-left));
+      background: var(--md-sys-color-surface);
+    }
+
+    .brand {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      max-width: var(--page-max);
+      width: 100%;
+      margin-inline: auto;
+    }
+
+    .brand-mark {
+      display: grid;
+      flex: 0 0 40px;
+      width: 40px;
+      height: 40px;
+      place-items: center;
+      color: var(--md-sys-color-on-primary-container);
+      background: var(--md-sys-color-primary-container);
+      border-radius: 14px;
+    }
+
+    .brand-mark svg, .button-icon { width: 24px; height: 24px; fill: currentColor; }
+    .brand-name { margin: 0; font-size: 1.375rem; font-weight: 500; line-height: 1.75rem; letter-spacing: 0; }
+    .brand-room { margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: .75rem; line-height: 1rem; letter-spacing: .025rem; }
+
+    main {
+      display: grid;
+      gap: 16px;
+      width: min(100% - 32px, var(--page-max));
+      margin-inline: auto;
+      padding: 16px 0 max(96px, calc(40px + env(safe-area-inset-bottom)));
+    }
+
+    .card {
+      overflow: hidden;
+      padding: 24px;
+      background: var(--md-sys-color-surface-container);
+      border-radius: 24px;
+    }
+
+    .operate-card {
+      padding: 28px 24px 24px;
+      color: var(--md-sys-color-on-primary-container);
+      background: var(--md-sys-color-primary-container);
+      border-radius: 28px;
+    }
+
+    .eyebrow {
+      margin: 0 0 4px;
+      font-size: .75rem;
+      font-weight: 700;
+      line-height: 1rem;
+      letter-spacing: .075rem;
+      text-transform: uppercase;
+    }
+
+    h2 { margin: 0; font-size: 1.5rem; font-weight: 500; line-height: 2rem; }
+    .supporting { margin: 6px 0 22px; color: inherit; opacity: .82; font-size: .875rem; line-height: 1.25rem; }
+
+    .track-form { display: grid; gap: 16px; }
+
+    .filled-field {
+      position: relative;
+      display: block;
+      min-height: 64px;
+      padding: 22px 16px 7px;
+      color: var(--md-sys-color-on-surface);
+      background: var(--md-sys-color-surface-container-high);
+      border-radius: 12px 12px 0 0;
+      border-bottom: 1px solid var(--md-sys-color-outline);
+    }
+
+    .filled-field:focus-within { border-bottom: 2px solid var(--md-sys-color-primary); }
+    .filled-field span { position: absolute; top: 7px; left: 16px; color: var(--md-sys-color-on-surface-variant); font-size: .75rem; line-height: 1rem; }
+    .filled-field:focus-within span { color: var(--md-sys-color-primary); }
+
+    input {
+      width: 100%;
+      min-width: 0;
+      padding: 0;
+      color: var(--md-sys-color-on-surface);
+      background: transparent;
+      border: 0;
+      outline: 0;
+      caret-color: var(--md-sys-color-primary);
+    }
+
+    input::placeholder { color: var(--md-sys-color-on-surface-variant); opacity: .7; }
+
+    .filled-button {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      min-height: 48px;
+      padding: 0 24px;
+      color: var(--md-sys-color-on-primary);
+      background: var(--md-sys-color-primary);
+      border: 0;
+      border-radius: 24px;
+      font-size: .875rem;
+      font-weight: 700;
+      letter-spacing: .006rem;
+      cursor: pointer;
+      transition: box-shadow 160ms ease, transform 160ms ease;
+    }
+
+    .filled-button:hover { box-shadow: 0 2px 6px rgb(0 0 0 / .28); }
+    .filled-button:active { transform: scale(.98); }
+    .filled-button:focus-visible { outline: 3px solid var(--md-sys-color-on-primary-container); outline-offset: 3px; }
+    .filled-button:disabled { opacity: .45; cursor: wait; box-shadow: none; }
+
+    .monitor-grid { display: grid; gap: 16px; }
+    .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+    .section-icon { display: grid; width: 40px; height: 40px; place-items: center; color: var(--md-sys-color-primary); background: var(--md-sys-color-secondary-container); border-radius: 14px; }
+    .section-icon svg { width: 22px; height: 22px; fill: currentColor; }
+
+    .current-track {
+      margin: 0;
+      color: var(--md-sys-color-on-surface);
+      font-size: 1.125rem;
+      font-weight: 500;
+      line-height: 1.5rem;
+      overflow-wrap: anywhere;
+    }
+
+    .queue { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; counter-reset: queue; }
+    .queue li { display: grid; grid-template-columns: 40px 1fr; align-items: center; min-height: 56px; padding: 8px 4px; overflow-wrap: anywhere; counter-increment: queue; }
+    .queue li.queue-track-card {
+      padding: 12px 16px;
+      background: var(--md-sys-color-surface-container-high);
+      border-radius: 16px;
+    }
+    .queue li::before { content: counter(queue, decimal-leading-zero); color: var(--md-sys-color-primary); font-size: .75rem; font-weight: 700; letter-spacing: .05rem; }
+    .queue li.queue-empty-state::before { content: "—"; color: var(--md-sys-color-on-surface-variant); }
+
+    .snackbar {
+      position: fixed;
+      z-index: 20;
+      right: 16px;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      left: 16px;
+      width: min(calc(100% - 32px), 560px);
+      min-height: 48px;
+      margin: 0 auto;
+      padding: 14px 16px;
+      color: var(--md-sys-color-inverse-on-surface);
+      background: var(--md-sys-color-inverse-surface);
+      border-radius: 12px;
+      box-shadow: 0 3px 8px rgb(0 0 0 / .3);
+      font-size: .875rem;
+      font-weight: 500;
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+
+    .snackbar:empty { pointer-events: none; opacity: 0; transform: translateY(16px); }
+    .snackbar[data-kind="error"] { color: var(--md-sys-color-on-error-container); background: var(--md-sys-color-error-container); }
+    .snackbar[data-kind="success"] { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
+
+    @media (min-width: 600px) {
+      main { gap: 20px; padding-top: 24px; }
+      .card { padding: 28px; }
+      .track-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+      .filled-button { min-width: 128px; }
+      .monitor-grid { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 20px; }
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --md-sys-color-primary: #6750a4;
+        --md-sys-color-on-primary: #ffffff;
+        --md-sys-color-primary-container: #eaddff;
+        --md-sys-color-on-primary-container: #21005d;
+        --md-sys-color-secondary-container: #e8def8;
+        --md-sys-color-on-secondary-container: #1d192b;
+        --md-sys-color-surface: #fffbfe;
+        --md-sys-color-surface-container: #f3edf7;
+        --md-sys-color-surface-container-high: #ece6f0;
+        --md-sys-color-on-surface: #1d1b20;
+        --md-sys-color-on-surface-variant: #49454f;
+        --md-sys-color-outline: #79747e;
+        --md-sys-color-error: #ba1a1a;
+        --md-sys-color-error-container: #ffdad6;
+        --md-sys-color-on-error-container: #410002;
+        --md-sys-color-inverse-surface: #322f35;
+        --md-sys-color-inverse-on-surface: #f5eff7;
+        --md-sys-color-inverse-primary: #d0bcff;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
   </style>
 </head>
 <body>
+  <header class="top-app-bar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M17 3v10.55A4 4 0 1 1 15 10V6.3l-6 1.4v7.85A4 4 0 1 1 7 12V6l10-2.33V3Z"/></svg>
+      </span>
+      <div>
+        <h1 class="brand-name">qmix</h1>
+        <p class="brand-room">Guest queue</p>
+      </div>
+    </div>
+  </header>
+
   <main>
-    <h1>qmix</h1>
-    <section class="card" aria-labelledby="current-heading">
-      <h2 id="current-heading">Now playing</h2>
-      <p id="current-track">Nothing is playing</p>
-    </section>
-    <section class="card" aria-labelledby="queue-heading">
-      <h2 id="queue-heading">Queue</h2>
-      <ol id="queue"><li>The queue is empty</li></ol>
-    </section>
-    <section class="card" aria-labelledby="add-heading">
+    <section class="card operate-card" aria-labelledby="add-heading">
+      <p class="eyebrow">Your pick</p>
       <h2 id="add-heading">Add a track</h2>
-      <form id="queue-form">
-        <label for="track-url">VK, Yandex Music, Spotify or YouTube link</label>
-        <input id="track-url" name="url" type="url" inputmode="url" required autocomplete="url" placeholder="https://…">
-        <button type="submit">Add</button>
+      <p class="supporting">Paste a VK, Yandex Music, Spotify or YouTube link.</p>
+      <form id="queue-form" class="track-form">
+        <label class="filled-field" for="track-url">
+          <span>Track link</span>
+          <input id="track-url" name="url" type="url" inputmode="url" required autocomplete="url" placeholder="https://…" aria-describedby="link-hint">
+        </label>
+        <button class="filled-button" type="submit">
+          <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
+          Add to queue
+        </button>
       </form>
-      <p id="message" role="status" aria-live="polite"></p>
+      <span id="link-hint" hidden>Supported services are VK, Yandex Music, Spotify and YouTube.</span>
     </section>
+
+    <div class="monitor-grid">
+      <section class="card" aria-labelledby="current-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Live</p>
+            <h2 id="current-heading">Now playing</h2>
+          </div>
+          <span class="section-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Zm0 12.25A3.25 3.25 0 1 1 15.25 12 3.25 3.25 0 0 1 12 15.25Zm0-2A1.25 1.25 0 1 0 10.75 12 1.25 1.25 0 0 0 12 13.25Z"/></svg>
+          </span>
+        </div>
+        <p id="current-track" class="current-track">Nothing is playing</p>
+      </section>
+
+      <section class="card" aria-labelledby="queue-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Up next</p>
+            <h2 id="queue-heading">Queue</h2>
+          </div>
+          <span class="section-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4 10.5h12v-2H4v2Zm0-4h12v-2H4v2Zm0 8h8v-2H4v2Zm14-3v5.18a2.5 2.5 0 1 0 2 2.45V13.5h2v-2h-4Z"/></svg>
+          </span>
+        </div>
+        <ol id="queue" class="queue"><li class="queue-empty-state">The queue is empty</li></ol>
+      </section>
+    </div>
   </main>
+
+  <p id="message" class="snackbar" role="status" aria-live="polite" aria-atomic="true"></p>
   <script src="/assets/guest.js" defer></script>
 </body>
 </html>

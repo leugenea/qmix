@@ -33,6 +33,9 @@ func NewServer(store *Store, hub *Hub) *Server {
 // Routes registers all HTTP routes on mux.
 func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /assets/guest.js", handleGuestScript)
+	mux.HandleFunc("GET /assets/guest.webmanifest", handleGuestManifest)
+	mux.HandleFunc("GET /assets/qmix-192.svg", handleGuestIcon(guestIcon192))
+	mux.HandleFunc("GET /assets/qmix-512.svg", handleGuestIcon(guestIcon512))
 	mux.HandleFunc("POST /rooms", s.handleCreateRoom)
 	mux.HandleFunc("GET /rooms/{code}", s.handleGetRoom)
 	mux.HandleFunc("POST /rooms/{code}/queue", s.handleAddTrack)
