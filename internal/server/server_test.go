@@ -745,6 +745,68 @@ func TestServeHTTPReturnsAfterWriteFailureWithoutOverflow(t *testing.T) {
 	}
 }
 
+type controlledSSEWriter struct {
+	header         http.Header
+	writes         int
+	flushes        int
+	deadlines      int
+	failWriteAt    int
+	failFlushAt    int
+	failDeadlineAt int
+}
+
+func (w *controlledSSEWriter) Header() http.Header { return w.header }
+func (w *controlledSSEWriter) WriteHeader(int)     {}
+func (w *controlledSSEWriter) Flush()              {}
+func (w *controlledSSEWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failWriteAt {
+		return 0, fmt.Errorf("write failed")
+	}
+	return len(p), nil
+}
+func (w *controlledSSEWriter) FlushError() error {
+	w.flushes++
+	if w.flushes == w.failFlushAt {
+		return fmt.Errorf("flush failed")
+	}
+	return nil
+}
+func (w *controlledSSEWriter) SetWriteDeadline(time.Time) error {
+	w.deadlines++
+	if w.deadlines == w.failDeadlineAt {
+		return fmt.Errorf("deadline failed")
+	}
+	return nil
+}
+
+func TestServeHTTPReturnsOnInitialOutputFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		writer *controlledSSEWriter
+	}{
+		{"deadline", &controlledSSEWriter{header: make(http.Header), failDeadlineAt: 1}},
+		{"write", &controlledSSEWriter{header: make(http.Header), failWriteAt: 1}},
+		{"flush", &controlledSSEWriter{header: make(http.Header), failFlushAt: 1}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			NewHub().ServeHTTP(context.Background(), tc.writer, "room", func() (int64, interface{}) {
+				return 0, map[string]int{"version": 0}
+			})
+		})
+	}
+}
+
+func TestWriteEventReturnsOutputErrors(t *testing.T) {
+	for failAt := 1; failAt <= 3; failAt++ {
+		w := &controlledSSEWriter{header: make(http.Header), failWriteAt: failAt}
+		if err := writeEvent(w, Event{ID: 1, Name: "queue_updated", Data: map[string]int{"version": 1}}); err == nil {
+			t.Fatalf("write %d failure was ignored", failAt)
+		}
+	}
+}
+
 func TestTTLJanitor(t *testing.T) {
 	gen := &seqCodeGen{}
 	store := NewStore(50*time.Millisecond, 20*time.Millisecond, gen)
