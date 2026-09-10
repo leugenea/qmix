@@ -10,8 +10,22 @@
   let current = null;
   let source = null;
   let retryTimer = null;
+  let messageTimer = null;
   let retryDelay = 1000;
   const maxRetryDelay = 30000;
+
+  function showMessage(message, kind, dismissAfter = 5000) {
+    clearTimeout(messageTimer);
+    messageTimer = null;
+    messageElement.textContent = message;
+    messageElement.dataset.kind = kind;
+    if (dismissAfter === null) return;
+    messageTimer = setTimeout(() => {
+      messageElement.textContent = "";
+      delete messageElement.dataset.kind;
+      messageTimer = null;
+    }, dismissAfter);
+  }
 
   function trackLabel(track) {
     if (!track) return "Nothing is playing";
@@ -26,12 +40,14 @@
     queueElement.textContent = "";
     if (!Array.isArray(queue) || queue.length === 0) {
       const empty = document.createElement("li");
+      empty.className = "queue-empty-state";
       empty.textContent = "The queue is empty";
       queueElement.appendChild(empty);
       return;
     }
     queue.forEach((track) => {
       const item = document.createElement("li");
+      item.className = "queue-track-card";
       item.textContent = trackLabel(track);
       queueElement.appendChild(item);
     });
@@ -99,8 +115,7 @@
 
     const submit = form.querySelector('button[type="submit"]');
     submit.disabled = true;
-    messageElement.textContent = "Adding…";
-    messageElement.dataset.kind = "progress";
+    showMessage("Adding…", "progress", null);
     try {
       const response = await fetch(`/r/${encodeURIComponent(code)}/queue`, {
         method: "POST",
@@ -110,11 +125,9 @@
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || "Could not add this link");
       form.reset();
-      messageElement.textContent = "Added to the queue";
-      messageElement.dataset.kind = "success";
+      showMessage("Added to the queue", "success");
     } catch (error) {
-      messageElement.textContent = error.message || "Could not add this link";
-      messageElement.dataset.kind = "error";
+      showMessage(error.message || "Could not add this link", "error");
     } finally {
       submit.disabled = false;
     }
