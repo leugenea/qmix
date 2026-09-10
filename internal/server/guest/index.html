@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>qmix guest queue</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0 auto; max-width: 42rem; padding: 1.5rem; }
+    h1, h2 { line-height: 1.2; }
+    .card { border: 1px solid currentColor; border-radius: .75rem; padding: 1rem; margin-block: 1rem; }
+    form { display: flex; gap: .5rem; }
+    input { flex: 1; min-width: 0; padding: .75rem; }
+    button { padding: .75rem 1rem; }
+    ol { padding-left: 1.5rem; }
+    #message:empty { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>qmix</h1>
+    <section class="card" aria-labelledby="current-heading">
+      <h2 id="current-heading">Now playing</h2>
+      <p id="current-track">Nothing is playing</p>
+    </section>
+    <section class="card" aria-labelledby="queue-heading">
+      <h2 id="queue-heading">Queue</h2>
+      <ol id="queue"><li>The queue is empty</li></ol>
+    </section>
+    <section class="card" aria-labelledby="add-heading">
+      <h2 id="add-heading">Add a track</h2>
+      <form id="queue-form">
+        <label for="track-url">VK, Yandex Music, Spotify or YouTube link</label>
+        <input id="track-url" name="url" type="url" inputmode="url" required autocomplete="url" placeholder="https://…">
+        <button type="submit">Add</button>
+      </form>
+      <p id="message" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script src="/assets/guest.js" defer></script>
+</body>
+</html>

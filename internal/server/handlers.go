@@ -32,9 +32,11 @@ func NewServer(store *Store, hub *Hub) *Server {
 
 // Routes registers all HTTP routes on mux.
 func (s *Server) Routes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /assets/guest.js", handleGuestScript)
 	mux.HandleFunc("POST /rooms", s.handleCreateRoom)
 	mux.HandleFunc("GET /rooms/{code}", s.handleGetRoom)
 	mux.HandleFunc("POST /rooms/{code}/queue", s.handleAddTrack)
+	mux.HandleFunc("GET /r/{code}", s.handleGuestPage)
 	mux.HandleFunc("POST /r/{code}/queue", s.handleGuestAddTrack)
 	mux.HandleFunc("POST /rooms/{code}/skip", s.handleSkip)
 	mux.HandleFunc("PATCH /rooms/{code}/queue", s.handleReorder)
@@ -102,13 +104,15 @@ type curView struct {
 	TrackID string `json:"track_id"`
 	PosSec  int    `json:"pos_sec"`
 	State   string `json:"state"`
+	Title   string `json:"title"`
+	Artist  string `json:"artist"`
 }
 
 func viewRoom(room *Room) roomView {
 	v := roomView{Code: room.Code, Queue: cloneTracks(room.Queue)}
 	if room.Current != nil {
 		c := *room.Current
-		v.Current = &curView{TrackID: c.TrackID, PosSec: c.PosSec, State: c.State}
+		v.Current = &curView{TrackID: c.TrackID, PosSec: c.PosSec, State: c.State, Title: c.Title, Artist: c.Artist}
 	}
 	return v
 }
@@ -172,9 +176,8 @@ func (s *Server) appendTrack(room *Room, track Track) Track {
 	room.Queue = append(room.Queue, track)
 	s.store.touch(room)
 	payload := queuePayload(room)
-	s.store.mu.Unlock()
-
 	s.hub.Publish(room.Code, "queue_updated", payload)
+	s.store.mu.Unlock()
 	return track
 }
 
@@ -287,10 +290,11 @@ func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request) {
 	s.store.touch(room)
 	cur := *room.Current
 	payload := currentPayload(&cur)
-	s.store.mu.Unlock()
-
+	queue := queuePayload(room)
 	s.hub.Publish(room.Code, "track_changed", payload)
 	s.hub.Publish(room.Code, "player_state", map[string]string{"state": cur.State})
+	s.hub.Publish(room.Code, "queue_updated", queue)
+	s.store.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]interface{}{"current": payload})
 }
 
@@ -332,9 +336,8 @@ func (s *Server) handleReorder(w http.ResponseWriter, r *http.Request) {
 	s.store.touch(room)
 	payload := queuePayload(room)
 	queueCopy := cloneTracks(newQueue)
-	s.store.mu.Unlock()
-
 	s.hub.Publish(room.Code, "queue_updated", payload)
+	s.store.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]interface{}{"queue": queueCopy})
 }
 
@@ -391,6 +394,8 @@ func currentPayload(cur *Current) map[string]interface{} {
 		"track_id": cur.TrackID,
 		"pos_sec":  cur.PosSec,
 		"state":    cur.State,
+		"title":    cur.Title,
+		"artist":   cur.Artist,
 	}
 }
 
