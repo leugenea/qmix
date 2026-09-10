@@ -76,6 +76,8 @@ func (h *Hub) Subscribe(roomCode string) (<-chan Event, func()) {
 
 // Publish sends an event to all subscribers of a room. Sends are non-blocking:
 // a full subscriber buffer causes the event to be dropped for that client.
+// Publish does not call Store methods, so callers may safely hold Store.mu to
+// make room mutation and event sequencing atomic.
 func (h *Hub) Publish(roomCode string, name string, data interface{}) {
 	h.mu.Lock()
 	rh := h.rooms[roomCode]

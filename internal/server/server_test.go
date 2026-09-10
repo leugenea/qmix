@@ -162,6 +162,50 @@ func TestAddTrack(t *testing.T) {
 	}
 }
 
+func TestAppendTrackDoesNotExposeMutationBeforePublication(t *testing.T) {
+	s, store := newTestServer()
+	room := store.CreateRoom()
+	ch, cancel := s.hub.Subscribe(room.Code)
+	defer cancel()
+
+	// Stall publication. The room mutation must remain protected by store.mu
+	// until Hub.Publish has assigned its event ID and accepted the event.
+	s.hub.mu.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		s.appendTrack(room, trackFromURL("https://example.com/concurrent"))
+		close(done)
+	}()
+	<-started
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if store.mu.TryLock() {
+			queueLen := len(room.Queue)
+			store.mu.Unlock()
+			if queueLen != 0 {
+				s.hub.mu.Unlock()
+				<-done
+				t.Fatal("queue mutation became visible while its SSE publication was blocked")
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	s.hub.mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("append did not finish after publication was unblocked")
+	}
+	event := <-ch
+	if event.Name != "queue_updated" {
+		t.Fatalf("event name = %q, want queue_updated", event.Name)
+	}
+}
+
 func TestAddTrackBadJSON(t *testing.T) {
 	s, _ := newTestServer()
 	mux := newTestMux(s)
@@ -224,6 +268,88 @@ func TestSkip(t *testing.T) {
 	decodeBody(t, rec, &resp)
 	if resp.Current.TrackID == "" {
 		t.Fatalf("current track id empty after second skip")
+	}
+}
+
+func TestCurrentPayloadIncludesTrackMetadata(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, token := createRoom(t, mux)
+
+	rec := addTrack(t, mux, code, "https://a.example/song")
+	var queued Track
+	decodeBody(t, rec, &queued)
+
+	s.store.mu.Lock()
+	room := s.store.rooms[code]
+	room.Queue[0].Title = "Song title"
+	room.Queue[0].Artist = "Song artist"
+	s.store.mu.Unlock()
+
+	rec = doReq(t, mux, http.MethodPost, "/rooms/"+code+"/skip", "", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("skip status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var skipped struct {
+		Current struct {
+			TrackID string `json:"track_id"`
+			Title   string `json:"title"`
+			Artist  string `json:"artist"`
+		} `json:"current"`
+	}
+	decodeBody(t, rec, &skipped)
+	if skipped.Current.TrackID != queued.ID || skipped.Current.Title != "Song title" || skipped.Current.Artist != "Song artist" {
+		t.Fatalf("skip current = %+v", skipped.Current)
+	}
+
+	rec = doReq(t, mux, http.MethodGet, "/rooms/"+code, "", "")
+	var view struct {
+		Current struct {
+			Title  string `json:"title"`
+			Artist string `json:"artist"`
+		} `json:"current"`
+	}
+	decodeBody(t, rec, &view)
+	if view.Current.Title != "Song title" || view.Current.Artist != "Song artist" {
+		t.Fatalf("room current = %+v", view.Current)
+	}
+}
+
+func TestSkipPublishesUpdatedQueue(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, token := createRoom(t, mux)
+	addTrack(t, mux, code, "https://a.example/song")
+	ch, cancel := s.hub.Subscribe(code)
+	defer cancel()
+
+	rec := doReq(t, mux, http.MethodPost, "/rooms/"+code+"/skip", "", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("skip status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var queueEvent *Event
+	for len(ch) > 0 {
+		event := <-ch
+		if event.Name == "queue_updated" {
+			queueEvent = &event
+		}
+	}
+	if queueEvent == nil {
+		t.Fatal("skip did not publish queue_updated")
+	}
+	data, err := json.Marshal(queueEvent.Data)
+	if err != nil {
+		t.Fatalf("marshal queue event: %v", err)
+	}
+	var payload struct {
+		Queue []Track `json:"queue"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("decode queue event: %v", err)
+	}
+	if len(payload.Queue) != 0 {
+		t.Fatalf("queue = %+v, want empty after skip", payload.Queue)
 	}
 }
 
