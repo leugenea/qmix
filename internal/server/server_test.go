@@ -529,6 +529,222 @@ func TestSSESnapshotAndEvents(t *testing.T) {
 	}
 }
 
+func TestServeHTTPSkipsEventsCoveredBySnapshot(t *testing.T) {
+	hub := NewHub()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+		hub.ServeHTTP(r.Context(), w, "room", func() (int64, interface{}) {
+			hub.Publish("room", "queue_updated", map[string]int{"version": 1})
+			hub.Publish("room", "queue_updated", map[string]int{"version": 2})
+			return hub.currentID("room"), map[string]int{"version": 2}
+		})
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	resp, err := ts.Client().Get(ts.URL + "/events")
+	if err != nil {
+		t.Fatalf("sse connect: %v", err)
+	}
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+
+	id, name, data := readSSE(t, br)
+	if id != "2" || name != "queue_snapshot" || data != `{"version":2}` {
+		t.Fatalf("snapshot = id %q, event %q, data %s", id, name, data)
+	}
+
+	hub.Publish("room", "queue_updated", map[string]int{"version": 3})
+	id, name, data = readSSE(t, br)
+	if id != "3" || name != "queue_updated" || data != `{"version":3}` {
+		t.Fatalf("first live event = id %q, event %q, data %s; want id 3", id, name, data)
+	}
+}
+
+func TestPublishOverflowTerminatesOnlySlowSubscriber(t *testing.T) {
+	hub := NewHub()
+	slow, cancelSlow := hub.Subscribe("room")
+	defer cancelSlow()
+
+	hub.mu.Lock()
+	var slowDone <-chan struct{}
+	for sub := range hub.rooms["room"].subs {
+		if sub.ch == slow {
+			slowDone = sub.done
+			break
+		}
+	}
+	hub.mu.Unlock()
+	if slowDone == nil {
+		t.Fatal("slow subscriber not registered")
+	}
+
+	healthy, cancelHealthy := hub.Subscribe("room")
+	defer cancelHealthy()
+	for wantID := int64(1); wantID <= 17; wantID++ {
+		hub.Publish("room", "queue_updated", wantID)
+		if event := <-healthy; event.ID != wantID {
+			t.Fatalf("healthy subscriber event ID = %d, want %d", event.ID, wantID)
+		}
+	}
+
+	select {
+	case <-slowDone:
+	default:
+		t.Fatal("overflow did not terminate slow subscriber")
+	}
+
+	hub.Publish("room", "queue_updated", int64(18))
+	if event := <-healthy; event.ID != 18 {
+		t.Fatalf("healthy subscriber stopped after peer overflow: ID = %d", event.ID)
+	}
+}
+
+func TestConcurrentPublishPreservesEventIDOrder(t *testing.T) {
+	for attempt := 0; attempt < 10000; attempt++ {
+		hub := NewHub()
+		events, cancel := hub.Subscribe("room")
+		start := make(chan struct{})
+		var publishers sync.WaitGroup
+		publishers.Add(2)
+		for value := 1; value <= 2; value++ {
+			go func() {
+				defer publishers.Done()
+				<-start
+				hub.Publish("room", "queue_updated", value)
+			}()
+		}
+		close(start)
+		publishers.Wait()
+		first, second := <-events, <-events
+		cancel()
+		if first.ID >= second.ID {
+			t.Fatalf("events delivered out of order on attempt %d: %d then %d", attempt, first.ID, second.ID)
+		}
+	}
+}
+
+type blockingEventWriter struct {
+	header  http.Header
+	blocked chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	writeBy <-chan time.Time
+	once    sync.Once
+}
+
+func newBlockingEventWriter() *blockingEventWriter {
+	return &blockingEventWriter{
+		header:  make(http.Header),
+		blocked: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (w *blockingEventWriter) Header() http.Header { return w.header }
+func (w *blockingEventWriter) WriteHeader(int)     {}
+func (w *blockingEventWriter) Flush()              {}
+func (w *blockingEventWriter) SetWriteDeadline(deadline time.Time) error {
+	w.mu.Lock()
+	w.writeBy = time.After(time.Until(deadline))
+	w.mu.Unlock()
+	return nil
+}
+func (w *blockingEventWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "event: queue_updated") {
+		w.mu.Lock()
+		writeBy := w.writeBy
+		w.mu.Unlock()
+		timedOut := false
+		w.once.Do(func() {
+			close(w.blocked)
+			select {
+			case <-w.release:
+			case <-writeBy:
+				timedOut = true
+			}
+		})
+		if timedOut {
+			return 0, context.DeadlineExceeded
+		}
+	}
+	return len(p), nil
+}
+
+func TestServeHTTPReturnsAfterSubscriberOverflow(t *testing.T) {
+	hub := NewHub()
+	hub.WriteTimeout = 20 * time.Millisecond
+	w := newBlockingEventWriter()
+	defer close(w.release)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	subscribed := make(chan struct{})
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		hub.ServeHTTP(ctx, w, "room", func() (int64, interface{}) {
+			close(subscribed)
+			return hub.currentID("room"), map[string]int{"version": 0}
+		})
+	}()
+	<-subscribed
+
+	hub.Publish("room", "queue_updated", 1)
+	<-w.blocked
+	for version := 2; version <= 18; version++ {
+		hub.Publish("room", "queue_updated", version)
+	}
+
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("SSE handler stayed connected after subscriber overflow")
+	}
+}
+
+type failingEventWriter struct {
+	header http.Header
+	failed chan struct{}
+	once   sync.Once
+}
+
+func (w *failingEventWriter) Header() http.Header              { return w.header }
+func (w *failingEventWriter) WriteHeader(int)                  {}
+func (w *failingEventWriter) Flush()                           {}
+func (w *failingEventWriter) SetWriteDeadline(time.Time) error { return nil }
+func (w *failingEventWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "event: queue_updated") {
+		w.once.Do(func() { close(w.failed) })
+		return 0, fmt.Errorf("client write failed")
+	}
+	return len(p), nil
+}
+
+func TestServeHTTPReturnsAfterWriteFailureWithoutOverflow(t *testing.T) {
+	hub := NewHub()
+	w := &failingEventWriter{header: make(http.Header), failed: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	subscribed := make(chan struct{})
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		hub.ServeHTTP(ctx, w, "room", func() (int64, interface{}) {
+			close(subscribed)
+			return 0, map[string]int{"version": 0}
+		})
+	}()
+	<-subscribed
+	hub.Publish("room", "queue_updated", 1)
+	<-w.failed
+
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("SSE handler stayed connected after a write failure")
+	}
+}
+
 func TestTTLJanitor(t *testing.T) {
 	gen := &seqCodeGen{}
 	store := NewStore(50*time.Millisecond, 20*time.Millisecond, gen)
@@ -829,7 +1045,7 @@ func (w *noFlushWriter) Write(b []byte) (int, error) { return len(b), nil }
 func TestServeHTTPNoFlusher(t *testing.T) {
 	hub := NewHub()
 	w := &noFlushWriter{header: http.Header{}}
-	hub.ServeHTTP(context.Background(), w, "somecode", func() interface{} { return map[string]string{} })
+	hub.ServeHTTP(context.Background(), w, "somecode", func() (int64, interface{}) { return 0, map[string]string{} })
 	if w.code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", w.code, http.StatusInternalServerError)
 	}
