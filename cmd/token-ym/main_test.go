@@ -10,7 +10,44 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/leugenea/qmix/internal/buildinfo"
 )
+
+func TestExecuteDispatchesVersionOrTokenFlow(t *testing.T) {
+	oldVersion, oldCommit := buildinfo.Version, buildinfo.Commit
+	oldDirty, oldCode := buildinfo.Dirty, buildinfo.AndroidVersionCode
+	buildinfo.Version = "1.2.3"
+	buildinfo.Commit = "0123456789abcdef0123456789abcdef01234567"
+	buildinfo.Dirty = "false"
+	buildinfo.AndroidVersionCode = "102039999"
+	t.Cleanup(func() {
+		buildinfo.Version, buildinfo.Commit = oldVersion, oldCommit
+		buildinfo.Dirty, buildinfo.AndroidVersionCode = oldDirty, oldCode
+	})
+
+	doer := &fakeDoer{resps: []resp{
+		ok(codesJSON(5)),
+		ok(`{"access_token":"at","refresh_token":"rt"}`),
+	}}
+	sl := &fakeSleep{}
+	var stdout strings.Builder
+	if err := execute([]string{"--version"}, context.Background(), &stdout, testCfg(), newFlow(doer, sl)); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"version":"1.2.3","commit":"0123456789abcdef0123456789abcdef01234567","dirty":false,"androidVersionCode":102039999}` + "\n"
+	if stdout.String() != want || doer.calls != 0 {
+		t.Fatalf("version dispatch: output=%q HTTP calls=%d", stdout.String(), doer.calls)
+	}
+
+	stdout.Reset()
+	if err := execute(nil, context.Background(), &stdout, testCfg(), newFlow(doer, sl)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "access_token=at") || doer.calls != 2 {
+		t.Fatalf("token dispatch: output=%q HTTP calls=%d", stdout.String(), doer.calls)
+	}
+}
 
 // fakeDoer answers with canned (statusCode, body) pairs in order and
 // records every request.

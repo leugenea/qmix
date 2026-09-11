@@ -124,8 +124,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build image
-        run: docker build -t qmix:ci .
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Build image and verify metadata
+        run: .github/scripts/test_docker_metadata.sh qmix:ci
       - name: yt-dlp present in image
         run: docker run --rm --entrypoint sh qmix:ci -c 'yt-dlp --version'
       - name: "libcrypto3/libssl3 patched (CVE-2026-14456, qmix#38)"

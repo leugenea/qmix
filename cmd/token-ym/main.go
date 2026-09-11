@@ -28,6 +28,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/leugenea/qmix/internal/buildinfo"
 )
 
 // The Yandex Music desktop client, same pair as embedded in synchro's
@@ -221,6 +223,12 @@ func defaultFlow() deviceFlow {
 	}
 }
 
+func execute(args []string, ctx context.Context, out io.Writer, cfg flowConfig, flow deviceFlow) error {
+	return buildinfo.Run(args, out, func() error {
+		return run(ctx, out, cfg, flow)
+	})
+}
+
 func main() {
 	cfg := flowConfig{
 		// A fixed device identity, same idea as synchro's stored DeviceID:
@@ -229,7 +237,7 @@ func main() {
 		deviceID:   "qmix-token-ym",
 		deviceName: "qmix token-ym",
 	}
-	if err := run(context.Background(), os.Stdout, cfg, defaultFlow()); err != nil {
+	if err := execute(os.Args[1:], context.Background(), os.Stdout, cfg, defaultFlow()); err != nil {
 		fmt.Fprintf(os.Stderr, "Yandex auth failed: %v\n", err)
 		os.Exit(1)
 	}

@@ -3,9 +3,11 @@
 package main
 
 import (
+	"io"
 	"log"
 	"os"
 
+	"github.com/leugenea/qmix/internal/buildinfo"
 	"github.com/leugenea/qmix/internal/server"
 )
 
@@ -18,8 +20,14 @@ func listenAddr() string {
 	return ":8080"
 }
 
+func execute(args []string, out io.Writer, serve func() error) error {
+	return buildinfo.Run(args, out, serve)
+}
+
 func main() {
-	if err := server.Run(listenAddr()); err != nil {
+	if err := execute(os.Args[1:], os.Stdout, func() error {
+		return server.Run(listenAddr())
+	}); err != nil {
 		log.Fatal(err)
 	}
 }

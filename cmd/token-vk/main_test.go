@@ -9,7 +9,40 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/leugenea/qmix/internal/buildinfo"
 )
+
+func TestExecuteDispatchesVersionOrTokenFlow(t *testing.T) {
+	oldVersion, oldCommit := buildinfo.Version, buildinfo.Commit
+	oldDirty, oldCode := buildinfo.Dirty, buildinfo.AndroidVersionCode
+	buildinfo.Version = "1.2.3"
+	buildinfo.Commit = "0123456789abcdef0123456789abcdef01234567"
+	buildinfo.Dirty = "false"
+	buildinfo.AndroidVersionCode = "102039999"
+	t.Cleanup(func() {
+		buildinfo.Version, buildinfo.Commit = oldVersion, oldCommit
+		buildinfo.Dirty, buildinfo.AndroidVersionCode = oldDirty, oldCode
+	})
+
+	var stdout, stderr bytes.Buffer
+	fetcher := &mockFetcher{results: []*authResult{tokenRes("tok")}}
+	if err := execute([]string{"--version"}, strings.NewReader(""), &stdout, &stderr, fetcher); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"version":"1.2.3","commit":"0123456789abcdef0123456789abcdef01234567","dirty":false,"androidVersionCode":102039999}` + "\n"
+	if stdout.String() != want || fetcher.calls != 0 {
+		t.Fatalf("version dispatch: output=%q auth calls=%d", stdout.String(), fetcher.calls)
+	}
+
+	stdout.Reset()
+	if err := execute(nil, strings.NewReader("login\nsecret\n"), &stdout, &stderr, fetcher); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "access_token=tok\n") || fetcher.calls != 1 {
+		t.Fatalf("token dispatch: output=%q auth calls=%d", stdout.String(), fetcher.calls)
+	}
+}
 
 // mockFetcher is a test double for tokenFetcher: it returns a scripted
 // sequence of results and records the codes it was asked with.

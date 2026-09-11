@@ -1,10 +1,18 @@
-.PHONY: run build test test-integration lint clean
+.PHONY: run build version test test-integration lint clean
+
+version:
+	go run ./internal/buildinfo/cmd/version -format=json
 
 run:
-	go run ./cmd/qmix
+	@set -eu; ldflags="$$(go run ./internal/buildinfo/cmd/version -format=ldflags)"; \
+		go run -ldflags "$$ldflags" ./cmd/qmix
 
 build:
-	go build -o bin/qmix ./cmd/qmix
+	@mkdir -p bin
+	@set -eu; ldflags="$$(go run ./internal/buildinfo/cmd/version -format=ldflags)"; \
+		go build -ldflags "$$ldflags" -o bin/qmix ./cmd/qmix; \
+		go build -ldflags "$$ldflags" -o bin/token-vk ./cmd/token-vk; \
+		go build -ldflags "$$ldflags" -o bin/token-ym ./cmd/token-ym
 
 test:
 	go test ./...

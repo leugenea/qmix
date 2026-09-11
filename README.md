@@ -79,8 +79,26 @@ make run
 curl localhost:8080/healthz
 
 # или через docker (внешний порт 8180)
+eval "$(go run ./internal/buildinfo/cmd/version -format=env)"
+export VERSION COMMIT DIRTY ANDROID_VERSION_CODE
 docker compose up --build
 curl localhost:8180/healthz
+```
+
+## Версия сборки
+
+Сервер, CLI-утилиты, Docker-образ и будущий Android APK используют одну
+SemVer-версию. `make version` печатает вычисленные `version`, `commit`,
+`dirty` и Android `versionCode`; `make build` встраивает их во все Go-бинарники.
+Правила dev/RC/stable, bump и Android-контракт описаны в
+[`docs/versioning.md`](docs/versioning.md).
+
+```bash
+make version
+make build
+./bin/qmix --version
+./bin/token-vk --version
+./bin/token-ym --version
 ```
 
 ## Токены сервисов
