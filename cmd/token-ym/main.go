@@ -223,17 +223,21 @@ func defaultFlow() deviceFlow {
 	}
 }
 
+func execute(args []string, ctx context.Context, out io.Writer, cfg flowConfig, flow deviceFlow) error {
+	return buildinfo.Run(args, out, func() error {
+		return run(ctx, out, cfg, flow)
+	})
+}
+
 func main() {
-	if err := buildinfo.Run(os.Args[1:], os.Stdout, func() error {
-		cfg := flowConfig{
-			// A fixed device identity, same idea as synchro's stored DeviceID:
-			// lets the user revoke this particular token in Yandex ID settings
-			// and is accepted by the device endpoints (printable ASCII, 6..50).
-			deviceID:   "qmix-token-ym",
-			deviceName: "qmix token-ym",
-		}
-		return run(context.Background(), os.Stdout, cfg, defaultFlow())
-	}); err != nil {
+	cfg := flowConfig{
+		// A fixed device identity, same idea as synchro's stored DeviceID:
+		// lets the user revoke this particular token in Yandex ID settings
+		// and is accepted by the device endpoints (printable ASCII, 6..50).
+		deviceID:   "qmix-token-ym",
+		deviceName: "qmix token-ym",
+	}
+	if err := execute(os.Args[1:], context.Background(), os.Stdout, cfg, defaultFlow()); err != nil {
 		fmt.Fprintf(os.Stderr, "Yandex auth failed: %v\n", err)
 		os.Exit(1)
 	}

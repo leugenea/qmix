@@ -286,10 +286,14 @@ func run(stdin io.Reader, stdout, stderr io.Writer, fetcher tokenFetcher) error 
 	}
 }
 
+func execute(args []string, stdin io.Reader, stdout, stderr io.Writer, fetcher tokenFetcher) error {
+	return buildinfo.Run(args, stdout, func() error {
+		return run(stdin, stdout, stderr, fetcher)
+	})
+}
+
 func main() {
-	if err := buildinfo.Run(os.Args[1:], os.Stdout, func() error {
-		return run(os.Stdin, os.Stdout, os.Stderr, vkFetcher{do: http.DefaultClient})
-	}); err != nil {
+	if err := execute(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, vkFetcher{do: http.DefaultClient}); err != nil {
 		os.Exit(1)
 	}
 }
