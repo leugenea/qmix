@@ -370,10 +370,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "room not found")
 		return
 	}
-	s.hub.ServeHTTP(r.Context(), w, room.Code, func() interface{} {
+	s.hub.ServeHTTP(r.Context(), w, room.Code, func() (int64, interface{}) {
 		s.store.mu.Lock()
 		defer s.store.mu.Unlock()
-		return snapshotPayload(room)
+		return s.hub.currentID(room.Code), snapshotPayload(room)
 	})
 }
 

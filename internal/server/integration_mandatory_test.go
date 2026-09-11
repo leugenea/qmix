@@ -387,6 +387,7 @@ func TestIntegrationSSE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new reconnect request: %v", err)
 	}
+	req2.Header.Set("Last-Event-ID", "1")
 	resp2, err := (&http.Client{}).Do(req2)
 	if err != nil {
 		t.Fatalf("sse reconnect: %v", err)

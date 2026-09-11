@@ -18,13 +18,19 @@ type Event struct {
 
 // Hub fans out SSE events to per-room subscribers. Each subscriber has a
 // buffered channel; sends are non-blocking so slow clients never stall room
-// mutations. Overflowing events are dropped — the client recovers via a
+// mutations. An overflowing subscriber is disconnected so it recovers via a
 // queue_snapshot on reconnect.
 type Hub struct {
-	mu        sync.Mutex
-	rooms     map[string]*roomHub
-	Heartbeat time.Duration // keep-alive comment interval; <=0 means the 15s default
+	mu           sync.Mutex
+	rooms        map[string]*roomHub
+	Heartbeat    time.Duration // keep-alive comment interval; <=0 means the 15s default
+	WriteTimeout time.Duration // per-SSE-write deadline; <=0 means the 15s default
 }
+
+// Lock order: code that needs both Store.mu and Hub.mu must acquire Store.mu
+// first. Hub methods never call Store methods or snapshot callbacks while
+// holding Hub.mu. Mutations retain Store.mu through Publish so state changes
+// and event sequencing share one boundary.
 
 // roomHub holds the subscribers and the monotonic event counter for one room.
 type roomHub struct {
@@ -44,8 +50,15 @@ func NewHub() *Hub {
 }
 
 // Subscribe registers a subscriber for a room and returns the channel to read
-// events from. The returned cancel function unsubscribes and closes the channel.
+// events from. The returned cancel function unsubscribes it.
 func (h *Hub) Subscribe(roomCode string) (<-chan Event, func()) {
+	sub, cancel := h.subscribe(roomCode)
+	return sub.ch, cancel
+}
+
+// subscribe exposes the disconnect signal to the SSE transport while keeping
+// the public subscription API focused on events and cancellation.
+func (h *Hub) subscribe(roomCode string) (*subscriber, func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -60,45 +73,56 @@ func (h *Hub) Subscribe(roomCode string) (<-chan Event, func()) {
 	var once sync.Once
 	cancel := func() {
 		once.Do(func() {
-			h.mu.Lock()
-			defer h.mu.Unlock()
-			if rh, ok := h.rooms[roomCode]; ok {
-				delete(rh.subs, sub)
-				if len(rh.subs) == 0 {
-					delete(h.rooms, roomCode)
-				}
-			}
-			close(sub.done)
+			h.disconnect(roomCode, sub)
 		})
 	}
-	return sub.ch, cancel
+	return sub, cancel
+}
+
+// disconnect removes a subscriber and signals its stream to stop. It is safe
+// to call more than once, including after an overflow raced with cancellation.
+func (h *Hub) disconnect(roomCode string, sub *subscriber) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.disconnectLocked(roomCode, sub)
+}
+
+// disconnectLocked removes a subscriber while h.mu is held.
+func (h *Hub) disconnectLocked(roomCode string, sub *subscriber) {
+	rh := h.rooms[roomCode]
+	if rh == nil {
+		return
+	}
+	if _, ok := rh.subs[sub]; !ok {
+		return
+	}
+	delete(rh.subs, sub)
+	close(sub.done)
+	if len(rh.subs) == 0 {
+		delete(h.rooms, roomCode)
+	}
 }
 
 // Publish sends an event to all subscribers of a room. Sends are non-blocking:
-// a full subscriber buffer causes the event to be dropped for that client.
+// a full subscriber buffer disconnects that client so it can obtain a fresh
+// snapshot without blocking healthy subscribers.
 // Publish does not call Store methods, so callers may safely hold Store.mu to
 // make room mutation and event sequencing atomic.
 func (h *Hub) Publish(roomCode string, name string, data interface{}) {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	rh := h.rooms[roomCode]
 	if rh == nil {
-		h.mu.Unlock()
 		return
 	}
 	id := rh.seq + 1
 	rh.seq = id
 	ev := Event{ID: id, Name: name, Data: data}
-	subs := make([]*subscriber, 0, len(rh.subs))
 	for s := range rh.subs {
-		subs = append(subs, s)
-	}
-	h.mu.Unlock()
-
-	for _, s := range subs {
 		select {
 		case s.ch <- ev:
 		default:
-			// Buffer full: drop the event. Client recovers via snapshot.
+			h.disconnectLocked(roomCode, s)
 		}
 	}
 }
@@ -106,9 +130,8 @@ func (h *Hub) Publish(roomCode string, name string, data interface{}) {
 // ServeHTTP streams SSE events for a room to the client. It sends a
 // queue_snapshot immediately (or on reconnect with Last-Event-ID), then
 // forwards live events. It blocks until ctx is done or the client disconnects.
-func (h *Hub) ServeHTTP(ctx context.Context, w http.ResponseWriter, roomCode string, snapshot func() interface{}) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+func (h *Hub) ServeHTTP(ctx context.Context, w http.ResponseWriter, roomCode string, snapshot func() (int64, interface{})) {
+	if _, ok := w.(http.Flusher); !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
@@ -117,12 +140,18 @@ func (h *Hub) ServeHTTP(ctx context.Context, w http.ResponseWriter, roomCode str
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch, cancel := h.Subscribe(roomCode)
+	sub, cancel := h.subscribe(roomCode)
 	defer cancel()
 
-	// Always send a fresh snapshot on connect/reconnect.
-	writeEvent(w, Event{ID: h.currentID(roomCode), Name: "queue_snapshot", Data: snapshot()})
-	flusher.Flush()
+	// Always send a fresh snapshot on connect/reconnect. The callback captures
+	// the state and its event boundary in one Store.mu critical section.
+	snapshotID, snapshotData := snapshot()
+	controller := http.NewResponseController(w)
+	if h.setWriteDeadline(controller) != nil ||
+		writeEvent(w, Event{ID: snapshotID, Name: "queue_snapshot", Data: snapshotData}) != nil ||
+		controller.Flush() != nil {
+		return
+	}
 
 	heartbeat := time.NewTicker(h.heartbeatInterval())
 	defer heartbeat.Stop()
@@ -131,14 +160,42 @@ func (h *Hub) ServeHTTP(ctx context.Context, w http.ResponseWriter, roomCode str
 		select {
 		case <-ctx.Done():
 			return
+		case <-sub.done:
+			return
 		case <-heartbeat.C:
-			_, _ = fmt.Fprint(w, ": ping\n\n")
-			flusher.Flush()
-		case ev := <-ch:
-			writeEvent(w, ev)
-			flusher.Flush()
+			if h.setWriteDeadline(controller) != nil {
+				return
+			}
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			if controller.Flush() != nil {
+				return
+			}
+		case ev := <-sub.ch:
+			select {
+			case <-sub.done:
+				return
+			default:
+			}
+			if ev.ID <= snapshotID {
+				continue
+			}
+			if h.setWriteDeadline(controller) != nil || writeEvent(w, ev) != nil || controller.Flush() != nil {
+				return
+			}
 		}
 	}
+}
+
+// setWriteDeadline prevents a client that stops reading from pinning an SSE
+// handler forever. A fresh deadline is applied to each event or heartbeat.
+func (h *Hub) setWriteDeadline(controller *http.ResponseController) error {
+	timeout := h.WriteTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	return controller.SetWriteDeadline(time.Now().Add(timeout))
 }
 
 // currentID returns the latest event id for a room (0 if none yet).
@@ -165,12 +222,17 @@ func (h *Hub) heartbeatInterval() time.Duration {
 //	id: <n>
 //	event: <name>
 //	data: <json>
-func writeEvent(w http.ResponseWriter, ev Event) {
-	_, _ = fmt.Fprintf(w, "id: %d\n", ev.ID)
-	_, _ = fmt.Fprintf(w, "event: %s\n", ev.Name)
+func writeEvent(w http.ResponseWriter, ev Event) error {
+	if _, err := fmt.Fprintf(w, "id: %d\n", ev.ID); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\n", ev.Name); err != nil {
+		return err
+	}
 	data, err := json.Marshal(ev.Data)
 	if err != nil {
 		data = []byte("{}")
 	}
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+	_, err = fmt.Fprintf(w, "data: %s\n\n", data)
+	return err
 }
