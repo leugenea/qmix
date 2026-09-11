@@ -3,9 +3,23 @@ WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /bin/qmix ./cmd/qmix
+ARG VERSION
+ARG COMMIT
+ARG DIRTY
+ARG ANDROID_VERSION_CODE
+RUN test -n "$VERSION" && test -n "$COMMIT" && test -n "$DIRTY" && test -n "$ANDROID_VERSION_CODE"
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X=github.com/leugenea/qmix/internal/buildinfo.Version=${VERSION} -X=github.com/leugenea/qmix/internal/buildinfo.Commit=${COMMIT} -X=github.com/leugenea/qmix/internal/buildinfo.Dirty=${DIRTY} -X=github.com/leugenea/qmix/internal/buildinfo.AndroidVersionCode=${ANDROID_VERSION_CODE}" \
+    -o /bin/qmix ./cmd/qmix
+# Validation is part of the image build: malformed or inconsistent inputs fail.
+RUN /bin/qmix --version >/dev/null
 
 FROM alpine:3.24
+ARG VERSION
+ARG COMMIT
+LABEL org.opencontainers.image.version=$VERSION \
+      org.opencontainers.image.revision=$COMMIT \
+      org.opencontainers.image.source=https://github.com/leugenea/qmix
 # yt-dlp is required by the streaming backend (internal/stream) to resolve
 # YouTube audio. Pinned to the version published in the alpine v3.24
 # community repo; bump deliberately by updating this exact version.

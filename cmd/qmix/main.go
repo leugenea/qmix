@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/leugenea/qmix/internal/buildinfo"
 	"github.com/leugenea/qmix/internal/server"
 )
 
@@ -19,7 +20,9 @@ func listenAddr() string {
 }
 
 func main() {
-	if err := server.Run(listenAddr()); err != nil {
+	if err := buildinfo.Run(os.Args[1:], os.Stdout, func() error {
+		return server.Run(listenAddr())
+	}); err != nil {
 		log.Fatal(err)
 	}
 }

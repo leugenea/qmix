@@ -1,6 +1,12 @@
 services:
   backend:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: "${VERSION:?compute build metadata first}"
+        COMMIT: "${COMMIT:?compute build metadata first}"
+        DIRTY: "${DIRTY:?compute build metadata first}"
+        ANDROID_VERSION_CODE: "${ANDROID_VERSION_CODE:?compute build metadata first}"
     ports:
       - "8180:8080"
     environment:

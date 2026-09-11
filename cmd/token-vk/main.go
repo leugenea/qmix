@@ -23,6 +23,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/leugenea/qmix/internal/buildinfo"
 )
 
 // The official "VK for Android" standalone client. The password grant only
@@ -285,7 +287,9 @@ func run(stdin io.Reader, stdout, stderr io.Writer, fetcher tokenFetcher) error 
 }
 
 func main() {
-	if err := run(os.Stdin, os.Stdout, os.Stderr, vkFetcher{do: http.DefaultClient}); err != nil {
+	if err := buildinfo.Run(os.Args[1:], os.Stdout, func() error {
+		return run(os.Stdin, os.Stdout, os.Stderr, vkFetcher{do: http.DefaultClient})
+	}); err != nil {
 		os.Exit(1)
 	}
 }
