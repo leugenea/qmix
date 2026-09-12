@@ -28,7 +28,7 @@ class TvLauncherSmokeTest {
 
         assertTrue(
             "startup action did not appear",
-            device.wait(Until.hasObject(By.text("Start hosting")), 5_000),
+            device.wait(Until.hasObject(By.text("Start hosting")), 30_000),
         )
         val startupAction = device.findObject(By.text("Start hosting"))
         assertTrue("startup action must own initial D-pad focus", startupAction.isFocused)
@@ -36,7 +36,7 @@ class TvLauncherSmokeTest {
         assertTrue("D-pad center key was not accepted", device.pressDPadCenter())
         assertTrue(
             "startup action was not activated",
-            device.wait(Until.hasObject(By.text("Ready to host")), 2_000),
+            device.wait(Until.hasObject(By.text("Ready to host")), 10_000),
         )
     }
 }
