@@ -21,10 +21,11 @@
 - **Авторизованный резолвинг Яндекс Музыки** (#10) — трек-ссылки music.yandex.ru (`/album/{a}/track/{t}` и `/track/{t}`) резолвятся через поддерживаемый клиент `goym` (api.music.yandex.net, `GET /tracks/{id}`); без токена `QMIX_YM_TOKEN` остаётся анонимный og-meta путь.
 - **Интеграционные тесты** основных сценариев — обязательная job `integration-mandatory` в CI.
 - Свежий тулчейн: Go 1.25 / alpine 3.24, compose в рамках деплой-ограничений (порт 8180, `mem_limit`, `restart: on-failure:3`).
+- **M4** — одномодульный Kotlin/Compose for TV scaffold с Media3, TV-launcher smoke и обязательным Android CI (см. [`android/README.md`](android/README.md)).
 
 Дальше:
 
-- **M4** — TV-приложение (Android TV), **M5** — PWA для гостей, **M6** — Definition of Done (E2E + v0.1.0).
+- **M5** — PWA для гостей, **M6** — Definition of Done (E2E + v0.1.0).
 - Автообновление Яндекс-токена по `QMIX_YM_REFRESH_TOKEN` (goym не поддерживает refresh штатно — отдельная задача).
 
 ## Стриминг
@@ -87,7 +88,7 @@ curl localhost:8180/healthz
 
 ## Версия сборки
 
-Сервер, CLI-утилиты, Docker-образ и будущий Android APK используют одну
+Сервер, CLI-утилиты, Docker-образ и Android APK используют одну
 SemVer-версию. `make version` печатает вычисленные `version`, `commit`,
 `dirty` и Android `versionCode`; `make build` встраивает их во все Go-бинарники.
 Правила dev/RC/stable, bump и Android-контракт описаны в
