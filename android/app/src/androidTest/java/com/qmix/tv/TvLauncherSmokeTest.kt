@@ -31,7 +31,9 @@ class TvLauncherSmokeTest {
             device.wait(Until.hasObject(By.text("Create room")), 30_000),
         )
 
-        // No navigation precedes OK; reaching the activated state proves the required initial interaction.
+        instrumentation.waitForIdleSync()
+
+        // No navigation precedes OK; reaching pending proves the required initial interaction.
         assertTrue("D-pad center key was not accepted", device.pressDPadCenter())
         assertTrue(
             "create action was not activated",
