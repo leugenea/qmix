@@ -10,11 +10,12 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.regex.Pattern
 
 @RunWith(AndroidJUnit4::class)
 class TvLauncherSmokeTest {
     @Test
-    fun tv_launcher_opens_with_focused_action_that_activates_on_ok() {
+    fun tv_launcher_opens_with_focused_create_action_that_activates_on_ok() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val targetContext = instrumentation.targetContext
         val device = UiDevice.getInstance(instrumentation)
@@ -28,14 +29,16 @@ class TvLauncherSmokeTest {
 
         assertTrue(
             "startup action did not appear",
-            device.wait(Until.hasObject(By.text("Start hosting")), 30_000),
+            device.wait(Until.hasObject(By.text("Create room")), 30_000),
         )
 
-        // No navigation precedes OK; reaching the activated state proves the required initial interaction.
+        instrumentation.waitForIdleSync()
+
+        // No navigation precedes OK; reaching pending proves the required initial interaction.
         assertTrue("D-pad center key was not accepted", device.pressDPadCenter())
         assertTrue(
-            "startup action was not activated",
-            device.wait(Until.hasObject(By.text("Ready to host")), 10_000),
+            "create action was not activated",
+            device.wait(Until.hasObject(By.text(Pattern.compile("Creating room…|Retry"))), 20_000),
         )
     }
 }

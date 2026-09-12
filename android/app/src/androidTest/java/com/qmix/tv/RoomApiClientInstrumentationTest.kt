@@ -1,0 +1,206 @@
+package com.qmix.tv
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.util.concurrent.TimeUnit
+
+@RunWith(AndroidJUnit4::class)
+class RoomApiClientInstrumentationTest {
+    private lateinit var server: MockWebServer
+    private lateinit var api: RoomApiClient
+
+    @Before
+    fun setUp() {
+        server = MockWebServer()
+        server.start()
+        api = RoomApiClient(OkHttpClient(), server.url("/").toString())
+    }
+
+    @After
+    fun tearDown() {
+        server.shutdown()
+    }
+
+    @Test
+    fun create_get_and_skip_use_the_wire_contract_without_leaking_credentials() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val credentials = api.createRoom()
+        assertEquals("ABCD", credentials.code)
+        assertEquals("host-secret", credentials.hostToken)
+        assertEquals("/r/ABCD", credentials.relativeGuestUrl)
+        assertFalse(credentials.toString().contains("host-secret"))
+        server.takeRequest().also { request ->
+            assertEquals("POST", request.method)
+            assertEquals("/rooms", request.path)
+            assertEquals(0L, request.bodySize)
+            assertNull(request.headers["X-Host-Token"])
+        }
+
+        server.enqueue(
+            MockResponse().setBody(
+                """{"code":"ABCD","current":{"track_id":"now","pos_sec":12,"state":"playing","title":"Now","artist":""},"queue":[{"id":"next","url":"https://music.example/next","title":"Next","artist":"Other","duration_sec":180,"resolved_by":"test"}]}""",
+            ),
+        )
+        val room = api.getRoom("AB CD")
+        assertEquals("ABCD", room.code)
+        val current = requireNotNull(room.current)
+        assertEquals("now", current.trackId)
+        assertEquals(12, current.positionSeconds)
+        assertEquals("playing", current.state)
+        assertEquals("Now", current.title)
+        assertEquals("", current.artist)
+        val queued = room.queue.single()
+        assertEquals("next", queued.id)
+        assertEquals("https://music.example/next", queued.url)
+        assertEquals("Next", queued.title)
+        assertEquals("Other", queued.artist)
+        assertEquals(180, queued.durationSeconds)
+        assertEquals("test", queued.resolvedBy)
+        assertEquals(CurrentTrack("now", 12, "playing", "Now", ""), current)
+        assertEquals(
+            listOf(QueuedTrack("next", "https://music.example/next", "Next", "Other", 180, "test")),
+            room.queue,
+        )
+        server.takeRequest().also { request ->
+            assertEquals("GET", request.method)
+            assertEquals("/rooms/AB%20CD", request.path)
+            assertNull(request.headers["X-Host-Token"])
+        }
+
+        server.enqueue(
+            MockResponse().setBody(
+                """{"current":{"track_id":"next","pos_sec":0,"state":"paused","title":"Next","artist":"Artist"}}""",
+            ),
+        )
+        assertEquals(CurrentTrack("next", 0, "paused", "Next", "Artist"), api.skip("AB CD", "host-secret"))
+        server.takeRequest().also { request ->
+            assertEquals("POST", request.method)
+            assertEquals("/rooms/AB%20CD/skip", request.path)
+            assertEquals("host-secret", request.headers["X-Host-Token"])
+            assertEquals(0L, request.bodySize)
+        }
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun nullable_current_and_integral_long_values_are_accepted() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"code":"ABCD","current":null,"queue":[{"id":"next","url":"u","title":"Next","artist":"","duration_sec":2147483647,"resolved_by":""}]}""",
+            ),
+        )
+
+        val room = api.getRoom("ABCD")
+
+        assertNull(room.current)
+        assertEquals(Int.MAX_VALUE, room.queue.single().durationSeconds)
+    }
+
+    @Test
+    fun every_http_status_family_has_a_safe_human_message() {
+        listOf(
+            403 to "Host access was denied.",
+            404 to "The room was not found.",
+            503 to "The server is temporarily unavailable.",
+            418 to "The server rejected the request.",
+        ).forEach { (status, expected) ->
+            server.enqueue(MockResponse().setResponseCode(status))
+            val error = assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }
+            assertEquals(expected, error.message)
+        }
+    }
+
+    @Test
+    fun malformed_json_and_wrong_dto_shapes_are_rejected() {
+        val getBodies = listOf(
+            "not json",
+            "[]",
+            """{"code":"ABCD","queue":[]}""",
+            """{"code":"ABCD","current":"playing","queue":[]}""",
+            """{"code":"ABCD","current":null}""",
+            """{"code":"ABCD","current":null,"queue":["bad"]}""",
+            """{"code":"","current":null,"queue":[]}""",
+            """{"code":1234,"current":null,"queue":[]}""",
+            """{"code":"ABCD","current":{"track_id":"now","pos_sec":"12","state":"playing","title":"Now","artist":"Artist"},"queue":[]}""",
+            """{"code":"ABCD","current":{"track_id":"now","pos_sec":2147483648,"state":"playing","title":"Now","artist":"Artist"},"queue":[]}""",
+            """{"code":"ABCD","current":{"track_id":"","pos_sec":1,"state":"playing","title":"Now","artist":"Artist"},"queue":[]}""",
+            """{"code":"ABCD","current":null,"queue":[{"id":"next","url":"u","title":"Next","artist":"A","duration_sec":"180","resolved_by":"test"}]}""",
+            """{"code":"ABCD","current":null,"queue":[{"id":"next","url":"","title":"Next","artist":"A","duration_sec":180,"resolved_by":"test"}]}""",
+        )
+        getBodies.forEach { body ->
+            server.enqueue(MockResponse().setBody(body))
+            assertInvalid { api.getRoom("ABCD") }
+        }
+
+        listOf(
+            """{"code":1234,"host_token":"secret","url":"/r/ABCD"}""",
+            """{"code":"ABCD","host_token":"","url":"/r/ABCD"}""",
+        ).forEach { body ->
+            server.enqueue(MockResponse().setResponseCode(201).setBody(body))
+            assertInvalid { api.createRoom() }
+        }
+
+        listOf(
+            "{}",
+            """{"current":"bad"}""",
+            """{"current":{"track_id":"x","pos_sec":0,"state":"playing","title":"X"}}""",
+        ).forEach { body ->
+            server.enqueue(MockResponse().setBody(body))
+            assertInvalid { api.skip("ABCD", "secret") }
+        }
+    }
+
+    @Test
+    fun timeout_disconnect_and_redirect_are_not_retried_or_forwarded() {
+        server.enqueue(MockResponse().setBodyDelay(1, TimeUnit.SECONDS).setBody("{}"))
+        api = RoomApiClient(
+            OkHttpClient.Builder().readTimeout(50, TimeUnit.MILLISECONDS).build(),
+            server.url("/").toString(),
+        )
+        assertEquals(
+            "The server timed out. Try again.",
+            assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }.message,
+        )
+
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        assertEquals(
+            "Could not reach the server.",
+            assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }.message,
+        )
+
+        val otherOrigin = MockWebServer()
+        otherOrigin.start()
+        try {
+            server.enqueue(
+                MockResponse().setResponseCode(307)
+                    .addHeader("Location", otherOrigin.url("/capture")),
+            )
+            assertEquals(
+                "The server rejected the request.",
+                assertThrows(RoomApiException::class.java) { api.skip("ABCD", "host-secret") }.message,
+            )
+            assertEquals(0, otherOrigin.requestCount)
+        } finally {
+            otherOrigin.shutdown()
+        }
+    }
+
+    private fun assertInvalid(block: () -> Unit) {
+        val error = assertThrows(RoomApiException::class.java, block)
+        assertEquals("The server returned an invalid response.", error.message)
+    }
+}
