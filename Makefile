@@ -1,4 +1,4 @@
-.PHONY: run build version test test-integration lint clean
+.PHONY: run build version test test-integration test-cyrillic check-cyrillic lint clean
 
 version:
 	go run ./internal/buildinfo/cmd/version -format=json
@@ -23,7 +23,13 @@ test:
 test-integration:
 	go test -race -tags=integration -run 'Integration' ./internal/server/...
 
-lint:
+test-cyrillic:
+	python3 .github/scripts/check_cyrillic_test.py -v
+
+check-cyrillic:
+	python3 .github/scripts/check_cyrillic.py
+
+lint: check-cyrillic
 	@test -z "$$(gofmt -l .)" || { echo "not gofmt-ed:"; gofmt -l .; exit 1; }
 	go vet ./...
 

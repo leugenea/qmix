@@ -1,53 +1,54 @@
-# QMix — Архитектура
+# QMix — Architecture
 
 ## 1. Overview
 
-QMix — коллаборативный музыкальный плеер. Хост запускает плеер на Google TV и
-создаёт комнату, друзья заходят в неё по ссылке с телефона (PWA, без аккаунта)
-и кидают ссылки на треки из VK / Яндекс Музыки / Spotify в общую очередь.
-Бэкенд резолвит каждую ссылку в метаданные трека, находит источник аудио и
-стримит его на плеер. Все участники видят текущий трек и очередь в реальном
-времени.
+QMix is a collaborative music player. A host starts the player on Google TV and
+creates a room; friends join it from their phones through a link (PWA, no
+account required) and add supported Spotify, YouTube, VK, or Yandex Music links
+to a shared queue. The backend resolves each link to track metadata, locates an
+audio source, and streams it to the player. All participants see the current
+track and queue in real time.
 
-Ключевой ход MVP: на вход принимаются любые ссылки, а звук всегда идёт через
-один стрим-бэкенд. Резолвер превращает ссылку в метаданные, стрим-бэкенд
-находит и отдаёт аудио-поток.
+The key MVP design choice is to accept links from the supported services while
+always delivering audio through one streaming backend. The resolver converts a
+link into metadata, and the streaming backend locates and serves the audio
+stream.
 
 ## 2. Scope
 
-**В MVP:**
-- Комната: создание хостом, вход гостей по коду/ссылке
-- Общая очередь: добавление треков, порядок воспроизведения
-- Резолвинг ссылок VK / Яндекс Музыки / Spotify в метаданные трека
-- Стриминг аудио через единый стрим-бэкенд
-- Реалтайм-синхронизация состояния (текущий трек + очередь) через SSE
-- TV-приложение (Kotlin + Media3) и PWA для гостей
+**Included in the MVP:**
+- Rooms: host creation and guest access by code or link
+- Shared queue: append tracks, reorder them, and skip to the next track
+- Resolution of Spotify, YouTube, VK, and Yandex Music links to track metadata
+- Audio streaming through a single streaming backend
+- Real-time state synchronization (current track and queue) over SSE
+- A TV application (Kotlin + Media3) and a guest PWA
 
-**Намеренно не входит в MVP:**
-- Аккаунты, авторизация, персональные плейлисты
-- Голосования, лайки, рейтинги
-- Публичные/поисковые комнаты
-- Торренты и пиринговые источники
-- Офлайн-режим
+**Intentionally excluded from the MVP:**
+- Accounts, authentication, and personal playlists
+- Voting, likes, and ratings
+- Public or searchable rooms
+- Torrents and peer-to-peer sources
+- Offline mode
 
 ## 3. Stack
 
-| Слой | Технология | Почему |
+| Layer | Technology | Rationale |
 |---|---|---|
-| Backend | Go | Один бинарник, простота деплоя, хорошая поддержка HTTP/SSE; резолвинг ссылок — публичные endpoint-ы + yt-dlp |
-| Realtime | SSE + REST | Достаточно для очереди и текущего трека; проще WebSocket, работает через прокси |
-| State | in-memory, без БД | Одна комната на процесс, данные эфемерны; нет операций записи, требующих БД |
-| TV | Kotlin + Media3 (ExoPlayer) | Стандарт для Android TV, встроенная поддержка стриминга и D-pad |
-| PWA | Минималистичный SPA | Гости заходят без установки и без аккаунта |
+| Backend | Go | One binary, simple deployment, and good HTTP/SSE support; link resolution uses public endpoints plus yt-dlp |
+| Realtime | SSE + REST | Sufficient for the queue and current track; simpler than WebSocket and works through proxies |
+| State | In-memory, no database | One store supports multiple ephemeral rooms; no persistence is required for the MVP |
+| TV | Kotlin + Media3 (ExoPlayer) | Standard Android TV stack with built-in streaming and D-pad support |
+| PWA | Minimal SPA | Guests can join without installing an app or creating an account |
 
-Backend — Go со стандартной библиотекой по умолчанию; для решённых задач
-используем поддерживаемые библиотеки, а не самописный код. Резолвинг
-ссылок и поиск аудио вынесены в плагины (см. раздел 7); резолвер — на
-публичных endpoint-ах (Spotify oEmbed, og-meta) + yt-dlp для YouTube.
-(`oklookat/synchro` отклонён — это CLI переноса лайков с обязательной
-авторизацией каждого сервиса и без поддержки YouTube, см. qmix#2.)
-Дополнительные зависимости — только проверенные и закрывающие задачу
-целиком.
+The backend uses Go's standard library by default. For solved problems, it uses
+maintained libraries rather than custom implementations. Link resolution and
+audio lookup are implemented as plugins (see section 7). The resolver uses
+public endpoints (Spotify oEmbed and Open Graph metadata) plus yt-dlp for
+YouTube. (`oklookat/synchro` was rejected because it is a CLI for transferring
+likes that requires authorization for every service and does not support
+YouTube; see qmix#2.) Additional dependencies must be established solutions
+that cover the complete requirement.
 
 ## 4. Components
 
@@ -55,14 +56,14 @@ Backend — Go со стандартной библиотекой по умол�
                     ┌──────────────────────────────┐
                     │          Backend (Go)        │
                     │                              │
-  TV app ──────────►│  Room + Queue (in-memory)   │
+  TV app ──────────►│  Rooms + Queues (in-memory) │
   (Kotlin/Media3)   │        REST + SSE           │
                     │            │                │
   PWA guest ───────►│            │                │
-  (phone, no auth) │            ▼                │
+  (phone, no auth)  │            ▼                │
                     │   ┌──────────────────┐      │
                     │   │ Resolver plugin  │      │
-                    │   │ url → Track meta │      │
+                    │   │ URL → Track meta │      │
                     │   └──────────────────┘      │
                     │            │                │
                     │            ▼                │
@@ -76,163 +77,176 @@ Backend — Go со стандартной библиотекой по умол�
                               TV player
 ```
 
-- **Backend** — единый сервис: держит комнаты и очередь, отдаёт REST + SSE,
-  вызывает плагины резолвинга и стриминга.
-- **Resolver plugin** — по ссылке возвращает метаданные трека (название,
-  исполнитель, длительность, источник).
-- **StreamBackend plugin** — по треку находит и отдаёт аудио-поток
-  (с поддержкой Range/seek).
-- **TV app** — плеер хоста: воспроизводит поток, показывает очередь,
-  управляется D-pad, показывает QR/ссылку комнаты.
-- **PWA** — страница гостя: поле «кинуть ссылку», просмотр очереди и текущего
-  трека, тёмная тема.
+- **Backend** — a single service that stores multiple rooms and their queues,
+  exposes REST + SSE, and invokes the resolver and streaming plugins.
+- **Resolver plugin** — returns track metadata (title, artist, duration, and
+  source URL) for a supported link.
+- **StreamBackend plugin** — locates and serves an audio stream for a track,
+  including Range/seek support.
+- **TV app** — the host player. The current implementation includes the Android
+  TV scaffold, room creation, a QR invitation, and the Media3 playback engine.
+  A live room view and backend/player coordination remain planned.
+- **PWA** — the guest page for submitting supported links and viewing the queue
+  and current track, with a dark theme.
 
 ## 5. Data model
 
-**Room**
-- `id` — короткий код комнаты (для ссылки `/r/{code}`)
-- `host` — идентификатор хоста
-- `queue` — упорядоченный список треков
-- `current` — текущий трек (`*Current` со `State`: `idle`/`playing` и позицией `PosSec`)
-- `createdAt` — время создания (для TTL)
+**Room (internal)**
+- `Code` — short room code used in `/r/{code}`
+- `HostToken` — secret authorizing host-only operations
+- `Queue` — ordered list of tracks
+- `Current` — current track (`*Current`, with `State` set to `idle` or `playing`
+  and position in `PosSec`)
+- `LastActivity` — last activity time used to expire empty rooms
+
+The in-memory `Store` holds multiple rooms. The public room representation
+contains only `code`, `current`, and `queue`; it never exposes `HostToken`.
 
 **Track**
-- `id` — внутренний идентификатор
-- `title`, `artist` — метаданные из резолвера
-- `duration` — длительность (сек)
-- `source` — исходная ссылка (VK / Яндекс / Spotify)
-- `resolvedBy` — какой резолвер-плагин обработал
+- `id` — internal track identifier
+- `url` — original supported Spotify, YouTube, VK, or Yandex Music link
+- `title`, `artist` — metadata returned by the resolver
+- `duration_sec` — duration in seconds
+- `resolved_by` — resolver plugin that produced the metadata
 
-Поток для текущего трека не хранится в Track: M3 резолвит его на лету
-через StreamBackend и кэширует ссылку с TTL (`QMIX_STREAM_CACHE_TTL`).
+The current track's stream is not stored in `Track`. M3 resolves it on demand
+through `StreamBackend` and caches the URL with a TTL
+(`QMIX_STREAM_CACHE_TTL`).
 
 **Queue**
-- упорядоченный список `Track`
-- операции: добавить в конец, перейти к следующему, удалить
+- An ordered list of `Track` values
+- Supported operations: append, exact reorder, and skip to the next track
+- Arbitrary deletion is not part of the queue contract
 
 ## 6. API surface
 
 **REST**
-- `POST /rooms` — создать комнату → `{code, host_token, url}` (`url` = `/r/{code}`)
-- `GET /rooms/{code}` — состояние комнаты (текущий трек + очередь; без host_token)
-- `POST /rooms/{code}/queue` — добавить трек `{url}` в конец очереди
-- `GET /r/{code}` — гостевая страница комнаты (без логина)
-- `POST /r/{code}/queue` — добавить трек из гостевой страницы; ответ содержит
-  машиночитаемый статус для UI
-- `PATCH /rooms/{code}/queue` — переупорядочить очередь `{"order": [trackID, ...]}` (хост; точная перестановка ID)
-- `POST /rooms/{code}/skip` — следующий трек (хост)
-- `GET /rooms/{code}/current/stream` — аудио-поток текущего трека (с поддержкой Range/seek: 200 / 206 / 416; 404 если нет текущего трека)
-- `GET /healthz` — проверка живости
+- `POST /rooms` — create a room → `{code, host_token, url}` (`url` = `/r/{code}`)
+- `GET /rooms/{code}` — get public room state (`code`, `current`, and `queue`; no `host_token`)
+- `POST /rooms/{code}/queue` — append a track with `{url}`
+- `GET /r/{code}` — get the guest room page (no login)
+- `POST /r/{code}/queue` — append a track from the guest page; the response
+  includes a machine-readable status for the UI
+- `PATCH /rooms/{code}/queue` — reorder the queue with `{"order": [trackID, ...]}` (host only; exact permutation of IDs)
+- `POST /rooms/{code}/skip` — advance to the next track (host only)
+- `GET /rooms/{code}/current/stream` — stream the current track with Range/seek support: 200 / 206 / 416; 404 when there is no current track
+- `GET /healthz` — liveness check
 
-Хост-операции (skip, reorder) требуют заголовок `X-Host-Token`, выданный при создании комнаты.
+Host operations (skip and reorder) require the `X-Host-Token` header issued
+when the room is created.
 
 **SSE**
-- `GET /rooms/{code}/events` — поток событий:
-  - `queue_snapshot` — полное состояние при подключении / реконнекте (Last-Event-ID)
-  - `queue_updated` — очередь изменилась (add / reorder)
-  - `track_changed` — сменился текущий трек
-  - `player_state` — изменилось состояние плеера
+- `GET /rooms/{code}/events` — event stream:
+  - `queue_snapshot` — complete state on connection or reconnection (`Last-Event-ID`)
+  - `queue_updated` — queue changed (append or reorder)
+  - `track_changed` — current track changed
+  - `player_state` — player state changed
 
 ## 7. Plugin interfaces
 
 **Resolver** — `url → Track metadata`
 ```go
 type Resolver interface {
-    // Resolve возвращает метаданные трека по ссылке.
+    // Resolve returns track metadata for a URL.
     Resolve(ctx context.Context, url string) (*Track, error)
 }
 ```
-Реализации: VK, Яндекс Музыка, Spotify — публичные endpoint-ы без
-авторизации (Spotify oEmbed, для VK/Яндекс — best-effort og-meta
-публичной страницы, иначе честный 422); YouTube — через `yt-dlp
---dump-json`, за injectable-интерфейсом runner. Выбор по домену ссылки.
-Ссылки без анонимного пути (VK/Яндекс без публичной метаданной) и
-неизвестные домены возвращают 422 с человекочитаемой ошибкой; ошибки
-сервиса — 502. Резолвер не использует аккаунты и не выдумывает метаданные.
+Unauthenticated Spotify resolution uses oEmbed. VK and Yandex Music use
+best-effort Open Graph metadata from public pages, with an explicit 422 when
+metadata is unavailable. YouTube uses `yt-dlp --dump-json` behind an
+injectable runner interface. Resolver selection is based on the link's domain.
+Links without an anonymous resolution path (such as non-public VK or Yandex
+Music metadata) and unknown domains return 422 with a human-readable error;
+service failures return 502. The resolver neither uses user accounts nor
+fabricates metadata.
 
-Spotify дополнительно поддерживает авторизованный путь: при заданных
-`QMIX_SPOTIFY_CLIENT_ID`/`QMIX_SPOTIFY_CLIENT_SECRET` трек-ссылки
-резолвятся через Client Credentials (`accounts.spotify.com/api/token`) +
-Web API (`api.spotify.com`) — полный список артистов и длительность;
-oEmbed остаётся fallback без credentials (и для не-трек ссылок).
+Spotify also supports an authorized path. When
+`QMIX_SPOTIFY_CLIENT_ID`/`QMIX_SPOTIFY_CLIENT_SECRET` are set, track links are
+resolved through Client Credentials (`accounts.spotify.com/api/token`) and the
+Web API (`api.spotify.com`), providing the full artist list and duration. oEmbed
+remains the fallback without credentials and for non-track links.
 
-VK дополнительно поддерживает авторизованный путь (qmix#9): при заданном
-`QMIX_VK_TOKEN` audio-ссылки VK резолвятся через `audio.getById`
-(api.vk.com, v5.131, POST с токеном в теле и мобильным User-Agent
-клиента из `cmd/token-vk` — без него VK отдаёт заглушку вместо трека);
-без токена и для не-audio ссылок остаётся анонимный og-meta путь.
+VK also supports an authorized path (qmix#9). When `QMIX_VK_TOKEN` is set, VK
+audio links are resolved through `audio.getById` (api.vk.com, v5.131, POST with
+the token in the body and the mobile User-Agent of the client in `cmd/token-vk`;
+without it, VK returns a placeholder instead of the track). The anonymous Open
+Graph path remains the fallback without a token and for non-audio links.
 
-Яндекс Музыка дополнительно поддерживает авторизованный путь (qmix#10):
-при заданном `QMIX_YM_TOKEN` трек-ссылки (`/album/{a}/track/{t}` и голый
-`/track/{t}`) резолвятся через поддерживаемый клиент `goym`
-(api.music.yandex.net, `GET /tracks/{id}` — album_id не нужен); без
-токена и для не-трек ссылок остаётся анонимный og-meta путь.
+Yandex Music also supports an authorized path (qmix#10). When `QMIX_YM_TOKEN`
+is set, track links (`/album/{a}/track/{t}` and bare `/track/{t}`) are resolved
+through the maintained `goym` client (api.music.yandex.net,
+`GET /tracks/{id}`; `album_id` is not required). The anonymous Open Graph path
+remains the fallback without a token and for non-track links.
 
 **StreamBackend** — `track → audio stream`
 ```go
 type StreamBackend interface {
-    // Stream возвращает аудио-поток для трека, учитывая Range-заголовок клиента.
+    // Stream returns an audio stream for a track and honors the client's Range header.
     Stream(ctx context.Context, track *Track, rangeHeader string) (*Result, error)
 }
 
 type Result struct {
-    Body          io.ReadCloser // аудио-поток
-    ContentType   string        // MIME-тип аудио (например audio/webm)
-    Status        int           // 200 / 206 / 416 как вернуть клиенту
-    ContentLength int64         // полный размер ресурса, -1 если неизвестен
-    ContentRange  string        // "bytes start-end/total" для 206, "bytes */total" для 416
-    AcceptRanges  string        // "bytes", если апстрим поддерживает Range
+    Body          io.ReadCloser // audio stream
+    ContentType   string        // audio MIME type, for example audio/webm
+    Status        int           // 200 / 206 / 416 to return to the client
+    ContentLength int64         // complete resource size, or -1 if unknown
+    ContentRange  string        // "bytes start-end/total" for 206, "bytes */total" for 416
+    AcceptRanges  string        // "bytes" if the upstream supports Range
 }
 ```
-Реализация MVP: **yt-dlp** — по метаданным `artist - title` ищем трек на YouTube
-(`yt-dlp --skip-download --dump-json -f bestaudio "ytsearch:..."`), берём прямую
-аудио-ссылку и стримим её. Найденная ссылка кэшируется на ~5 минут
-(thread-safe, TTL, конкурентные промахи без гонок), чтобы повторные запросы
-того же трека не искали заново. Внешний вызов yt-dlp — за injectable Runner
-(как в M2), HTTP-запрос аудио — через инжектируемый http.Client.
+The MVP implementation uses **yt-dlp**. It searches YouTube using the metadata
+`artist - title` (`yt-dlp --skip-download --dump-json -f bestaudio
+"ytsearch:..."`), obtains a direct audio URL, and streams it. The resolved URL
+is cached for about five minutes (thread-safe TTL cache with race-free
+concurrent misses) so repeated requests for the same track do not repeat the
+search. The external yt-dlp invocation is behind an injectable `Runner` (as in
+M2), and audio HTTP requests use an injected `http.Client`.
 
-HTTP-прокси (`GET /rooms/{code}/current/stream`) прокидывает Range клиента на
-апстрим и воспроизводит для клиента статус и заголовки: полный поток — 200,
-удовлетворённый Range — 206 с `Content-Range`, некорректный/неудовлетворимый
-диапазон — 416; `Content-Type`, `Content-Length`, `Content-Range` и
-`Accept-Ranges` пробрасываются. Ошибки апстрима (нет ссылки — 404, сбой
-поиска/сети — 502) не превращаются в 500. Отрисовка через `stream.ServeStream`.
+The HTTP proxy (`GET /rooms/{code}/current/stream`) forwards the client's Range
+header upstream and reproduces the upstream status and headers: a complete
+stream returns 200; a satisfied Range returns 206 with `Content-Range`; and an
+invalid or unsatisfiable range returns 416. `Content-Type`, `Content-Length`,
+`Content-Range`, and `Accept-Ranges` are forwarded. Upstream errors (no link:
+404; search or network failure: 502) are not converted to 500. Responses are
+served through `stream.ServeStream`.
 
 ## 8. State management
 
-- Всё состояние — **in-memory** в одном процессе, без БД.
-- Комната живёт, пока активна; по истечении **TTL** (неактивность) удаляется.
-- SSE-подключения переживают реконнект: при подключении клиент получает
-  `queue_snapshot` с полным состоянием.
-- Потеря состояния при рестарте бэкенда допустима (MVP — эфемерные комнаты).
+- All state is held **in memory** in one process, without a database.
+- One `Store` supports multiple rooms.
+- Only empty rooms (no queued or current track) expire after their inactivity
+  **TTL**; non-empty rooms are not removed by the janitor.
+- SSE clients can reconnect; on connection they receive a `queue_snapshot`
+  containing the complete state.
+- State loss on backend restart is acceptable because MVP rooms are ephemeral.
 
 ## 9. Deployment
 
-- Один сервис: **docker-compose** с одним контейнером `backend`.
-- Контейнер собирается из `Dockerfile` (multi-stage, статический бинарник Go).
-- Порт `8080`, переменная окружения `QMIX_ADDR`.
-- Стриминг: для поиска аудио требуется **yt-dlp** — в Docker-образе он
-  включён (`apk add yt-dlp`, версия зафиксирована в `Dockerfile`); вне
-  контейнера — бинарь на PATH (или путь через `QMIX_YTDLP_BIN`). Кэш ссылок
-  настраивается через `QMIX_STREAM_CACHE_TTL` (по умолчанию `5m`;
-  отрицательное значение отключает кэш). Прокси для доступа к YouTube
-  (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) прокидываются через compose.
-- CI (GitHub Actions): gofmt + vet, build, `go test -race`, coverage-гейт ≥95%;
-  `docker`-job — сборка образа, проверка yt-dlp внутри и smoke `/healthz`;
-  отдельная `integration`-job с реальными токенами и live-тестами yt-dlp
-  (`continue-on-error`, не блокирует основной CI); `live.yml` — live-смоук
-  YouTube (реальный yt-dlp) на self-hosted раннере NAS при каждом пуше в
-  main, вручную и еженедельно (`workflow_dispatch`/`schedule`), не блокирует
-  основной CI (qmix#18).
-- Ограничения деплоя: отдельный compose-проект, `mem_limit: 512m`,
-  `restart: on-failure:3`, внешний порт `8180` (зафиксирован за qmix,
-  диапазон 8100–8199).
+- One service: **docker-compose** with one `backend` container.
+- The container is built from `Dockerfile` (multi-stage build, static Go binary).
+- Port `8080`, configured through the `QMIX_ADDR` environment variable.
+- Streaming requires **yt-dlp** for audio lookup. It is included in the Docker
+  image (`apk add yt-dlp`, with the version pinned in `Dockerfile`). Outside the
+  container, the binary must be on PATH or specified with `QMIX_YTDLP_BIN`.
+  Link-cache behavior is configured through `QMIX_STREAM_CACHE_TTL` (default
+  `5m`; a negative value disables the cache). Proxy variables used to access
+  YouTube (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) are passed through Compose.
+- CI (GitHub Actions): gofmt + vet, build, `go test -race`, and a coverage gate
+  of at least 95%. The `docker` job builds the image, checks yt-dlp inside it,
+  and smoke-tests `/healthz`. A separate `integration` job uses real tokens and
+  live yt-dlp tests (`continue-on-error`, so it does not block the main CI).
+  `live.yml` runs a live YouTube smoke test with real yt-dlp on the NAS
+  self-hosted runner for pull requests, every push to `main`, manual dispatches,
+  and a weekly schedule; it does not block the main CI (qmix#18).
+- Deployment constraints: a dedicated Compose project, `mem_limit: 512m`,
+  `restart: on-failure:3`, and external port `8180` (reserved for qmix in the
+  8100–8199 range).
 
 ## 10. Out of scope
 
-- Голосования, лайки, рейтинги треков
-- Публичные и поисковые комнаты
-- Торренты и пиринговые источники аудио
-- Аккаунты, авторизация, персональные данные
-- Офлайн-режим и кэширование на клиентах
-- Мульти-хост и перенос управления комнатой
+- Voting, likes, and track ratings
+- Public and searchable rooms
+- Torrents and peer-to-peer audio sources
+- Accounts, authentication, and personal data
+- Offline mode and client-side caching
+- Multiple hosts and transfer of room control

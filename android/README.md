@@ -1,26 +1,26 @@
-# QMix TV для Android
+# QMix for Android TV
 
-Минимальное Android TV-приложение находится в одном модуле `android/app`.
-Версию APK Gradle не вычисляет самостоятельно: при конфигурации он запускает
-`go run ./internal/buildinfo/cmd/version -format=json` из корня репозитория и
-берёт `versionName` из `version`, а `versionCode` из `androidVersionCode`.
+The minimal Android TV application is contained in the single `android/app` module.
+Gradle does not calculate the APK version itself: during configuration, it runs
+`go run ./internal/buildinfo/cmd/version -format=json` from the repository root
+and takes `versionName` from `version` and `versionCode` from `androidVersionCode`.
 
-## Зафиксированный toolchain
+## Pinned toolchain
 
 - minSdk 23, targetSdk 36, compileSdk 36;
 - JDK 17;
-- Gradle 8.13 (checked-in Wrapper с SHA-256 дистрибутива);
+- Gradle 8.13 (checked-in Wrapper with the distribution SHA-256);
 - Android Gradle Plugin 8.13.2;
 - Kotlin/Compose Compiler plugin 2.3.21;
-- Compose BOM 2026.05.01 и Compose for TV Material 1.1.0;
+- Compose BOM 2026.05.01 and Compose for TV Material 1.1.0;
 - Media3 ExoPlayer 1.11.1;
 - Android Build Tools 35.0.0.
 
-Нужны Go 1.25+, JDK 17 и Android SDK с platform 36/build-tools 35.0.0.
-Локальный `android/local.properties` при необходимости задаёт `sdk.dir` и не
-коммитится.
+Go 1.25+, JDK 17, and the Android SDK with platform 36/build-tools 35.0.0 are required.
+The local `android/local.properties` file may define `sdk.dir` if necessary and is
+not committed.
 
-## Локальные проверки
+## Local checks
 
 ```bash
 cd android
@@ -31,29 +31,29 @@ cd android
 ./gradlew --no-daemon :app:printSharedVersion
 ```
 
-Нативный smoke запускается только на Android TV emulator/device:
+Run the instrumentation suite only on an Android TV emulator/device:
 
 ```bash
 cd android
 ./gradlew --no-daemon :app:connectedDebugAndroidTest
 ```
 
-Он устанавливает APK, запускает activity через `LEANBACK_LAUNCHER`, проверяет
-начальный фокус и отправляет D-pad OK. В CI используется Android TV API 36
-(`android-tv`, x86, профиль `tv_1080p`).
+The suite installs the APK, launches the activity through `LEANBACK_LAUNCHER`,
+checks the initial focus, and sends D-pad OK. CI uses Android TV API 36
+(`android-tv`, x86, `tv_1080p` profile).
 
-## Покрытие
+## Coverage
 
-Обязательный gate — не менее 95% instruction coverage для всего bytecode пакета
-`com.qmix.tv`. Исключаются только генерируемые Android-классы `R` и
-`BuildConfig`; handwritten UI/state/domain-классы и Compose-код не исключаются.
-Отчёт объединяет JVM/Robolectric и native instrumentation coverage:
+The required gate is at least 95% instruction coverage for all bytecode in the
+`com.qmix.tv` package. Only the generated Android classes `R` and `BuildConfig`
+are excluded; handwritten UI/state/domain classes and Compose code are not.
+The report combines JVM/Robolectric and native instrumentation coverage:
 
 ```bash
 cd android
 ./gradlew --no-daemon :app:jacocoDebugCoverageVerification
 ```
 
-Команда требует подключённый emulator/device, потому что сама выполняет
-`connectedDebugAndroidTest`. HTML/XML лежат в
+The command requires a connected emulator/device because it runs
+`connectedDebugAndroidTest` itself. The HTML/XML reports are located in
 `app/build/reports/jacoco/jacocoDebugReport/`.

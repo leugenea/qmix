@@ -1,97 +1,100 @@
 # QMix
 
-Коллаборативный музыкальный плеер с мульти-сервисными бэкендами: хост запускает
-плеер на Google TV, друзья кидают ссылки из VK / Яндекс Музыки / Spotify в общую
-очередь, а бэкенд резолвит трек и стримит аудио.
+A collaborative music player supporting multiple music services: the host runs
+the player on Google TV, friends add links from VK / Yandex Music / Spotify to
+a shared queue, and the backend resolves tracks and streams audio.
 
-Мета-задача: leugenea/idea-engine#1.
+Meta issue: leugenea/idea-engine#1.
 
-## Статус
+## Status
 
-Готово:
+Completed:
 
-- **M0** — каркас: Go-скелет backend с `/healthz`, Makefile, docker-compose, CI.
-- **M1** — комната и очередь: create/get, add track, skip/reorder, SSE-события.
-- **M2** — резолвер ссылка → трек через публичные endpoints (Spotify oEmbed, честный 422 для VK/Яндекса без токена).
-- **M3** — стриминг: `yt-dlp` StreamBackend + HTTP-прокси с Range/seek и TTL-кэшем ссылок.
-- **token-vk v2** — токен api.vk.com со scope `audio` (разблокирует #9).
-- **token-ym** — мини-CLI для OAuth-токена Яндекс Музыки через device-flow, без sqlite (закрывает #12).
-- **Авторизованный резолвинг Spotify** (#8) — Client Credentials (`accounts.spotify.com/api/token`) + Web API (`api.spotify.com`); oEmbed остаётся fallback без credentials.
-- **Авторизованный резолвинг VK** (#9) — audio-ссылки VK резолвятся через `audio.getById` (api.vk.com, v5.131, мобильный User-Agent клиента из `cmd/token-vk`); без токена `QMIX_VK_TOKEN` остаётся анонимный og-meta путь.
-- **Авторизованный резолвинг Яндекс Музыки** (#10) — трек-ссылки music.yandex.ru (`/album/{a}/track/{t}` и `/track/{t}`) резолвятся через поддерживаемый клиент `goym` (api.music.yandex.net, `GET /tracks/{id}`); без токена `QMIX_YM_TOKEN` остаётся анонимный og-meta путь.
-- **Интеграционные тесты** основных сценариев — обязательная job `integration-mandatory` в CI.
-- Свежий тулчейн: Go 1.25 / alpine 3.24, compose в рамках деплой-ограничений (порт 8180, `mem_limit`, `restart: on-failure:3`).
-- **M4** — одномодульный Kotlin/Compose for TV scaffold с Media3, TV-launcher smoke и обязательным Android CI (см. [`android/README.md`](android/README.md)).
+- **M0** — foundation: Go backend scaffold with `/healthz`, Makefile, docker-compose, and CI.
+- **M1** — rooms and queues: create/get, add track, skip/reorder, and SSE events.
+- **M2** — URL-to-track resolver through public endpoints. Spotify uses oEmbed; anonymous VK and Yandex Music resolution first attempts Open Graph metadata and returns 422 if metadata is unavailable.
+- **M3** — streaming: `yt-dlp` StreamBackend plus an HTTP proxy with Range/seek support and a TTL link cache.
+- **token-vk v2** — api.vk.com token with the `audio` scope (unblocks #9).
+- **token-ym** — small CLI for obtaining a Yandex Music OAuth token through device flow, without sqlite (closes #12).
+- **Authenticated Spotify resolution** (#8) — Client Credentials (`accounts.spotify.com/api/token`) + Web API (`api.spotify.com`); oEmbed remains the fallback when credentials are absent.
+- **Authenticated VK resolution** (#9) — VK audio links are resolved through `audio.getById` (api.vk.com, v5.131, using the mobile client User-Agent from `cmd/token-vk`); without `QMIX_VK_TOKEN`, the anonymous Open Graph metadata path remains available.
+- **Authenticated Yandex Music resolution** (#10) — music.yandex.ru track links (`/album/{a}/track/{t}` and `/track/{t}`) are resolved through the maintained `goym` client (api.music.yandex.net, `GET /tracks/{id}`); without `QMIX_YM_TOKEN`, the anonymous Open Graph metadata path remains available.
+- **Integration tests** for the main scenarios — required `integration-mandatory` CI job.
+- Updated toolchain: Go 1.25 / alpine 3.24, with compose configured for deployment constraints (port 8180, `mem_limit`, `restart: on-failure:3`).
+- **M5** — guest PWA, completed in #55.
 
-Дальше:
+In progress / next:
 
-- **M5** — PWA для гостей, **M6** — Definition of Done (E2E + v0.1.0).
-- Автообновление Яндекс-токена по `QMIX_YM_REFRESH_TOKEN` (goym не поддерживает refresh штатно — отдельная задача).
+- **M4** — the single-module Kotlin/Compose for TV scaffold, Media3 playback engine, and room creation/QR flow are implemented via #71, #72, and #73. Live room synchronization and coordinated playback remain to be completed (see [`android/README.md`](android/README.md)).
+- **M6** — Definition of Done (E2E + v0.1.0).
+- Automatic Yandex token refresh through `QMIX_YM_REFRESH_TOKEN` (`goym` does not provide built-in refresh support, so this is a separate task).
 
-## Стриминг
+## Streaming
 
-Аудио для текущего трека отдаёт **StreamBackend** — по умолчанию поиск на
-YouTube через `yt-dlp`. Когда хост нажимает *skip*, трек становится текущим,
-и плеер берёт его поток с эндпоинта `GET /rooms/{code}/current/stream`.
+Audio for the current track is served by **StreamBackend**, which searches
+YouTube through `yt-dlp` by default. When the host presses *skip*, the track
+becomes current and the player retrieves its stream from
+`GET /rooms/{code}/current/stream`.
 
-Как это работает:
+How it works:
 
-1. Бэкенд по метаданным трека (`Artist - Title`) ищет на YouTube через
+1. The backend searches YouTube using the track metadata (`Artist - Title`) and
    `yt-dlp --skip-download --dump-json -f bestaudio "ytsearch:..."`.
-2. Прямая аудио-ссылка кэшируется на ~5 минут — повторные запросы того же
-   трека не ищут заново.
-3. Эндпоинт стримит аудио с поддержкой **HTTP Range/seek**: полный поток —
-   `200`, удовлетворённый диапазон — `206 Partial Content`, некорректный
-   диапазон — `416`. Заголовки `Content-Type`, `Content-Length`,
-   `Content-Range`, `Accept-Ranges` пробрасываются клиенту.
+2. The direct audio URL is cached for approximately 5 minutes, so repeated
+   requests for the same track do not trigger another search.
+3. The endpoint streams audio with **HTTP Range/seek** support: a full stream
+   returns `200`, a satisfiable range returns `206 Partial Content`, and an
+   invalid range returns `416`. The `Content-Type`, `Content-Length`,
+   `Content-Range`, and `Accept-Ranges` headers are forwarded to the client.
 
-**Требование:** на хосте, где крутится бэкенд, должен быть установлен `yt-dlp`
-в `PATH` (или путь через `QMIX_YTDLP_BIN`). В Docker-образе `yt-dlp` уже
-включён (версия зафиксирована в `Dockerfile`). Кэш настраивается через
-`QMIX_STREAM_CACHE_TTL` (по умолчанию `5m`). Если YouTube доступен только
-через прокси — задайте `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` в окружении,
-compose прокидывает их в контейнер (учитываются и yt-dlp, и HTTP-прокси
-аудио).
+**Requirement:** `yt-dlp` must be installed in `PATH` on the backend host (or
+its path must be set through `QMIX_YTDLP_BIN`). The Docker image already
+includes `yt-dlp` at the version pinned in `Dockerfile`. Configure the cache
+with `QMIX_STREAM_CACHE_TTL` (default: `5m`). If YouTube is available only
+through a proxy, set `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` in the environment;
+compose passes them to the container, where they are used by both `yt-dlp` and
+the audio HTTP proxy.
 
-## Интеграционные тесты
+## Integration tests
 
-Обязательный уровень — `make test-integration`: сценарии по HTTP на реальном
-сокете с полным `App.Handler()`, без сети и секретов:
+The required test tier is `make test-integration`: HTTP scenarios run against a
+real socket with the full `App.Handler()`, without network access or secrets:
 
 - `/healthz`;
-- жизненный цикл комнаты: create → get → add track → skip/reorder (host-токен);
-- SSE: snapshot на подключении, события мутаций, snapshot на реконнекте;
-- добавление трека через мок-resolver (неизвестная ссылка → 422);
-- стриминг через фейковый `yt-dlp` (путь через `QMIX_YTDLP_BIN`) и локальный
-  мок-апстрим с поддержкой Range: 200/206;
-- TTL: пустая комната протухает, комната с очередью живёт.
+- room lifecycle: create -> get -> add track -> skip/reorder (host token);
+- SSE: snapshot on connection, mutation events, and snapshot on reconnection;
+- adding a track through a mock resolver (unknown link -> 422);
+- streaming through a fake `yt-dlp` (configured with `QMIX_YTDLP_BIN`) and a
+  local mock upstream with Range support: 200/206;
+- TTL: an empty room expires, while a room with a queue remains active.
 
-Тесты помечены build-тегом `integration`, поэтому обычный `go test ./...` и
-coverage-гейт их не трогают. В CI идут отдельной job `integration-mandatory`.
+The tests use the `integration` build tag, so regular `go test ./...` runs and
+the coverage gate do not include them. CI runs them in the separate required
+`integration-mandatory` job.
 
-Сетевые live-сценарии (VK/Spotify/Яндекс с реальными токенами, реальный
-yt-dlp) остаются в gated-режиме: job `integration` с секретами
-(`continue-on-error`) и workflow `live.yml` на self-hosted раннере.
+Network-dependent live scenarios (VK/Spotify/Yandex with real tokens and real
+`yt-dlp`) remain gated: the `integration` job uses secrets and
+`continue-on-error`, while `live.yml` runs on a self-hosted runner.
 
-## Запуск
+## Running
 
 ```bash
 make run
 curl localhost:8080/healthz
 
-# или через docker (внешний порт 8180)
+# or with Docker (external port 8180)
 eval "$(go run ./internal/buildinfo/cmd/version -format=env)"
 export VERSION COMMIT DIRTY ANDROID_VERSION_CODE
 docker compose up --build
 curl localhost:8180/healthz
 ```
 
-## Версия сборки
+## Build version
 
-Сервер, CLI-утилиты, Docker-образ и Android APK используют одну
-SemVer-версию. `make version` печатает вычисленные `version`, `commit`,
-`dirty` и Android `versionCode`; `make build` встраивает их во все Go-бинарники.
-Правила dev/RC/stable, bump и Android-контракт описаны в
+The server, CLI utilities, Docker image, and Android APK use one SemVer version.
+`make version` prints the computed `version`, `commit`, `dirty`, and Android
+`versionCode`; `make build` embeds them in every Go binary. Dev/RC/stable rules,
+version bumps, and the Android contract are documented in
 [`docs/versioning.md`](docs/versioning.md).
 
 ```bash
@@ -102,38 +105,41 @@ make build
 ./bin/token-ym --version
 ```
 
-## Токены сервисов
+## Service tokens
 
-Авторизованный резолвинг (VK / Яндекс Музыка / Spotify) включается токенами
-сервисов. Они читаются из окружения при старте в стиле `QMIX_ADDR`:
+Authenticated resolution for VK / Yandex Music / Spotify is enabled with
+service tokens. They are read from the environment at startup, following the
+same pattern as `QMIX_ADDR`:
 
-| Переменная | Сервис | Что это |
+| Variable | Service | Description |
 |---|---|---|
-| `QMIX_VK_TOKEN` | VK | токен доступа api.vk.com (scope `audio`) |
-| `QMIX_YM_TOKEN` | Яндекс Музыка | OAuth-токен Яндекс Музыки |
-| `QMIX_SPOTIFY_CLIENT_ID` | Spotify | Client ID приложения |
-| `QMIX_SPOTIFY_CLIENT_SECRET` | Spotify | Client Secret приложения |
+| `QMIX_VK_TOKEN` | VK | api.vk.com access token (`audio` scope) |
+| `QMIX_YM_TOKEN` | Yandex Music | Yandex Music OAuth token |
+| `QMIX_SPOTIFY_CLIENT_ID` | Spotify | Application Client ID |
+| `QMIX_SPOTIFY_CLIENT_SECRET` | Spotify | Application Client Secret |
 
-Без токенов бэкенд работает в анонимном режиме (M2): Spotify — через oEmbed,
-VK / Яндекс — честный 422. Токены нужны только для авторизованных путей
-(милстоуны #8–#10).
+Without tokens, the backend operates in anonymous M2 mode: Spotify uses oEmbed;
+VK and Yandex Music first attempt Open Graph metadata and return 422 when it is
+unavailable. Tokens are required only for the authenticated paths (issues
+#8-#10).
 
-### Где взять
+### Obtaining credentials
 
-**Spotify** — создать приложение в [Spotify Developer Dashboard](https://developer.spotify.com/dashboard),
-оттуда взять Client ID и Client Secret.
+**Spotify** — create an application in the
+[Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and
+copy its Client ID and Client Secret.
 
-**VK** — токен api.vk.com со scope `audio` получается через утилиту
-`cmd/token-vk` (см. ниже) по логину (телефон или email) и паролю VK
-с подтверждением кодом (2FA-приложение / SMS / звонок).
+**VK** — obtain an api.vk.com token with the `audio` scope through the
+`cmd/token-vk` utility (see below), using a VK login (phone or email), password,
+and confirmation code (2FA application / SMS / call).
 
-**Яндекс Музыка** — токен получается через утилиту `cmd/token-ym` (см.
-ниже) по OAuth device-flow Яндекс: утилита печатает URL и код, вы
-подтверждаете в браузере.
+**Yandex Music** — obtain a token through the `cmd/token-ym` utility (see below)
+using Yandex OAuth device flow: the utility prints a URL and code for browser
+confirmation.
 
-### Как передать
+### Supplying credentials
 
-**env при старте:**
+**Environment variables at startup:**
 
 ```bash
 QMIX_VK_TOKEN=... QMIX_YM_TOKEN=... \
@@ -141,7 +147,7 @@ QMIX_SPOTIFY_CLIENT_ID=... QMIX_SPOTIFY_CLIENT_SECRET=... \
 make run
 ```
 
-**`.env`-файл** (в `.gitignore`, не коммитится):
+**`.env` file** (ignored by `.gitignore`; do not commit it):
 
 ```bash
 QMIX_VK_TOKEN=...
@@ -167,40 +173,40 @@ gh secret set QMIX_SPOTIFY_CLIENT_ID
 gh secret set QMIX_SPOTIFY_CLIENT_SECRET
 ```
 
-Секреты прокидываются в отдельную `integration`-job (см. `.github/workflows/ci.yml`),
-которая не блокирует основной CI.
+Secrets are passed to the separate `integration` job (see
+`.github/workflows/ci.yml`), which does not block the main CI workflow.
 
-Live-проверка YouTube (реальный yt-dlp с домашнего IP) идёт в отдельном
-workflow `live.yml` на self-hosted раннере `nas`: при каждом пуше в main,
-вручную (`gh workflow run live`) и еженедельно по расписанию; основной CI
-не блокирует.
+Live YouTube checks (real `yt-dlp` from a residential IP) run in the separate
+`live.yml` workflow on the self-hosted `nas` runner: on pull requests, on every
+push to `main`, manually (`gh workflow run live`), and weekly on a schedule. They
+do not block the main CI workflow.
 
-### Получение токена VK через `cmd/token-vk`
+### Obtaining a VK token with `cmd/token-vk`
 
-Утилита `cmd/token-vk` получает токен api.vk.com со scope `audio,offline`
-через password grant `oauth.vk.com/token` от имени официального клиента
-VK for Android — тот же флоу, что используют поддерживаемые VK-клиенты
-(напр. vkpymusic). Токен печатается в stdout и **ничего не сохраняет на
-диск**. Логин, пароль и код 2FA читаются из stdin (не из argv), поэтому
-пароль не попадает в shell-history.
+The `cmd/token-vk` utility obtains an api.vk.com token with the `audio,offline`
+scopes through the `oauth.vk.com/token` password grant on behalf of the official
+VK for Android client. This is the same flow used by supported VK clients such
+as vkpymusic. The token is printed to stdout and **nothing is saved to disk**.
+The login, password, and 2FA code are read from stdin rather than argv, so the
+password does not enter shell history.
 
-**Сборка и запуск:**
+**Build and run:**
 
 ```bash
 go run ./cmd/token-vk
-# или собрать бинарник:
+# or build the binary:
 go build -o bin/token-vk ./cmd/token-vk
 ./bin/token-vk
 ```
 
-Утилита последовательно запросит:
+The utility prompts for the following values in order:
 
-1. `Login (phone or email):` — логин VK (телефон или email).
-2. `Password:` — пароль от VK.
-3. Код подтверждения — утилита покажет, куда он отправлен (SMS /
-   authenticator app / звонок), при неверном коде предложит ввести ещё раз.
+1. `Login (phone or email):` — VK login (phone or email).
+2. `Password:` — VK password.
+3. Confirmation code — the utility reports where it was sent (SMS /
+   authenticator app / call) and prompts again if the code is incorrect.
 
-**Формат вывода** (машиночитаемый, построчно):
+**Output format** (machine-readable, one field per line):
 
 ```
 access_token=...
@@ -208,115 +214,114 @@ user_id=...
 expires_in=...
 ```
 
-Поле `expires_in` имеет три состояния:
+The `expires_in` field has three states:
 
-| Значение | Что сказал VK | Поведение утилиты |
+| Value | VK response | Utility behavior |
 | --- | --- | --- |
-| `0` | токен бессрочный, scope `offline` применён | тихо |
-| `>0` | токен временный, `offline` не выдан | предупреждение в stderr |
-| `unknown` | поля `expires_in` в ответе не было | предупреждение в stderr |
+| `0` | The token does not have a scheduled expiration; the `offline` scope was applied | Silent |
+| `>0` | The token is temporary; `offline` was not granted | Warning on stderr |
+| `unknown` | The response omitted `expires_in` | Warning on stderr |
 
-В password grant VK игнорирует запрошенный `scope` и возвращает
-собственную маску прав приложения, поэтому `offline` не гарантирован —
-отсюда и необходимость смотреть на фактический ответ. Состояние `unknown`
-отделено от `0` намеренно: отсутствующее поле не даёт оснований
-утверждать, что токен бессрочный.
+In the password grant flow, VK ignores the requested `scope` and returns the
+application's own permission mask, so `offline` is not guaranteed. The actual
+response must therefore be checked. The `unknown` state is intentionally
+distinct from `0`: an absent field is not evidence that a token never expires.
 
-> `expires_in=0` означает лишь отсутствие планового срока годности. Токен
-> всё равно привязан к сессии VK и может быть отозван досрочно — при смене
-> пароля, завершении сеансов в настройках безопасности или срабатывании
-> антифрода. См. [Отзыв и ротация](#отзыв-и-ротация).
+> `expires_in=0` means only that there is no scheduled expiration. The token is
+> still bound to a VK session and may be revoked early after a password change,
+> session termination in security settings, or an anti-fraud action. See
+> [Revocation and rotation](#revocation-and-rotation).
 
-Удобно для `gh secret set` или env-файла:
+For convenience, pipe the value directly to `gh secret set` or an environment
+file:
 
 ```bash
 go run ./cmd/token-vk | sed -n 's/^access_token=//p' | gh secret set QMIX_VK_TOKEN
 ```
 
-Токен печатается только в stdout и не логируется. При ошибке (неверный
-пароль, flood control, капча) утилита пишет человекочитаемое сообщение
-в stderr и завершается с ненулевым кодом. Код ответа можно переотправить,
-перезапустив утилиту.
+The token is printed only to stdout and is not logged. On errors such as an
+incorrect password, flood control, or CAPTCHA, the utility writes a
+human-readable message to stderr and exits with a nonzero status. To resubmit a
+confirmation code, restart the utility.
 
-### Получение токена Яндекс Музыки через `cmd/token-ym` (основной способ)
+### Obtaining a Yandex Music token with `cmd/token-ym`
 
-Утилита `cmd/token-ym` получает OAuth-токен Яндекс Музыки через
-**device code flow** Яндекс OAuth (`oauth.yandex.ru/device/code` +
-`oauth.yandex.ru/token`) с кредами приложения Яндекс Музыки — теми же,
-что встроены в исходники `synchro` (`remote/yandexmusic`). Ничего не
-сохраняет на диск и не логирует: токен печатается в stdout в
-машиночитаемом виде.
+The `cmd/token-ym` utility obtains a Yandex Music OAuth token through the Yandex
+OAuth **device code flow** (`oauth.yandex.ru/device/code` +
+`oauth.yandex.ru/token`) using the Yandex Music application credentials embedded
+in the `synchro` sources (`remote/yandexmusic`). It saves nothing to disk and
+logs no secrets; the token is printed to stdout in machine-readable form.
 
-**Сборка и запуск:**
+**Build and run:**
 
 ```bash
 go run ./cmd/token-ym
-# или собрать бинарник:
+# or build the binary:
 go build -o bin/token-ym ./cmd/token-ym
 ./bin/token-ym
 ```
 
-Утилита напечатает URL страницы подтверждения и `user_code`: откройте
-URL в браузере, войдите в Яндекс-аккаунт и введите код. После
-подтверждения утилита напечатает токены:
+The utility prints the confirmation page URL and a `user_code`. Open the URL in
+a browser, sign in to the Yandex account, and enter the code. After approval,
+the utility prints the tokens:
 
 ```
 access_token=...
 refresh_token=...
 ```
 
-Удобно для `gh secret set` или env-файла:
+For convenience, pipe the value directly to `gh secret set` or an environment
+file:
 
 ```bash
 go run ./cmd/token-ym | sed -n 's/^access_token=//p' | gh secret set QMIX_YM_TOKEN
 ```
 
-Токен живёт ~1 год (судя по ответу `expires_in`); для обновления
-перезапустите утилиту. При ошибке (`expired_token` — код не ввели за
-10 минут, `access_denied` — отказ на странице) утилита пишет
-человекочитаемое сообщение в stderr и завершается с ненулевым кодом.
+The token is valid for approximately one year according to the response's
+`expires_in` value; rerun the utility to obtain a new one. On errors
+(`expired_token` when the code is not entered within 10 minutes, or
+`access_denied` when access is declined on the page), the utility writes a
+human-readable message to stderr and exits with a nonzero status.
 
-### Получение токена Яндекса через `synchro` (запасной способ)
+### Obtaining a Yandex Music token through `synchro` (fallback)
 
-> Для Яндекс Музыки основной способ — `cmd/token-ym` (см. выше);
-> для VK `synchro` больше не используется (токен VK выдаёт
-> `cmd/token-vk`).
+> `cmd/token-ym` is the preferred method for Yandex Music. `synchro` is no
+> longer used for VK; obtain VK tokens with `cmd/token-vk`.
 
-Команды взяты из исходников `github.com/oklookat/synchro` (CLI `commander/cli`).
-
-**Яндекс Музыка:**
+The command comes from the `github.com/oklookat/synchro` CLI:
 
 ```bash
 synchro account add yandexmusic
 ```
 
-CLI откроет страницу Яндекс OAuth, нужно войти и ввести код; токен сохраняется
-в ту же локальную БД `synchro`.
+The CLI opens the Yandex OAuth page for sign-in and code confirmation, then
+stores the token in its local `data/data.sqlite` database. `synchro` does not
+provide a supported command for printing that token, so use `cmd/token-ym`
+unless compatibility with an existing `synchro` account is required. Direct
+database extraction is undocumented and not recommended.
 
-> Точная команда извлечения токена из БД `synchro` уточняется — CLI не имеет
-> готовой команды «показать токен»; при необходимости токен читается напрямую
-> из `data/data.sqlite` (таблица `account`, колонка `auth`).
+### Security rules
 
-### Правила безопасности
+- Tokens are **never committed** to the repository (`.env` and `.env.*` are in
+  `.gitignore`).
+- Tokens are **never logged**; their values are not written to logs or included
+  in API responses.
+- Tokens are **never included in fixtures** or test data.
+- CI receives tokens only through GitHub Secrets, never through source code.
 
-- Токены **не коммитятся** в репозиторий (`.env` и `.env.*` в `.gitignore`).
-- Токены **не логируются** — значения не выводятся в лог и не попадают в
-  ответы API.
-- Токены **не попадают в фикстуры** и тестовые данные.
-- Для CI токены передаются только через GitHub Secrets, не через код.
+### Revocation and rotation
 
-### Отзыв и ротация
+- **Spotify** — rotate credentials in the
+  [Developer Dashboard](https://developer.spotify.com/dashboard): generate a
+  new Client Secret, which invalidates the old one.
+- **VK** — terminate active sessions in VK security settings, then obtain a new
+  token through `cmd/token-vk`.
+- **Yandex** — revoke the OAuth token in Yandex ID settings under Applications /
+  Access management (the token is issued to the `qmix-token-ym` device), then
+  obtain a new token through `cmd/token-ym`.
 
-- **Spotify** — ротация в [Developer Dashboard](https://developer.spotify.com/dashboard):
-  сгенерировать новый Client Secret, старый перестанет работать.
-- **VK** — завершить активные сессии в настройках безопасности VK; новый токен
-  получить заново через `cmd/token-vk`.
-- **Яндекс** — отозвать OAuth-токен в настройках Яндекс ID (раздел
-  «Приложения» / «Управление доступом»; токен выдан устройству
-  `qmix-token-ym`); новый токен получить через `cmd/token-ym`.
+## Stack
 
-## Стек
-
-- Backend: Go, REST + SSE, состояние in-memory
-- TV-хост: Kotlin + Media3 (планируется)
-- Гости: PWA без логина (планируется)
+- Backend: Go, REST + SSE, in-memory state
+- TV host: Kotlin + Compose for TV + Media3; scaffold, playback engine, and room creation/QR are implemented, while live synchronization and coordinated playback remain in progress
+- Guests: login-free PWA (completed in #55)
