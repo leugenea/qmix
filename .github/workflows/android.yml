@@ -102,7 +102,7 @@ jobs:
             --device tv_1080p \
             > app/build/reports/qmix-tv-emulator.log 2>&1
 
-          emulator -port 5554 -avd qmixtv \
+          "$ANDROID_HOME/emulator/emulator" -port 5554 -avd qmixtv \
             -cores 2 \
             -no-window \
             -gpu swiftshader_indirect \
