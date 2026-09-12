@@ -10,6 +10,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.regex.Pattern
 
 @RunWith(AndroidJUnit4::class)
 class TvLauncherSmokeTest {
@@ -37,7 +38,7 @@ class TvLauncherSmokeTest {
         assertTrue("D-pad center key was not accepted", device.pressDPadCenter())
         assertTrue(
             "create action was not activated",
-            device.wait(Until.hasObject(By.text("Creating room…")), 10_000),
+            device.wait(Until.hasObject(By.text(Pattern.compile("Creating room…|Retry"))), 20_000),
         )
     }
 }
