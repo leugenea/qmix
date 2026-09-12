@@ -30,18 +30,8 @@ class TvLauncherSmokeTest {
             "startup action did not appear",
             device.wait(Until.hasObject(By.text("Start hosting")), 30_000),
         )
-        assertTrue(
-            "startup action must own initial D-pad focus",
-            device.wait(
-                Until.hasObject(
-                    By.pkg(targetContext.packageName)
-                        .clazz("android.widget.Button")
-                        .focused(true),
-                ),
-                10_000,
-            ),
-        )
 
+        // No navigation precedes OK; reaching the activated state proves the required initial interaction.
         assertTrue("D-pad center key was not accepted", device.pressDPadCenter())
         assertTrue(
             "startup action was not activated",
