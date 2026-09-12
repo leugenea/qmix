@@ -94,6 +94,9 @@ jobs:
       - name: TV emulator smoke and Android coverage gate
         working-directory: android
         run: |
+          export ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
+          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           mkdir -p app/build/reports
           echo no | avdmanager create avd \
             --force \
@@ -101,6 +104,9 @@ jobs:
             --package "system-images;android-36;android-tv;x86" \
             --device tv_1080p \
             > app/build/reports/qmix-tv-emulator.log 2>&1
+          avds=$("$ANDROID_HOME/emulator/emulator" -list-avds)
+          printf 'Available AVDs:\n%s\n' "$avds" >> app/build/reports/qmix-tv-emulator.log
+          grep -Fxq qmixtv <<< "$avds"
 
           "$ANDROID_HOME/emulator/emulator" -port 5554 -avd qmixtv \
             -cores 2 \
