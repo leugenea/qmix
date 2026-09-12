@@ -131,6 +131,8 @@ class Media3PlaybackInstrumentationTest {
             awaitStatus(playback, PlaybackStatus.READY)
             onMain { playback.play() }
             await { playback.state.isPlaying }
+            val playingPosition = playback.state.positionMs
+            await { playback.state.positionMs >= playingPosition + AUDIO_FOCUS_SETTLE_PLAYBACK_MS }
 
             val audioManager = fixtureContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             val listener = AudioManager.OnAudioFocusChangeListener { }
@@ -199,6 +201,10 @@ class Media3PlaybackInstrumentationTest {
     }
 
     private fun onMain(block: () -> Unit) = InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
+
+    private companion object {
+        const val AUDIO_FOCUS_SETTLE_PLAYBACK_MS = 500L
+    }
 }
 
 private data class AssetRequest(val path: String, val rangeStart: Int?)
