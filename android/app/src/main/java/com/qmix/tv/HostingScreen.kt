@@ -84,14 +84,6 @@ private fun SetupContent(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("QMix TV", fontSize = 42.sp)
-        UrlInput("Backend URL", backend, !pending) {
-            backend = it
-            onSettingsChanged(backend, origin)
-        }
-        UrlInput("Guest origin", origin, !pending) {
-            origin = it
-            onSettingsChanged(backend, origin)
-        }
         if (error != null) Text(error, color = Color(0xFFFFB4AB), modifier = Modifier.padding(12.dp))
         if (pending) Text("Creating room…", modifier = Modifier.padding(12.dp))
         FocusedButton(
@@ -100,6 +92,14 @@ private fun SetupContent(
             focusRequester = actionFocus,
             onClick = onCreate,
         )
+        UrlInput("Backend URL", backend, !pending) {
+            backend = it
+            onSettingsChanged(backend, origin)
+        }
+        UrlInput("Guest origin", origin, !pending) {
+            origin = it
+            onSettingsChanged(backend, origin)
+        }
     }
 }
 
