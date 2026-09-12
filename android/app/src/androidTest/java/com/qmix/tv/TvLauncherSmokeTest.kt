@@ -33,7 +33,11 @@ class TvLauncherSmokeTest {
         assertTrue(
             "startup action must own initial D-pad focus",
             device.wait(
-                Until.hasObject(By.text("Start hosting").focused(true)),
+                Until.hasObject(
+                    By.pkg(targetContext.packageName)
+                        .clazz("android.widget.Button")
+                        .focused(true),
+                ),
                 10_000,
             ),
         )
