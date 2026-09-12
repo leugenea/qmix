@@ -101,9 +101,9 @@ jobs:
             --package "system-images;android-36;android-tv;x86" \
             --device tv_1080p \
             > app/build/reports/qmix-tv-emulator.log 2>&1
-          printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/qmixtv.avd/config.ini"
 
           emulator -port 5554 -avd qmixtv \
+            -cores 2 \
             -no-window \
             -gpu swiftshader_indirect \
             -no-snapshot \
