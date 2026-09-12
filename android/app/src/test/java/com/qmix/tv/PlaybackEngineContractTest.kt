@@ -1,28 +1,32 @@
 package com.qmix.tv
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackEngineContractTest {
     @Test
-    fun engine_accepts_stream_and_can_stop() {
-        var playedUrl: String? = null
-        var stopped = false
-        val engine: PlaybackEngine = object : PlaybackEngine {
-            override fun play(streamUrl: String) {
-                playedUrl = streamUrl
-            }
+    fun prepare_exposes_buffering_for_track_identity() {
+        val engine = FakePlaybackEngine()
 
-            override fun stop() {
-                stopped = true
-            }
+        engine.prepare(PlaybackMedia("track-1", "https://qmix.test/current/stream"))
+
+        assertEquals("track-1", engine.state.mediaId)
+        assertEquals(PlaybackStatus.BUFFERING, engine.state.status)
+    }
+
+    private class FakePlaybackEngine : PlaybackEngine {
+        override var state = PlaybackState()
+            private set
+
+        override fun prepare(media: PlaybackMedia) {
+            state = state.copy(mediaId = media.trackId, status = PlaybackStatus.BUFFERING)
         }
 
-        engine.play("https://qmix.test/current/stream")
-        engine.stop()
-
-        assertEquals("https://qmix.test/current/stream", playedUrl)
-        assertTrue(stopped)
+        override fun play() = Unit
+        override fun pause() = Unit
+        override fun seekTo(positionMs: Long) = Unit
+        override fun release() = Unit
+        override fun addListener(listener: (PlaybackState) -> Unit) = Unit
+        override fun removeListener(listener: (PlaybackState) -> Unit) = Unit
     }
 }
