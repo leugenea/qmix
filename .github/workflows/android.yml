@@ -94,15 +94,16 @@ jobs:
       - name: TV emulator smoke and Android coverage gate
         working-directory: android
         run: |
+          mkdir -p app/build/reports
           echo no | avdmanager create avd \
             --force \
-            --name qmix-tv \
+            --name qmixtv \
             --package "system-images;android-36;android-tv;x86" \
-            --device tv_1080p
-          printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/qmix-tv.avd/config.ini"
+            --device tv_1080p \
+            > app/build/reports/qmix-tv-emulator.log 2>&1
+          printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/qmixtv.avd/config.ini"
 
-          mkdir -p app/build/reports
-          emulator -port 5554 -avd qmix-tv \
+          emulator -port 5554 -avd qmixtv \
             -no-window \
             -gpu swiftshader_indirect \
             -no-snapshot \
@@ -110,7 +111,7 @@ jobs:
             -no-boot-anim \
             -no-metrics \
             -camera-back none \
-            > app/build/reports/qmix-tv-emulator.log 2>&1 &
+            >> app/build/reports/qmix-tv-emulator.log 2>&1 &
           emulator_pid=$!
           cleanup() {
             adb -s emulator-5554 emu kill || true
