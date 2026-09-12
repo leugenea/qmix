@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">QMix</string>
-    <string name="startup_title">QMix TV</string>
-    <string name="startup_action">Start hosting</string>
-    <string name="startup_activated">Ready to host</string>
+
 </resources>

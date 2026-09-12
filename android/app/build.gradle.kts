@@ -30,6 +30,8 @@ android {
         versionCode = (sharedVersion.getValue("androidVersionCode") as Number).toInt()
         versionName = sharedVersion.getValue("version") as String
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "DEFAULT_BACKEND_URL", "\"https://qmix.example\"")
+        buildConfigField("String", "DEFAULT_GUEST_ORIGIN", "\"https://qmix.example\"")
     }
 
     buildTypes {
@@ -48,6 +50,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -100,12 +103,15 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.tv.material)
     implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.okhttp)
+    implementation(libs.zxing.core)
 
     testImplementation(libs.junit)
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.robolectric)
+    testImplementation(libs.okhttp.mockwebserver)
 
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
