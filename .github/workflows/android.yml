@@ -59,6 +59,24 @@ jobs:
           java-version: "17"
           cache: gradle
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: Free disk space for TV emulator
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/.ghcup \
+            /opt/ghc \
+            /usr/share/swift \
+            /usr/local/share/boost \
+            /usr/local/share/powershell \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/lib/android/sdk/ndk
+          available_kb=$(df --output=avail -k / | { read -r _; read -r kb; printf '%s\n' "$kb"; })
+          if (( available_kb < 15728640 )); then
+            echo "Expected at least 15 GiB free for the TV system image; found ${available_kb} KiB" >&2
+            df -h /
+            exit 1
+          fi
+          df -h /
       - name: Install pinned Android SDK
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
       - name: TV emulator smoke and Android coverage gate
@@ -68,7 +86,6 @@ jobs:
           target: android-tv
           arch: x86
           profile: tv_1080p
-          disk-size: 2048M
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: cd android && ./gradlew --no-daemon :app:jacocoDebugCoverageVerification

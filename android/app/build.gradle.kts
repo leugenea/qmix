@@ -71,6 +71,7 @@ android {
         // Toolchain and dependencies are deliberately pinned and upgraded as
         // a reviewed unit instead of changing whenever lint sees a release.
         disable += setOf(
+            "OldTargetApi",
             "AndroidGradlePluginVersion",
             "GradleDependency",
             "NewerVersionAvailable",
