@@ -56,6 +56,19 @@ class Media3PlaybackInstrumentationTest {
     }
 
     @Test
+    fun pause_before_prepare_and_release_are_safe_and_idempotent() {
+        val playback = createEngine()
+
+        onMain {
+            playback.pause()
+            playback.release()
+            playback.release()
+        }
+
+        assertEquals(PlaybackStatus.RELEASED, playback.state.status)
+    }
+
+    @Test
     fun decodes_webm_opus_to_ready_and_ended() {
         val playback = createEngine()
         prepare(playback, "opus", server.url("tone.webm"))

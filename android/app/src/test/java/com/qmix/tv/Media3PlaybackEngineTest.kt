@@ -4,6 +4,8 @@ import androidx.media3.common.C
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -158,6 +160,56 @@ class Media3PlaybackEngineTest {
     }
 
     @Test
+    fun unknown_failure_preserves_diagnostic_message_and_cause() {
+        val cause = IllegalStateException("codec vanished")
+        engine.prepare(media)
+
+        backend.emit(PlayerBackend.Event.Failed(BackendFailure.Unknown("unexpected player failure", cause)))
+
+        val error = engine.state.error!!
+        assertEquals(PlaybackErrorKind.UNKNOWN, error.kind)
+        assertEquals("unexpected player failure", error.message)
+        assertNull(error.httpResponseCode)
+        assertSame(cause, error.cause)
+        assertFalse(engine.state.isPlaying)
+    }
+
+    @Test
+    fun listener_removal_stops_future_notifications_without_affecting_other_listeners() {
+        val removedObservations = mutableListOf<PlaybackState>()
+        val retainedObservations = mutableListOf<PlaybackState>()
+        val removedListener: (PlaybackState) -> Unit = { state -> removedObservations += state }
+        engine.addListener(removedListener)
+        engine.addListener(retainedObservations::add)
+        engine.prepare(media)
+
+        engine.removeListener(removedListener)
+        backend.emit(PlayerBackend.Event.Ready(snapshot(durationMs = 1_000)))
+
+        assertEquals(listOf(PlaybackStatus.BUFFERING), removedObservations.map(PlaybackState::status))
+        assertEquals(
+            listOf(PlaybackStatus.BUFFERING, PlaybackStatus.READY),
+            retainedObservations.map(PlaybackState::status),
+        )
+    }
+
+    @Test
+    fun malformed_backend_timeline_is_sanitized_before_publication() {
+        engine.prepare(media)
+
+        backend.emit(
+            PlayerBackend.Event.Ready(
+                snapshot(positionMs = -20, durationMs = -1, isSeekable = true, isPlaying = true),
+            ),
+        )
+
+        assertEquals(0, engine.state.positionMs)
+        assertNull(engine.state.durationMs)
+        assertFalse(engine.state.isSeekable)
+        assertTrue(engine.state.isPlaying)
+    }
+
+    @Test
     fun stale_callbacks_after_media_switch_are_ignored() {
         engine.prepare(media)
         val stale = backend.listeners.single()
@@ -212,6 +264,24 @@ class Media3PlaybackEngineTest {
 
         assertEquals(1, backend.releaseCount)
         assertEquals(PlaybackStatus.RELEASED, engine.state.status)
+    }
+
+    @Test
+    fun released_engine_rejects_prepare_and_ignores_remaining_commands_and_listeners() {
+        val observed = mutableListOf<PlaybackState>()
+        engine.release()
+
+        engine.play()
+        engine.pause()
+        engine.seekTo(10)
+        engine.addListener(observed::add)
+        val failure = assertThrows(IllegalStateException::class.java) { engine.prepare(media) }
+
+        assertEquals("PlaybackEngine is released", failure.message)
+        assertEquals(0, backend.playCount)
+        assertEquals(0, backend.pauseCount)
+        assertTrue(backend.seeks.isEmpty())
+        assertTrue(observed.isEmpty())
     }
 
     @Test

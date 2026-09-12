@@ -184,18 +184,24 @@ private inline fun onMainPlaybackThread(block: () -> Unit) {
     block()
 }
 
-private fun PlaybackException.toBackendFailure(): BackendFailure {
+internal fun PlaybackException.toBackendFailure(): BackendFailure {
     val response = findCause<HttpDataSource.InvalidResponseCodeException>()
     if (response != null) {
+        val resolvedMessage = message ?: "Media3 playback error $errorCode"
         return if (response.responseCode == 416) {
-            BackendFailure.Range(messageOrFallback(), responseCode = 416, cause = this)
+            BackendFailure.Range(resolvedMessage, responseCode = 416, cause = this)
         } else {
-            BackendFailure.Http(response.responseCode, messageOrFallback(), this)
+            BackendFailure.Http(response.responseCode, resolvedMessage, this)
         }
     }
+    return toBackendFailure(errorCode, message, this)
+}
+
+internal fun toBackendFailure(errorCode: Int, message: String?, cause: Throwable): BackendFailure {
+    val resolvedMessage = message ?: "Media3 playback error $errorCode"
     return when (errorCode) {
         PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE ->
-            BackendFailure.Range(messageOrFallback(), cause = this)
+            BackendFailure.Range(resolvedMessage, cause = cause)
         PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
         PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
         PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
@@ -205,17 +211,17 @@ private fun PlaybackException.toBackendFailure(): BackendFailure {
         PlaybackException.ERROR_CODE_DECODING_FAILED,
         PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
         PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ->
-            BackendFailure.Decode(messageOrFallback(), this)
+            BackendFailure.Decode(resolvedMessage, cause)
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
         PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
         PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
         PlaybackException.ERROR_CODE_IO_NO_PERMISSION ->
-            BackendFailure.Network(messageOrFallback(), this)
-        else -> if (findCause<IOException>() != null) {
-            BackendFailure.Network(messageOrFallback(), this)
+            BackendFailure.Network(resolvedMessage, cause)
+        else -> if (cause.findCause<IOException>() != null) {
+            BackendFailure.Network(resolvedMessage, cause)
         } else {
-            BackendFailure.Unknown(messageOrFallback(), this)
+            BackendFailure.Unknown(resolvedMessage, cause)
         }
     }
 }
@@ -228,5 +234,3 @@ private inline fun <reified T : Throwable> Throwable.findCause(): T? {
     }
     return null
 }
-
-private fun PlaybackException.messageOrFallback() = message ?: "Media3 playback error $errorCode"
