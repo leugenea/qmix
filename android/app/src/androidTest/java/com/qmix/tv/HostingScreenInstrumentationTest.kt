@@ -1,5 +1,6 @@
 package com.qmix.tv
 
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -7,8 +8,9 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.pressKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -33,7 +35,8 @@ class HostingScreenInstrumentationTest {
             )
         }
 
-        composeRule.onNodeWithText("Create room").assertIsFocused().assertIsEnabled().performClick()
+        composeRule.onNodeWithText("Create room").assertIsFocused().assertIsEnabled()
+            .performKeyInput { pressKey(Key.Enter) }
         composeRule.onNodeWithContentDescription("Backend URL")
             .performTextReplacement("https://api.example")
         composeRule.onNodeWithContentDescription("Backend URL")
@@ -83,7 +86,8 @@ class HostingScreenInstrumentationTest {
         }
 
         composeRule.onNodeWithText("The server timed out. Try again.").assertExists()
-        composeRule.onNodeWithText("Retry").assertIsFocused().assertIsEnabled().performClick()
+        composeRule.onNodeWithText("Retry").assertIsFocused().assertIsEnabled()
+            .performKeyInput { pressKey(Key.Enter) }
         composeRule.runOnIdle { assertEquals(1, retries) }
     }
 
@@ -103,7 +107,8 @@ class HostingScreenInstrumentationTest {
         composeRule.onNodeWithText("Join this room").assertExists()
         composeRule.onNodeWithText("ABCD").assertExists()
         composeRule.onNodeWithText("https://guest.example/r/ABCD").assertExists()
-        composeRule.onNodeWithText("Enter room").assertIsFocused().performClick()
+        composeRule.onNodeWithText("Enter room").assertIsFocused()
+            .performKeyInput { pressKey(Key.Enter) }
         composeRule.runOnIdle { assertEquals(1, entered) }
     }
 
