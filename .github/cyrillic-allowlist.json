@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "ignored_paths": [
+    {
+      "path": ".ua/knowledge-graph.json",
+      "reason": "Generated Understand Anything metadata; .ua/config.json requires future output in English."
+    }
+  ],
+  "allowed_lines": []
+}

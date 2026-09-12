@@ -1,83 +1,85 @@
-# Версии и build metadata
+# Versions and build metadata
 
-QMix выпускает сервер, CLI-утилиты, Docker-образ и будущий Android APK как
-один совместимый набор. У компонентов нет независимых версий.
+QMix ships the server, CLI utilities, Docker image, and Android APK as a single
+compatible set. The components do not have independent versions.
 
-## Источник версии
+## Version source
 
-Релиз задаётся единственным тегом на коммите:
+A release is defined by exactly one tag on the commit:
 
-- stable: `vMAJOR.MINOR.PATCH`, например `v0.2.0`;
-- release candidate: `vMAJOR.MINOR.PATCH-rc.N`, где `N` — число от 1 до
-  9998 без ведущих нулей, например `v0.2.0-rc.1`.
+- stable: `vMAJOR.MINOR.PATCH`, for example `v0.2.0`;
+- release candidate: `vMAJOR.MINOR.PATCH-rc.N`, where `N` is a number from 1 to
+  9998 without leading zeros, for example `v0.2.0-rc.1`.
 
-Числа `MAJOR`, `MINOR` и `PATCH` следуют SemVer 2.0 и не имеют ведущих нулей.
-Build metadata (`+...`) и prerelease-формы, отличные от `rc.N`, в release-тегах
-QMix не используются: это сохраняет однозначное монотонное отображение в
-Android `versionCode`. На одном release-коммите должен быть ровно один тег.
-Malformed tag, несколько тегов на `HEAD`, dirty tree у release-тега и
-несогласованные встроенные поля приводят к ошибке сборки или `--version`.
+The `MAJOR`, `MINOR`, and `PATCH` numbers follow SemVer 2.0 and have no leading
+zeros. QMix release tags do not use build metadata (`+...`) or prerelease forms
+other than `rc.N`; this preserves an unambiguous, monotonic mapping to the
+Android `versionCode`. A release commit must have exactly one tag. A malformed
+tag, multiple tags on `HEAD`, a dirty tree at a release tag, or inconsistent
+embedded fields cause the build or `--version` to fail.
 
-Нетегированная сборка имеет вид
-`0.0.0-dev.<12-hex-commit>[.dirty]`. Полный 40-символьный commit и `dirty`
-также присутствуют отдельными полями. Timestamp не используется, поэтому
-одинаковые входы дают одинаковую metadata.
+An untagged build has the form
+`0.0.0-dev.<12-hex-commit>[.dirty]`. The full 40-character commit and `dirty`
+status are also present as separate fields. No timestamp is used, so identical
+inputs produce identical metadata.
 
-Единственный вычислитель контракта:
+The single contract calculator is:
 
 ```bash
 # JSON: version, commit, dirty, androidVersionCode
 make version
-# те же значения как linker flags
+# The same values as linker flags
 go run ./internal/buildinfo/cmd/version -format=ldflags
-# shell-переменные для Docker/CI
+# Shell variables for Docker/CI
 go run ./internal/buildinfo/cmd/version -format=env
 ```
 
-`make build` встраивает эти значения через Go linker flags во все три бинаря.
-`qmix --version`, `token-vk --version` и `token-ym --version` печатают одну
-строку JSON с одинаковой схемой, например:
+`make build` embeds these values through Go linker flags in all three binaries.
+`qmix --version`, `token-vk --version`, and `token-ym --version` print one line
+of JSON with the same schema, for example:
 
 ```json
 {"version":"0.2.0-rc.1","commit":"0123456789abcdef0123456789abcdef01234567","dirty":false,"androidVersionCode":2000001}
 ```
 
-Бинарники не читают `.git` во время выполнения.
+The binaries do not read `.git` at runtime.
 
-## Android-контракт для #56
+## Android version contract
 
-Android build обязан получать оба значения только из вывода общего
-вычислителя:
+The Android build must obtain both values only from the output of the shared
+calculator:
 
-- `versionName = version` (без префикса `v`);
+- `versionName = version` (without the `v` prefix);
 - `versionCode = MAJOR*100000000 + MINOR*1000000 + PATCH*10000 + STAGE`;
-- `STAGE = N` для `rc.N`, `STAGE = 9999` для stable;
-- локальная dev-сборка получает `versionCode = 1` и не публикуется.
+- `STAGE = N` for `rc.N`, `STAGE = 9999` for stable;
+- a local development build gets `versionCode = 1` and is not published.
 
-Допустимые диапазоны: `MAJOR 0..20`, `MINOR/PATCH 0..99`, `rc.N 1..9998`.
-Таким образом, `rc.1 < rc.2 < stable`, а bump patch/minor/major всегда больше
-предыдущей версии. Максимальный код — `2099999999`, ниже лимита Google Play
-`2100000000`. В Android Gradle-файлах нельзя заводить отдельную константу
-версии или вычислять код повторно: #56 должен вызвать этот механизм и
-передать полученные поля в `versionName`/`versionCode`.
+The allowed ranges are `MAJOR 0..20`, `MINOR/PATCH 0..99`, and `rc.N 1..9998`.
+Thus, `rc.1 < rc.2 < stable`, and a patch, minor, or major bump is always greater
+than the previous version. The maximum code is `2099999999`, below the Google
+Play limit of `2100000000`. Android Gradle files must not define a separate
+version constant or recalculate the code; they invoke this mechanism and pass
+the resulting fields to `versionName`/`versionCode`.
 
-## Bump, RC и stable
+## Bump, RC, and stable
 
-1. Выберите следующий `MAJOR.MINOR.PATCH`: PATCH для совместимого исправления,
-   MINOR для обратно совместимой функции, MAJOR для несовместимого изменения.
-2. Убедитесь, что рабочее дерево чистое и нужный commit находится в основной
-   линии разработки.
-3. Для приёмки поставьте `vX.Y.Z-rc.1`; последующие кандидаты увеличивают только
-   `N`. Не переносите существующий тег.
-4. Stable — новый тег `vX.Y.Z` на принятом коммите. RC-тег не переименовывается.
-5. Перед публикацией сравните JSON `--version` всех бинарей и OCI labels образа
-   с тегом и commit. Публикация артефактов остаётся задачей #67.
+1. Choose the next `MAJOR.MINOR.PATCH`: PATCH for a compatible fix, MINOR for a
+   backward-compatible feature, and MAJOR for an incompatible change.
+2. Ensure that the working tree is clean and the required commit is on the main
+   development line.
+3. For acceptance testing, tag `vX.Y.Z-rc.1`; subsequent candidates increment
+   only `N`. Do not move an existing tag.
+4. Stable is a new `vX.Y.Z` tag on the accepted commit. The RC tag is not
+   renamed.
+5. Before publication, compare the JSON from `--version` for all binaries and
+   the image OCI labels with the tag and commit. Artifact publication remains
+   tracked in #67.
 
-Docker принимает обязательные build args `VERSION`, `COMMIT`, `DIRTY` и
-`ANDROID_VERSION_CODE`, встраивает их в бинарник и проверяет его во время
-сборки. Финальный образ содержит OCI labels
-`org.opencontainers.image.version`, `org.opencontainers.image.revision` и
-`org.opencontainers.image.source`. Локальная/CI-проверка:
+Docker accepts the required build args `VERSION`, `COMMIT`, `DIRTY`, and
+`ANDROID_VERSION_CODE`, embeds them in the binary, and verifies it during the
+build. The final image contains the OCI labels
+`org.opencontainers.image.version`, `org.opencontainers.image.revision`, and
+`org.opencontainers.image.source`. To verify locally or in CI:
 
 ```bash
 .github/scripts/test_docker_metadata.sh qmix:metadata-test
