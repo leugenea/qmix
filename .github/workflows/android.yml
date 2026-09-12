@@ -77,8 +77,14 @@ jobs:
             exit 1
           fi
           df -h /
-      - name: Install pinned Android SDK
-        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Install Android TV emulator SDK
+        run: |
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;35.0.0" \
+            "platform-tools" \
+            "emulator" \
+            "system-images;android-36;android-tv;x86"
       - name: Enable KVM acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -86,15 +92,42 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: TV emulator smoke and Android coverage gate
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
-        with:
-          api-level: 36
-          target: android-tv
-          arch: x86
-          profile: tv_1080p
-          disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics -camera-back none
-          script: cd android && ./gradlew --no-daemon :app:jacocoDebugCoverageVerification
+        working-directory: android
+        run: |
+          echo no | avdmanager create avd \
+            --force \
+            --name qmix-tv \
+            --package "system-images;android-36;android-tv;x86" \
+            --device tv_1080p
+          printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/qmix-tv.avd/config.ini"
+
+          mkdir -p app/build/reports
+          emulator -port 5554 -avd qmix-tv \
+            -no-window \
+            -gpu swiftshader_indirect \
+            -no-snapshot \
+            -noaudio \
+            -no-boot-anim \
+            -no-metrics \
+            -camera-back none \
+            > app/build/reports/qmix-tv-emulator.log 2>&1 &
+          emulator_pid=$!
+          cleanup() {
+            adb -s emulator-5554 emu kill || true
+            wait "$emulator_pid" || true
+          }
+          trap cleanup EXIT
+
+          timeout 600 bash -c '
+            until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null)" == "1" ]] \
+              && adb -s emulator-5554 shell service check input 2>/dev/null | grep -q "found"; do
+              sleep 2
+            done
+          '
+          adb -s emulator-5554 shell settings put global window_animation_scale 0.0
+          adb -s emulator-5554 shell settings put global transition_animation_scale 0.0
+          adb -s emulator-5554 shell settings put global animator_duration_scale 0.0
+          ./gradlew --no-daemon :app:jacocoDebugCoverageVerification
       - name: Upload instrumentation and coverage reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -104,4 +137,5 @@ jobs:
             android/app/build/outputs/androidTest-results/connected/
             android/app/build/reports/androidTests/connected/
             android/app/build/reports/jacoco/jacocoDebugReport/
+            android/app/build/reports/qmix-tv-emulator.log
           if-no-files-found: error
