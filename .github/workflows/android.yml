@@ -94,9 +94,15 @@ jobs:
       - name: TV emulator smoke and Android coverage gate
         working-directory: android
         run: |
-          export ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
+          export ANDROID_USER_HOME="$HOME/.android"
           export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
           mkdir -p "$ANDROID_AVD_HOME"
+          if [[ ! -f "$ANDROID_USER_HOME/adbkey" ]]; then
+            adb keygen "$ANDROID_USER_HOME/adbkey"
+          fi
+          chmod 600 "$ANDROID_USER_HOME/adbkey" "$ANDROID_USER_HOME/adbkey.pub"
+          export ADB_VENDOR_KEYS="$ANDROID_USER_HOME"
+          adb start-server
           mkdir -p app/build/reports
           echo no | avdmanager create avd \
             --force \
