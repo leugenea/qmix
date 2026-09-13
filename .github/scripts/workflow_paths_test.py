@@ -265,6 +265,20 @@ class WorkflowPathsTest(unittest.TestCase):
         )
         self.assertEqual(result.stdout.strip(), "37.1.11.0")
 
+    def test_android_system_image_revision_comes_from_source_properties(self):
+        program = '$1 == "Pkg.Revision" {print $2; exit}'
+        text = (WORKFLOW_DIR / "android.yml").read_text()
+        self.assertIn("source.properties", text)
+        self.assertIn(program, text)
+        result = subprocess.run(
+            ["awk", "-F=", program],
+            input="Pkg.Desc=Android TV Intel x86 Atom System Image\nPkg.Revision=4\n",
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        self.assertEqual(result.stdout.strip(), "4")
+
     def test_android_avd_cache_key_covers_every_compatibility_input(self):
         text = (WORKFLOW_DIR / "android.yml").read_text()
         for value in (
