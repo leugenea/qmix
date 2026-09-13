@@ -236,3 +236,79 @@ func TestResolver_VKYandexAllowsRedirectWithinServiceFamily(t *testing.T) {
 		t.Fatalf("requests = %d, want 2", requests)
 	}
 }
+
+func TestResolver_DomainOfRejectsAdditionalMalformedHostnames(t *testing.T) {
+	longLabel := strings.Repeat("a", 64)
+	longHost := strings.Repeat("a.", 126) + "aaa"
+	for _, rawURL := range []string{
+		"https://" + longLabel + ".spotify.com/track/abc",
+		"https://" + longHost + "/track/abc",
+		"https://open_spotify.com/track/abc",
+		"https://spotify-.com/track/abc",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			if _, err := DomainOf(rawURL); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("DomainOf(%q) error = %v, want ErrInvalid", rawURL, err)
+			}
+		})
+	}
+
+	if host, err := DomainOf("https://127.0.0.1/path"); err != nil || host != "127.0.0.1" {
+		t.Fatalf("DomainOf(valid IP) = %q, %v", host, err)
+	}
+}
+
+func TestResolver_VKYandexKeepsAuthorityLikePathAndQueryOnApprovedOrigin(t *testing.T) {
+	client := &http.Client{Transport: securityRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "vk.com" {
+			t.Fatalf("request host = %q, want vk.com", req.URL.Host)
+		}
+		if req.URL.Path != "//evil.example/path" {
+			t.Fatalf("request path = %q, want //evil.example/path", req.URL.Path)
+		}
+		if req.URL.Query().Get("next") != "http://127.0.0.1/admin" {
+			t.Fatalf("request query = %q", req.URL.RawQuery)
+		}
+		return htmlResponse(req, `<meta property="og:title" content="Track">`), nil
+	})}
+	resolver := &VKYandex{Client: client}
+
+	if _, err := resolver.Resolve(context.Background(), "https://m.vk.com//evil.example/path?next=http://127.0.0.1/admin"); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+}
+
+func TestResolver_VKYandexPreservesCustomRedirectPolicyWithoutMutatingClient(t *testing.T) {
+	customCalls := 0
+	customRedirect := func(*http.Request, []*http.Request) error {
+		customCalls++
+		return http.ErrUseLastResponse
+	}
+	client := &http.Client{
+		Transport: securityRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"https://m.vk.com/next"}},
+				Body:       io.NopCloser(strings.NewReader("redirect")),
+				Request:    req,
+			}, nil
+		}),
+		CheckRedirect: customRedirect,
+	}
+	resolver := &VKYandex{Client: client}
+
+	_, err := resolver.Resolve(context.Background(), "https://vk.com/start")
+	if !errors.Is(err, ErrNoAnonymous) {
+		t.Fatalf("resolve error = %v, want ErrNoAnonymous after ErrUseLastResponse", err)
+	}
+	if customCalls != 1 {
+		t.Fatalf("custom redirect calls = %d, want 1", customCalls)
+	}
+
+	if err := client.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("original redirect policy changed: %v", err)
+	}
+	if customCalls != 2 {
+		t.Fatalf("original client no longer owns custom policy; calls = %d", customCalls)
+	}
+}
