@@ -313,13 +313,11 @@ class WorkflowPathsTest(unittest.TestCase):
         self.assertLess(text.index("name: Prepare clean AVD snapshot"), text.index("name: TV emulator smoke and Android coverage gate"))
         self.assertLess(text.index("name: TV emulator smoke and Android coverage gate"), text.index("uses: actions/cache/save@"))
 
-    def test_android_snapshot_inspection_is_headless(self):
+    def test_android_snapshot_inspection_uses_cached_files(self):
         text = (WORKFLOW_DIR / "android.yml").read_text()
-        command = (
-            '"$ANDROID_HOME/emulator/emulator" -avd "$AVD_NAME" '
-            '-no-window -noaudio -snapshot-list'
-        )
-        self.assertEqual(text.count(command), 2)
+        snapshot_dir = '"$ANDROID_AVD_HOME/$AVD_NAME.avd/snapshots/$AVD_SNAPSHOT_NAME"'
+        self.assertEqual(text.count(f"test -d {snapshot_dir}"), 2)
+        self.assertNotIn("-snapshot-list", text)
 
     def test_android_avd_cache_preserves_tv_gate_and_diagnostics(self):
         text = (WORKFLOW_DIR / "android.yml").read_text()
@@ -330,7 +328,7 @@ class WorkflowPathsTest(unittest.TestCase):
             "service check input",
             "get-state",
             "debug.qmix.snapshot_rev",
-            "-snapshot-list",
+            '"$ANDROID_AVD_HOME/$AVD_NAME.avd/snapshots/$AVD_SNAPSHOT_NAME"',
             ":app:jacocoDebugCoverageVerification",
             "if: always()",
             "qmix-tv-emulator.log",
