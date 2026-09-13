@@ -241,7 +241,7 @@ jobs:
           adb -s emulator-5554 emu avd snapshot save "$AVD_SNAPSHOT_NAME"
           cleanup
           trap - EXIT
-          "$ANDROID_HOME/emulator/emulator" -avd "$AVD_NAME" -snapshot-list \
+          "$ANDROID_HOME/emulator/emulator" -avd "$AVD_NAME" -no-window -noaudio -snapshot-list \
             | grep -Fq "$AVD_SNAPSHOT_NAME"
           printf 'snapshot-prep-seconds=%s\n' "$(( $(date +%s) - prep_start ))" \
             >> app/build/reports/qmix-tv-timings.log
@@ -266,7 +266,7 @@ jobs:
           avds=$("$ANDROID_HOME/emulator/emulator" -list-avds)
           printf 'Available AVDs:\n%s\n' "$avds" >> app/build/reports/qmix-tv-emulator.log
           grep -Fxq "$AVD_NAME" <<< "$avds"
-          "$ANDROID_HOME/emulator/emulator" -avd "$AVD_NAME" -snapshot-list \
+          "$ANDROID_HOME/emulator/emulator" -avd "$AVD_NAME" -no-window -noaudio -snapshot-list \
             | tee -a app/build/reports/qmix-tv-emulator.log \
             | grep -Fq "$AVD_SNAPSHOT_NAME"
 
