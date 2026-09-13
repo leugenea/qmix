@@ -5,19 +5,53 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 # The "Tests*" check runs (qmix#47) are published by dorny/test-reporter,
 # which needs the checks API; everything else stays read-only.
 permissions:
   contents: read
   checks: write
 jobs:
-  ci:
+  route:
+    runs-on: ubuntu-latest
+    outputs:
+      ci: ${{ steps.paths.outputs.ci }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - id: paths
+        name: Route changed paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            printf 'ci=true\nandroid=true\nlive=true\n' >> "$GITHUB_OUTPUT"
+          elif git diff --no-renames --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"; then
+            python3 .github/scripts/workflow_paths.py \
+              < "$RUNNER_TEMP/changed-paths" >> "$GITHUB_OUTPUT"
+          else
+            printf 'ci=true\nandroid=true\nlive=true\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  policy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Repository language policy
-        run: make test-cyrillic check-cyrillic
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Repository policy and routing tests
+        run: make test-workflow-routing test-cyrillic check-cyrillic
+
+  ci:
+    needs: route
+    if: needs.route.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.25"
       - name: Lint (gofmt + vet)
@@ -38,7 +72,7 @@ jobs:
           python3 .github/scripts/test_summary.py unit.xml "### Tests: ci" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish test report
         if: always()
-        uses: mikepenz/action-junit-report@v6.5.0
+        uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
         with:
           check_name: Tests
           report_paths: 'unit.xml'
@@ -56,10 +90,12 @@ jobs:
   # upstream, TTL) over HTTP on a real socket with the full App handler.
   # No network or secrets are required, so this job must stay green.
   integration-mandatory:
+    needs: route
+    if: needs.route.outputs.ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.25"
       # Args mirror `make test-integration`; gotestsum adds the JUnit report
@@ -74,7 +110,7 @@ jobs:
           python3 .github/scripts/test_summary.py integration.xml "### Tests: integration-mandatory" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish test report
         if: always()
-        uses: mikepenz/action-junit-report@v6.5.0
+        uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
         with:
           check_name: Tests (integration-mandatory)
           report_paths: 'integration.xml'
@@ -87,11 +123,13 @@ jobs:
   # blocking the main CI. (The yt-dlp live stream test is gated locally via
   # QMIX_STREAM_LIVE and skips here since runners can't reach YouTube.)
   integration:
+    needs: route
+    if: needs.route.outputs.ci == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.25"
       # gotestsum adds the JUnit report for the "Tests" check (qmix#47); the
@@ -111,7 +149,7 @@ jobs:
           python3 .github/scripts/test_summary.py integration-gated.xml "### Tests: integration (gated)" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish test report
         if: always()
-        uses: mikepenz/action-junit-report@v6.5.0
+        uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
         with:
           check_name: Tests (integration-gated)
           report_paths: 'integration-gated.xml'
@@ -123,10 +161,12 @@ jobs:
   # /healthz. Runners cannot reach YouTube, so actual streaming stays
   # gated locally (qmix#16).
   docker:
+    needs: route
+    if: needs.route.outputs.ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.25"
       - name: Build image and verify metadata
@@ -158,3 +198,30 @@ jobs:
       - name: Image size
         run: |
           docker image inspect qmix:ci --format 'image size: {{.Size}} bytes'
+
+  result:
+    if: always()
+    needs: [route, policy, ci, integration-mandatory, integration, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        env:
+          ROUTE_RESULT: ${{ needs.route.result }}
+          ROUTE_OUTPUT: ${{ needs.route.outputs.ci }}
+          POLICY_RESULT: ${{ needs.policy.result }}
+          CI_RESULT: ${{ needs.ci.result }}
+          INTEGRATION_RESULT: ${{ needs.integration-mandatory.result }}
+          OPTIONAL_INTEGRATION_RESULT: ${{ needs.integration.result }}
+          DOCKER_RESULT: ${{ needs.docker.result }}
+        run: |
+          [[ "$ROUTE_RESULT" == success && "$POLICY_RESULT" == success ]]
+          if [[ "$ROUTE_OUTPUT" == true ]]; then
+            expected=success
+          elif [[ "$ROUTE_OUTPUT" == false ]]; then
+            expected=skipped
+          else
+            exit 1
+          fi
+          for result in "$CI_RESULT" "$INTEGRATION_RESULT" "$OPTIONAL_INTEGRATION_RESULT" "$DOCKER_RESULT"; do
+            [[ "$result" == "$expected" ]] || exit 1
+          done
