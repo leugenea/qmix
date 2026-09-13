@@ -249,21 +249,19 @@ class WorkflowPathsTest(unittest.TestCase):
             with self.subTest(filename=filename, route_result="failure"):
                 self.assertNotEqual(completed.returncode, 0)
 
-    def test_android_emulator_version_parser_accepts_hosted_log_prefix(self):
-        program = (
-            "/Android emulator version / "
-            '{for (i=1; i<=NF; i++) if ($i == "version") {print $(i+1); exit}}'
-        )
+    def test_android_emulator_revision_comes_from_source_properties(self):
+        program = '$1 == "Pkg.Revision" {print $2; exit}'
         text = (WORKFLOW_DIR / "android.yml").read_text()
+        self.assertIn('$ANDROID_HOME/emulator/source.properties', text)
         self.assertIn(program, text)
         result = subprocess.run(
-            ["awk", program],
-            input="INFO         | Android emulator version 37.1.11.0 (build_id 15917651)\n",
+            ["awk", "-F=", program],
+            input="Pkg.Desc=Android Emulator\nPkg.Revision=37.1.11\n",
             capture_output=True,
             check=True,
             text=True,
         )
-        self.assertEqual(result.stdout.strip(), "37.1.11.0")
+        self.assertEqual(result.stdout.strip(), "37.1.11")
 
     def test_android_system_image_revision_comes_from_source_properties(self):
         program = '$1 == "Pkg.Revision" {print $2; exit}'
