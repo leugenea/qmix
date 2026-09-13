@@ -70,3 +70,8 @@
 .ua/
 go.sum
 .claude/
+
+# --- Added by main session: binary/vendored artifacts, not architecture ---
+android/app/src/androidTest/assets/
+android/gradle/wrapper/gradle-wrapper.jar
+android/gradle/verification-metadata.xml
