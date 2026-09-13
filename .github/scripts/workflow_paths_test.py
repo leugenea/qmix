@@ -89,14 +89,20 @@ class WorkflowPathsTest(unittest.TestCase):
 
     def test_each_workflow_has_routing_and_a_stable_result(self):
         routed_jobs = {
-            "ci.yml": ("ci", "integration-mandatory", "docker"),
-            "android.yml": ("android-build", "android-tv-instrumentation"),
-            "live.yml": ("live-nas",),
+            "ci.yml": ("CI result", ("ci", "integration-mandatory", "docker")),
+            "android.yml": (
+                "Android result",
+                ("android-build", "android-tv-instrumentation"),
+            ),
+            "live.yml": ("Live result", ("live-nas",)),
         }
-        for filename, jobs in routed_jobs.items():
+        for filename, (result_name, jobs) in routed_jobs.items():
             text = (WORKFLOW_DIR / filename).read_text()
             self.assertRegex(text, r"(?m)^  route:\n")
-            self.assertRegex(text, r"(?m)^  result:\n    if: always\(\)")
+            self.assertRegex(
+                text,
+                rf"(?m)^  result:\n    name: {re.escape(result_name)}\n    if: always\(\)",
+            )
             for job in jobs:
                 with self.subTest(path=filename, job=job):
                     match = re.search(

@@ -167,6 +167,7 @@ jobs:
           docker image inspect qmix:ci --format 'image size: {{.Size}} bytes'
 
   result:
+    name: CI result
     if: always()
     needs: [route, policy, ci, integration-mandatory, docker]
     runs-on: ubuntu-latest

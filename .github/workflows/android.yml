@@ -197,6 +197,7 @@ jobs:
           if-no-files-found: error
 
   result:
+    name: Android result
     if: always()
     needs: [route, android-build, android-tv-instrumentation]
     runs-on: ubuntu-latest

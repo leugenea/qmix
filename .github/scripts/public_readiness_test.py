@@ -95,7 +95,9 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         ci = read(".github/workflows/ci.yml")
         self.assertNotIn("secrets.", ci)
         self.assertNotRegex(ci, r"(?m)^  integration:\n")
-        self.assertRegex(ci, r"(?m)^  result:\n    if: always\(\)")
+        self.assertRegex(
+            ci, r"(?m)^  result:\n    name: CI result\n    if: always\(\)"
+        )
 
         trusted = read(".github/workflows/service-integration.yml")
         trigger = trusted.split("\nconcurrency:", 1)[0]
