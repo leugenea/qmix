@@ -49,9 +49,13 @@ class HostingScreenTest {
             .performTextReplacement("https://api.example")
         composeRule.onNodeWithContentDescription("Backend URL")
             .assertTextContains("https://api.example")
+        composeRule.onNodeWithContentDescription("Guest origin")
+            .performTextReplacement("https://join.example")
+        composeRule.onNodeWithContentDescription("Guest origin")
+            .assertTextContains("https://join.example")
         composeRule.runOnIdle {
             assertEquals("https://api.example", backend)
-            assertEquals("https://guest.example", origin)
+            assertEquals("https://join.example", origin)
             assertEquals(1, creates)
         }
     }
@@ -69,10 +73,13 @@ class HostingScreenTest {
 
         composeRule.onNodeWithText("Creating room…").assertExists()
         composeRule.onNodeWithText("Create room").assertIsNotEnabled()
+        composeRule.onNodeWithContentDescription("Backend URL").assertIsNotEnabled()
+        composeRule.onNodeWithContentDescription("Guest origin").assertIsNotEnabled()
     }
 
     @Test
     fun error_is_human_readable_and_retry_is_focused() {
+        var retries = 0
         composeRule.setContent {
             HostingScreen(
                 state = HostingState.Error(
@@ -81,13 +88,15 @@ class HostingScreenTest {
                     "https://guest.example",
                 ),
                 onSettingsChanged = { _, _ -> },
-                onCreate = {},
+                onCreate = { retries++ },
                 onEnterRoom = {},
             )
         }
 
         composeRule.onNodeWithText("The server timed out. Try again.").assertExists()
-        composeRule.onNodeWithText("Retry").assertIsFocused()
+        composeRule.onNodeWithText("Retry").assertIsFocused().assertIsEnabled()
+            .performKeyInput { pressKey(Key.Enter) }
+        composeRule.runOnIdle { assertEquals(1, retries) }
     }
 
     @Test
@@ -105,6 +114,7 @@ class HostingScreenTest {
         }
 
         composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertExists()
+        composeRule.onNodeWithText("Join this room").assertExists()
         composeRule.onNodeWithText("ABCD").assertExists()
         composeRule.onNodeWithText("https://guest.example/r/ABCD").assertExists()
         composeRule.onNodeWithText("Enter room")
@@ -112,5 +122,20 @@ class HostingScreenTest {
             .performKeyInput { pressKey(Key.Enter) }
 
         composeRule.runOnIdle { assertEquals(true, entered) }
+    }
+
+    @Test
+    fun room_placeholder_shows_room_and_next_step() {
+        composeRule.setContent {
+            HostingScreen(
+                state = HostingState.RoomPlaceholder("ABCD"),
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Room ABCD").assertExists()
+        composeRule.onNodeWithText("Playback and live updates are coming next.").assertExists()
     }
 }

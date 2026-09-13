@@ -13,7 +13,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.ArrayDeque
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -110,5 +112,118 @@ class HostSessionControllerTest {
         controller.enterRoom()
 
         assertEquals(HostingState.RoomPlaceholder("ABCD"), controller.state)
+    }
+
+    @Test
+    fun observer_receives_setup_and_pending_then_stops_after_close() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val executor = QueuedExecutor()
+        val controller = HostSessionController(OkHttpClient(), executor = executor)
+        val observed = mutableListOf<HostingState>()
+        val subscription = controller.observe(observed::add)
+
+        assertEquals(HostingState.Setup("https://qmix.example", "https://qmix.example"), observed.single())
+        controller.updateSettings(server.url("/").toString(), "https://guest.example/base?secret=no#fragment")
+        assertTrue(controller.createRoom())
+        assertEquals(
+            HostingState.Pending(server.url("/").toString(), "https://guest.example/base?secret=no#fragment"),
+            controller.state,
+        )
+        controller.updateSettings("https://ignored.example", "https://ignored.example")
+        controller.enterRoom()
+        assertEquals(
+            HostingState.Pending(server.url("/").toString(), "https://guest.example/base?secret=no#fragment"),
+            controller.state,
+        )
+        executor.runNext()
+        assertEquals(
+            HostingState.Invitation(GuestInvite("ABCD", "https://guest.example/r/ABCD")),
+            controller.state,
+        )
+        controller.enterRoom()
+        assertEquals(HostingState.RoomPlaceholder("ABCD"), controller.state)
+        controller.enterRoom()
+        assertEquals(HostingState.RoomPlaceholder("ABCD"), controller.state)
+
+        subscription.close()
+        val observedBeforeUpdate = observed.size
+        controller.updateSettings("https://unused.example", "https://unused.example")
+        assertEquals(observedBeforeUpdate, observed.size)
+    }
+
+    @Test
+    fun invalid_settings_and_server_failure_can_be_corrected_and_retried() {
+        val executor = QueuedExecutor()
+        val controller = HostSessionController(OkHttpClient(), executor = executor)
+        controller.updateSettings("not a url", "also not a url")
+
+        assertFalse(controller.createRoom())
+        assertEquals(
+            HostingState.Error("Enter valid absolute http(s) URLs.", "not a url", "also not a url"),
+            controller.state,
+        )
+
+        server.enqueue(MockResponse().setResponseCode(503))
+        controller.updateSettings(server.url("/").toString(), "https://guest.example")
+        assertTrue(controller.createRoom())
+        executor.runNext()
+        assertEquals(
+            HostingState.Error(
+                "The server is temporarily unavailable.",
+                server.url("/").toString(),
+                "https://guest.example",
+            ),
+            controller.state,
+        )
+
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"WXYZ","host_token":"replacement-secret","url":"/r/WXYZ"}"""),
+        )
+        assertTrue(controller.createRoom())
+        executor.runNext()
+        assertEquals(
+            HostingState.Invitation(GuestInvite("WXYZ", "https://guest.example/r/WXYZ")),
+            controller.state,
+        )
+    }
+
+    @Test
+    fun unsafe_server_invitation_is_reported_as_a_url_error() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"//evil.example/r/ABCD"}"""),
+        )
+        val controller = HostSessionController(
+            OkHttpClient(),
+            initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+        )
+
+        assertTrue(controller.createRoom())
+        assertEquals(
+            HostingState.Error(
+                "Enter valid absolute http(s) URLs.",
+                server.url("/").toString(),
+                "https://guest.example",
+            ),
+            controller.state,
+        )
+    }
+
+    private class QueuedExecutor : Executor {
+        private val commands = ArrayDeque<Runnable>()
+
+        override fun execute(command: Runnable) {
+            commands.add(command)
+        }
+
+        fun runNext() {
+            commands.removeFirst().run()
+        }
     }
 }
