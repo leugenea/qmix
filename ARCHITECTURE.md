@@ -233,11 +233,11 @@ served through `stream.ServeStream`.
   YouTube (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) are passed through Compose.
 - CI (GitHub Actions): gofmt + vet, build, `go test -race`, and a coverage gate
   of at least 95%. The `docker` job builds the image, checks yt-dlp inside it,
-  and smoke-tests `/healthz`. A separate `integration` job uses real tokens and
-  live yt-dlp tests (`continue-on-error`, so it does not block the main CI).
-  `live.yml` runs a live YouTube smoke test with real yt-dlp on the NAS
-  self-hosted runner for pull requests, every push to `main`, manual dispatches,
-  and a weekly schedule; it does not block the main CI (qmix#18).
+  and smoke-tests `/healthz`. Optional credentialed service tests run only from
+  trusted `main` in `service-integration.yml`. `live.yml` runs a live YouTube
+  smoke test with a checksum-verified yt-dlp on the NAS self-hosted runner after
+  pushes to `main`, manual dispatches, and a weekly schedule. Pull-request code
+  and secrets remain on hosted runners and outside these trusted workflows.
 - Deployment constraints: a dedicated Compose project, `mem_limit: 512m`,
   `restart: on-failure:3`, and external port `8180` (reserved for qmix in the
   8100–8199 range).

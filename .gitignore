@@ -2,6 +2,7 @@ bin/
 *.test
 *.out
 coverage/
+dist/sbom/
 .env
 .env.*
 

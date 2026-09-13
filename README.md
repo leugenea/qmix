@@ -4,8 +4,6 @@ A collaborative music player supporting multiple music services: the host runs
 the player on Google TV, friends add links from VK / Yandex Music / Spotify to
 a shared queue, and the backend resolves tracks and streams audio.
 
-Meta issue: leugenea/idea-engine#1.
-
 ## Status
 
 Completed:
@@ -72,9 +70,10 @@ The tests use the `integration` build tag, so regular `go test ./...` runs and
 the coverage gate do not include them. CI runs them in the separate required
 `integration-mandatory` job.
 
-Network-dependent live scenarios (VK/Spotify/Yandex with real tokens and real
-`yt-dlp`) remain gated: the `integration` job uses secrets and
-`continue-on-error`, while `live.yml` runs on a self-hosted runner.
+Network-dependent scenarios remain optional and isolated from pull requests.
+Credentialed VK/Spotify/Yandex checks run after pushes to trusted `main` or a
+manual dispatch of `main`; `live.yml` runs only trusted code on a self-hosted
+runner.
 
 ## Running
 
@@ -173,13 +172,14 @@ gh secret set QMIX_SPOTIFY_CLIENT_ID
 gh secret set QMIX_SPOTIFY_CLIENT_SECRET
 ```
 
-Secrets are passed to the separate `integration` job (see
-`.github/workflows/ci.yml`), which does not block the main CI workflow.
+Secrets are passed only to the optional trusted workflow in
+`.github/workflows/service-integration.yml`. It runs after pushes to `main` or
+manual dispatches of `main` and does not block the pull-request CI workflow.
 
 Live YouTube checks (real `yt-dlp` from a residential IP) run in the separate
-`live.yml` workflow on the self-hosted `nas` runner: on pull requests, on every
-push to `main`, manually (`gh workflow run live`), and weekly on a schedule. They
-do not block the main CI workflow.
+`live.yml` workflow on the self-hosted `nas` runner after pushes to `main`,
+manually (`gh workflow run live`), and weekly on a schedule. Pull-request code
+never runs on that persistent runner, and this workflow does not block main CI.
 
 ### Obtaining a VK token with `cmd/token-vk`
 

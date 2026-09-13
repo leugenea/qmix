@@ -1,28 +1,20 @@
-# Live YouTube smoke from the deploy environment (qmix#18).
-#
-# Runs on the self-hosted runner labeled "nas" (home IP), where real yt-dlp
-# requests to YouTube are possible. A separate file (not ci.yml) so the main
-# pipeline never queues on the NAS being offline: this workflow is triggered
-# manually (workflow_dispatch), weekly on schedule, on every push to main,
-# and on pull requests (same checks as on main, qmix#20). It never blocks
-# the main CI (continue-on-error) — same policy as the integration job; a
-# stalled run (NAS offline) only affects this workflow, never the main
-# pipeline's green signal. The -race flag is intentionally omitted: the
-# race gate lives in ci.yml on ubuntu-latest, and the runner host may lack
-# a C toolchain.
+# Live YouTube smoke from the trusted deploy environment (qmix#18).
+# Pull-request code never enters this workflow or the persistent NAS runner.
 name: live
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC (09:00 MSK)
+    - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
   push:
     branches: [main]
-  pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   route:
@@ -36,8 +28,8 @@ jobs:
       - id: paths
         name: Route changed paths
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           if [[ "${{ github.event_name }}" == workflow_dispatch || "${{ github.event_name }}" == schedule ]]; then
             printf 'live=true\n' >> "$GITHUB_OUTPUT"
@@ -52,45 +44,46 @@ jobs:
 
   live-nas:
     needs: route
-    if: needs.route.outputs.live == 'true'
+    if: needs.route.outputs.live == 'true' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, nas]
     continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.25"
-      - name: Install latest yt-dlp standalone build
+      - name: Install verified yt-dlp 2026.08.19
+        env:
+          YTDLP_BIN: ${{ runner.temp }}/yt-dlp
         run: |
-          mkdir -p "$HOME/.local/bin"
-          export PATH="$HOME/.local/bin:$PATH"
-          # Always fetch the freshest standalone build: YouTube breaks old
-          # extractors regularly, and the live smoke must distinguish
-          # extractor breakage from qmix breakage. The standalone binary
-          # does not depend on the runner's python version (pip resolved
-          # to an outdated 2024.10.22 release on this runner).
-          curl -fsSL \
-            https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
-            -o "$HOME/.local/bin/yt-dlp"
-          chmod +x "$HOME/.local/bin/yt-dlp"
-          yt-dlp --version
-      - name: Probe search directly (visible stderr)
+          curl --fail --silent --show-error --location \
+            https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux \
+            --output "$YTDLP_BIN"
+          printf '%s  %s\n' \
+            58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a \
+            "$YTDLP_BIN" | sha256sum -c -
+          chmod +x "$YTDLP_BIN"
+          "$YTDLP_BIN" --version
+      - name: Probe search directly
+        env:
+          YTDLP_BIN: ${{ runner.temp }}/yt-dlp
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          yt-dlp --skip-download --dump-json --no-warnings \
+          "$YTDLP_BIN" --skip-download --dump-json --no-warnings \
             -f bestaudio "ytsearch:Rick Astley - Never Gonna Give You Up" \
-            | head -c 300
+            > "$RUNNER_TEMP/yt-dlp-probe.json"
+          head -c 300 "$RUNNER_TEMP/yt-dlp-probe.json"
           echo
-          echo "probe rc=${PIPESTATUS[0]}"
-      - name: Live stream test (real YouTube from home IP)
+      - name: Live stream test
         env:
           QMIX_STREAM_LIVE: "1"
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          go test -run 'Live' ./internal/stream/...
+          QMIX_YTDLP_BIN: ${{ runner.temp }}/yt-dlp
+        run: go test -run 'Live' ./internal/stream/...
 
   result:
+    name: Live result
     if: always()
     needs: [route, live-nas]
     runs-on: ubuntu-latest
@@ -99,12 +92,13 @@ jobs:
         env:
           ROUTE_RESULT: ${{ needs.route.result }}
           ROUTE_OUTPUT: ${{ needs.route.outputs.live }}
+          REF: ${{ github.ref }}
           LIVE_RESULT: ${{ needs.live-nas.result }}
         run: |
           [[ "$ROUTE_RESULT" == success ]]
-          if [[ "$ROUTE_OUTPUT" == true ]]; then
+          if [[ "$ROUTE_OUTPUT" == true && "$REF" == refs/heads/main ]]; then
             [[ "$LIVE_RESULT" == success ]]
-          elif [[ "$ROUTE_OUTPUT" == false ]]; then
+          elif [[ "$ROUTE_OUTPUT" == false || "$REF" != refs/heads/main ]]; then
             [[ "$LIVE_RESULT" == skipped ]]
           else
             exit 1

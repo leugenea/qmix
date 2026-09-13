@@ -57,11 +57,21 @@ jobs:
       - name: Build, lint, and JVM tests
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+      - name: Generate and validate Android release SBOM
+        run: make sbom-android
       - name: Upload APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: qmix-tv-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Upload release APK and SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qmix-tv-unsigned-release-apk-sbom
+          path: |
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
+            dist/sbom/qmix-android.cdx.json
           if-no-files-found: error
       - name: Upload JVM and lint reports
         if: always()
@@ -162,6 +172,8 @@ jobs:
           }
           trap cleanup EXIT
 
+          # Expand ADB probes inside the bounded subshell.
+          # shellcheck disable=SC2016
           timeout 600 bash -c '
             until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null)" == "1" ]] \
               && adb -s emulator-5554 shell service check input 2>/dev/null | grep -q "found"; do
@@ -185,6 +197,7 @@ jobs:
           if-no-files-found: error
 
   result:
+    name: Android result
     if: always()
     needs: [route, android-build, android-tv-instrumentation]
     runs-on: ubuntu-latest

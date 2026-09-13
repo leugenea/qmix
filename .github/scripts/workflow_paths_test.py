@@ -12,6 +12,7 @@ import unittest
 MODULE_PATH = pathlib.Path(__file__).with_name("workflow_paths.py")
 REPOSITORY_ROOT = MODULE_PATH.parents[2]
 WORKFLOW_DIR = REPOSITORY_ROOT / ".github" / "workflows"
+ROUTED_WORKFLOWS = ("ci.yml", "android.yml", "live.yml")
 SPEC = importlib.util.spec_from_file_location("workflow_paths", MODULE_PATH)
 workflow_paths = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(workflow_paths)
@@ -36,6 +37,7 @@ class WorkflowPathsTest(unittest.TestCase):
             "Dockerfile": {"ci"},
             ".dockerignore": {"ci"},
             ".github/scripts/test_summary.py": {"ci"},
+            ".github/scripts/generate_sbom.py": {"ci", "android"},
             ".github/workflows/ci.yml": {"ci"},
             ".github/workflows/android.yml": {"android"},
             ".github/workflows/live.yml": {"live"},
@@ -87,14 +89,20 @@ class WorkflowPathsTest(unittest.TestCase):
 
     def test_each_workflow_has_routing_and_a_stable_result(self):
         routed_jobs = {
-            "ci.yml": ("ci", "integration-mandatory", "integration", "docker"),
-            "android.yml": ("android-build", "android-tv-instrumentation"),
-            "live.yml": ("live-nas",),
+            "ci.yml": ("CI result", ("ci", "integration-mandatory", "docker")),
+            "android.yml": (
+                "Android result",
+                ("android-build", "android-tv-instrumentation"),
+            ),
+            "live.yml": ("Live result", ("live-nas",)),
         }
-        for filename, jobs in routed_jobs.items():
+        for filename, (result_name, jobs) in routed_jobs.items():
             text = (WORKFLOW_DIR / filename).read_text()
             self.assertRegex(text, r"(?m)^  route:\n")
-            self.assertRegex(text, r"(?m)^  result:\n    if: always\(\)")
+            self.assertRegex(
+                text,
+                rf"(?m)^  result:\n    name: {re.escape(result_name)}\n    if: always\(\)",
+            )
             for job in jobs:
                 with self.subTest(path=filename, job=job):
                     match = re.search(
@@ -107,19 +115,19 @@ class WorkflowPathsTest(unittest.TestCase):
                     self.assertIn("needs.route.outputs.", block)
 
     def test_route_job_shell_scripts_have_valid_bash_syntax(self):
-        for path in WORKFLOW_DIR.glob("*.yml"):
-            script = self._route_script(path.name)
+        for filename in ROUTED_WORKFLOWS:
+            script = self._route_script(filename)
             completed = subprocess.run(
                 ["bash", "-n"], input=script, text=True, capture_output=True
             )
-            with self.subTest(path=path.name):
+            with self.subTest(path=filename):
                 self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_route_git_diff_disables_rename_detection(self):
-        for path in WORKFLOW_DIR.glob("*.yml"):
-            with self.subTest(path=path.name):
+        for filename in ROUTED_WORKFLOWS:
+            with self.subTest(path=filename):
                 self.assertIn(
-                    "git diff --no-renames --name-only -z", self._route_script(path.name)
+                    "git diff --no-renames --name-only -z", self._route_script(filename)
                 )
 
     def test_renaming_routed_file_to_unrouted_path_still_routes_deletion(self):
@@ -180,8 +188,8 @@ class WorkflowPathsTest(unittest.TestCase):
 
     def test_unavailable_nonzero_base_forces_every_route(self):
         expected = ["ci=true", "android=true", "live=true"]
-        for path in WORKFLOW_DIR.glob("*.yml"):
-            script = self._route_script(path.name)
+        for filename in ROUTED_WORKFLOWS:
+            script = self._route_script(filename)
             with tempfile.TemporaryDirectory() as temp_dir:
                 output = pathlib.Path(temp_dir) / "github-output"
                 env = {
@@ -198,7 +206,7 @@ class WorkflowPathsTest(unittest.TestCase):
                     capture_output=True,
                     text=True,
                 )
-                with self.subTest(path=path.name):
+                with self.subTest(path=filename):
                     self.assertEqual(completed.returncode, 0, completed.stderr)
                     self.assertEqual(output.read_text().splitlines(), expected)
 
@@ -209,9 +217,9 @@ class WorkflowPathsTest(unittest.TestCase):
         self.assertIn("printf 'live=true\\n'", text)
 
     def test_missing_or_all_zero_base_forces_every_route(self):
-        for path in WORKFLOW_DIR.glob("*.yml"):
-            with self.subTest(path=path.name):
-                text = path.read_text()
+        for filename in ROUTED_WORKFLOWS:
+            with self.subTest(path=filename):
+                text = (WORKFLOW_DIR / filename).read_text()
                 self.assertNotIn("git diff-tree", text)
                 self.assertIn("printf 'ci=true\\nandroid=true\\nlive=true\\n'", text)
 
@@ -220,7 +228,6 @@ class WorkflowPathsTest(unittest.TestCase):
             "ci.yml": (
                 "CI_RESULT",
                 "INTEGRATION_RESULT",
-                "OPTIONAL_INTEGRATION_RESULT",
                 "DOCKER_RESULT",
             ),
             "android.yml": ("BUILD_RESULT", "INSTRUMENTATION_RESULT"),
@@ -228,7 +235,11 @@ class WorkflowPathsTest(unittest.TestCase):
         }
         for filename, job_results in jobs.items():
             script = self._result_script(filename)
-            base_env = {"ROUTE_RESULT": "success", "POLICY_RESULT": "success"}
+            base_env = {
+                "ROUTE_RESULT": "success",
+                "POLICY_RESULT": "success",
+                "REF": "refs/heads/main",
+            }
             for route, result, succeeds in (
                 ("true", "success", True),
                 ("false", "skipped", True),
@@ -248,6 +259,38 @@ class WorkflowPathsTest(unittest.TestCase):
             completed = subprocess.run(["bash", "-e", "-c", script], env=env)
             with self.subTest(filename=filename, route_result="failure"):
                 self.assertNotEqual(completed.returncode, 0)
+
+    def test_live_manual_non_main_ref_never_requires_nas(self):
+        script = self._result_script("live.yml")
+        base = {
+            "ROUTE_RESULT": "success",
+            "ROUTE_OUTPUT": "true",
+            "REF": "refs/heads/unreviewed",
+        }
+        skipped = subprocess.run(
+            ["bash", "-e", "-c", script], env=base | {"LIVE_RESULT": "skipped"}
+        )
+        ran = subprocess.run(
+            ["bash", "-e", "-c", script], env=base | {"LIVE_RESULT": "success"}
+        )
+        self.assertEqual(skipped.returncode, 0)
+        self.assertNotEqual(ran.returncode, 0)
+
+    def test_trusted_service_result_accepts_only_expected_ref_outcome(self):
+        script = self._result_script("service-integration.yml")
+        cases = (
+            ("refs/heads/main", "success", True),
+            ("refs/heads/main", "skipped", False),
+            ("refs/heads/unreviewed", "skipped", True),
+            ("refs/heads/unreviewed", "success", False),
+        )
+        for ref, result, succeeds in cases:
+            completed = subprocess.run(
+                ["bash", "-e", "-c", script],
+                env={"REF": ref, "INTEGRATION_RESULT": result},
+            )
+            with self.subTest(ref=ref, result=result):
+                self.assertEqual(completed.returncode == 0, succeeds)
 
     def _route_script(self, filename):
         text = (WORKFLOW_DIR / filename).read_text()

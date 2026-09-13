@@ -75,6 +75,28 @@ the resulting fields to `versionName`/`versionCode`.
    the image OCI labels with the tag and commit. Artifact publication remains
    tracked in #67.
 
+## Release SBOMs
+
+Issue #67 must attach both deterministic CycloneDX 1.6 inventories alongside
+the distributed artifacts:
+
+- `dist/sbom/qmix-go.cdx.json` covers the three shipped Go binaries, their
+  SHA-256 hashes, and the selected runtime module graph;
+- `dist/sbom/qmix-android.cdx.json` covers the unsigned release APK, its SHA-256
+  hash, and the resolved `releaseRuntimeClasspath` graph.
+
+Generate and validate both files with `make sbom`, or use `make sbom-go` and
+`make sbom-android` separately. `make sbom-validate` validates existing files.
+The repository-owned generator uses the Go toolchain and checked-in Gradle
+wrapper, invokes Gradle with strict dependency verification, records SPDX
+license identifiers, sorts components and edges, and omits timestamps and
+random serial numbers. A checksum-pinned official CycloneDX CLI validates each
+document against the CycloneDX 1.6 JSON schema. Consequently, the same source
+tree, dependency state, and artifact bytes produce byte-identical SBOMs.
+Generated files are ignored and must not be committed. Distribute the license
+texts under `third_party/licenses/` with release artifacts, and update
+`THIRD_PARTY_NOTICES.md` whenever shipped runtime dependencies change.
+
 Docker accepts the required build args `VERSION`, `COMMIT`, `DIRTY`, and
 `ANDROID_VERSION_CODE`, embeds them in the binary, and verifies it during the
 build. The final image contains the OCI labels

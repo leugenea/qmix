@@ -42,8 +42,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
       - name: Repository policy and routing tests
-        run: make test-workflow-routing test-cyrillic check-cyrillic
+        run: make test-workflow-routing test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic
 
   ci:
     needs: route
@@ -59,7 +62,9 @@ jobs:
           test -z "$(gofmt -l .)" || { echo "not gofmt-ed:"; gofmt -l .; exit 1; }
           go vet ./...
       - name: Build
-        run: go build ./...
+        run: make build
+      - name: Generate and validate Go release SBOM
+        run: make sbom-go
       # gotestsum wraps go test to also emit a JUnit report for the "Tests"
       # check (qmix#47); the go test flags themselves are unchanged.
       - name: Test
@@ -71,7 +76,7 @@ jobs:
           [ -f unit.xml ] || exit 0
           python3 .github/scripts/test_summary.py unit.xml "### Tests: ci" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish test report
-        if: always()
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
         with:
           check_name: Tests
@@ -109,7 +114,7 @@ jobs:
           [ -f integration.xml ] || exit 0
           python3 .github/scripts/test_summary.py integration.xml "### Tests: integration-mandatory" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish test report
-        if: always()
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
         with:
           check_name: Tests (integration-mandatory)
@@ -117,44 +122,6 @@ jobs:
           include_passed: true
           include_skipped: true
 
-  # Integration tests with real service credentials. The job always runs; the
-  # gated tests skip themselves when the secrets are absent, so this job is
-  # green even without them. continue-on-error keeps flaky external APIs from
-  # blocking the main CI. (The yt-dlp live stream test is gated locally via
-  # QMIX_STREAM_LIVE and skips here since runners can't reach YouTube.)
-  integration:
-    needs: route
-    if: needs.route.outputs.ci == 'true'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: "1.25"
-      # gotestsum adds the JUnit report for the "Tests" check (qmix#47); the
-      # gated live tests show up as skipped when their secrets are absent.
-      - name: Integration tests (gated by secrets)
-        env:
-          QMIX_VK_TOKEN: ${{ secrets.QMIX_VK_TOKEN }}
-          QMIX_YM_TOKEN: ${{ secrets.QMIX_YM_TOKEN }}
-          QMIX_SPOTIFY_CLIENT_ID: ${{ secrets.QMIX_SPOTIFY_CLIENT_ID }}
-          QMIX_SPOTIFY_CLIENT_SECRET: ${{ secrets.QMIX_SPOTIFY_CLIENT_SECRET }}
-        run: |
-          go run gotest.tools/gotestsum@v1.13.0 --junitfile integration-gated.xml -- -race -run 'Live|Integration' ./...
-      - name: Test summary
-        if: always()
-        run: |
-          [ -f integration-gated.xml ] || exit 0
-          python3 .github/scripts/test_summary.py integration-gated.xml "### Tests: integration (gated)" >> "$GITHUB_STEP_SUMMARY"
-      - name: Publish test report
-        if: always()
-        uses: mikepenz/action-junit-report@a9170d5795813c01ab4901ffb045b52bab4ab09d # v6.5.0
-        with:
-          check_name: Tests (integration-gated)
-          report_paths: 'integration-gated.xml'
-          include_passed: true
-          include_skipped: true
 
   # Runtime image gate: yt-dlp must be present in the container (the
   # streaming backend needs it) and the server must boot and answer
@@ -185,7 +152,7 @@ jobs:
         run: |
           docker run -d --name qmix-smoke qmix:ci
           ok=""
-          for i in $(seq 1 15); do
+          for _ in $(seq 1 15); do
             if docker exec qmix-smoke wget -qO- http://127.0.0.1:8080/healthz; then ok=1; break; fi
             sleep 1
           done
@@ -200,8 +167,9 @@ jobs:
           docker image inspect qmix:ci --format 'image size: {{.Size}} bytes'
 
   result:
+    name: CI result
     if: always()
-    needs: [route, policy, ci, integration-mandatory, integration, docker]
+    needs: [route, policy, ci, integration-mandatory, docker]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
@@ -211,7 +179,6 @@ jobs:
           POLICY_RESULT: ${{ needs.policy.result }}
           CI_RESULT: ${{ needs.ci.result }}
           INTEGRATION_RESULT: ${{ needs.integration-mandatory.result }}
-          OPTIONAL_INTEGRATION_RESULT: ${{ needs.integration.result }}
           DOCKER_RESULT: ${{ needs.docker.result }}
         run: |
           [[ "$ROUTE_RESULT" == success && "$POLICY_RESULT" == success ]]
@@ -222,6 +189,6 @@ jobs:
           else
             exit 1
           fi
-          for result in "$CI_RESULT" "$INTEGRATION_RESULT" "$OPTIONAL_INTEGRATION_RESULT" "$DOCKER_RESULT"; do
+          for result in "$CI_RESULT" "$INTEGRATION_RESULT" "$DOCKER_RESULT"; do
             [[ "$result" == "$expected" ]] || exit 1
           done

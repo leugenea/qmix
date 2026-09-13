@@ -1,0 +1,55 @@
+# Credentialed external-service checks run only from trusted main code.
+name: Service integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+      - name: Credentialed service integration tests
+        env:
+          QMIX_VK_TOKEN: ${{ secrets.QMIX_VK_TOKEN }}
+          QMIX_YM_TOKEN: ${{ secrets.QMIX_YM_TOKEN }}
+          QMIX_SPOTIFY_CLIENT_ID: ${{ secrets.QMIX_SPOTIFY_CLIENT_ID }}
+          QMIX_SPOTIFY_CLIENT_SECRET: ${{ secrets.QMIX_SPOTIFY_CLIENT_SECRET }}
+        run: |
+          go run gotest.tools/gotestsum@v1.13.0 --junitfile integration-gated.xml -- -race -run 'Live|Integration' ./...
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f integration-gated.xml ] || exit 0
+          python3 .github/scripts/test_summary.py integration-gated.xml "### Tests: credentialed services" >> "$GITHUB_STEP_SUMMARY"
+
+  result:
+    if: always()
+    needs: [integration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preserve optional integration result
+        env:
+          REF: ${{ github.ref }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+        run: |
+          if [[ "$REF" == refs/heads/main ]]; then
+            [[ "$INTEGRATION_RESULT" == success ]]
+          else
+            [[ "$INTEGRATION_RESULT" == skipped ]]
+          fi
