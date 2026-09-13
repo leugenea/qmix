@@ -1,4 +1,4 @@
-.PHONY: run build version test test-integration test-cyrillic check-cyrillic lint clean
+.PHONY: run build version test test-integration test-workflow-routing test-cyrillic check-cyrillic lint clean
 
 version:
 	go run ./internal/buildinfo/cmd/version -format=json
@@ -22,6 +22,9 @@ test:
 # keeps these tests out of `go test ./...` and the coverage gate.
 test-integration:
 	go test -race -tags=integration -run 'Integration' ./internal/server/...
+
+test-workflow-routing:
+	python3 .github/scripts/workflow_paths_test.py -v
 
 test-cyrillic:
 	python3 .github/scripts/check_cyrillic_test.py -v

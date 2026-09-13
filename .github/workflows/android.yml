@@ -5,11 +5,40 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
+  route:
+    runs-on: ubuntu-latest
+    outputs:
+      android: ${{ steps.paths.outputs.android }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - id: paths
+        name: Route changed paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            printf 'ci=true\nandroid=true\nlive=true\n' >> "$GITHUB_OUTPUT"
+          elif git diff --no-renames --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"; then
+            python3 .github/scripts/workflow_paths.py \
+              < "$RUNNER_TEMP/changed-paths" >> "$GITHUB_OUTPUT"
+          else
+            printf 'ci=true\nandroid=true\nlive=true\n' >> "$GITHUB_OUTPUT"
+          fi
+
   android-build:
+    needs: route
+    if: needs.route.outputs.android == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -46,6 +75,8 @@ jobs:
           if-no-files-found: error
 
   android-tv-instrumentation:
+    needs: route
+    if: needs.route.outputs.android == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -152,3 +183,27 @@ jobs:
             android/app/build/reports/jacoco/jacocoDebugReport/
             android/app/build/reports/qmix-tv-emulator.log
           if-no-files-found: error
+
+  result:
+    if: always()
+    needs: [route, android-build, android-tv-instrumentation]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        env:
+          ROUTE_RESULT: ${{ needs.route.result }}
+          ROUTE_OUTPUT: ${{ needs.route.outputs.android }}
+          BUILD_RESULT: ${{ needs.android-build.result }}
+          INSTRUMENTATION_RESULT: ${{ needs.android-tv-instrumentation.result }}
+        run: |
+          [[ "$ROUTE_RESULT" == success ]]
+          if [[ "$ROUTE_OUTPUT" == true ]]; then
+            expected=success
+          elif [[ "$ROUTE_OUTPUT" == false ]]; then
+            expected=skipped
+          else
+            exit 1
+          fi
+          for result in "$BUILD_RESULT" "$INSTRUMENTATION_RESULT"; do
+            [[ "$result" == "$expected" ]] || exit 1
+          done
