@@ -11,3 +11,5 @@ require (
 	github.com/google/go-querystring v1.1.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 )
+
+// Temporary routing validation for qmix#74; this branch will not be merged.
