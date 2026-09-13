@@ -172,6 +172,8 @@ jobs:
           }
           trap cleanup EXIT
 
+          # Expand ADB probes inside the bounded subshell.
+          # shellcheck disable=SC2016
           timeout 600 bash -c '
             until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null)" == "1" ]] \
               && adb -s emulator-5554 shell service check input 2>/dev/null | grep -q "found"; do

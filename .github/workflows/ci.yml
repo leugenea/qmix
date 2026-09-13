@@ -152,7 +152,7 @@ jobs:
         run: |
           docker run -d --name qmix-smoke qmix:ci
           ok=""
-          for i in $(seq 1 15); do
+          for _ in $(seq 1 15); do
             if docker exec qmix-smoke wget -qO- http://127.0.0.1:8080/healthz; then ok=1; break; fi
             sleep 1
           done
