@@ -135,7 +135,7 @@ jobs:
           RUNNER_ARCH_KEY: ${{ runner.arch }}
         run: |
           version=$("$ANDROID_HOME/emulator/emulator" -version 2>&1 \
-            | awk '/^Android emulator version / {print $4; exit}')
+            | awk '/Android emulator version / {for (i=1; i<=NF; i++) if ($i == "version") {print $(i+1); exit}}')
           [[ "$version" =~ ^[0-9]+([.][0-9]+)*$ ]]
           image_package="$ANDROID_HOME/system-images/android-$TV_API_LEVEL/$TV_SYSTEM_IMAGE/$TV_ARCH/package.xml"
           image_revision=$(python3 -c \
