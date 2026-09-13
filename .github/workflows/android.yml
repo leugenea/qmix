@@ -136,9 +136,11 @@ jobs:
         run: |
           version=$("$ANDROID_HOME/emulator/emulator" -version 2>&1 \
             | awk '/Android emulator version / {for (i=1; i<=NF; i++) if ($i == "version") {print $(i+1); exit}}')
+          printf 'Emulator version candidate: <%q>\n' "$version"
           [[ "$version" =~ ^[0-9]+([.][0-9]+)*$ ]]
           image_package="$ANDROID_HOME/system-images/android-$TV_API_LEVEL/$TV_SYSTEM_IMAGE/$TV_ARCH/source.properties"
           image_revision=$(awk -F= '$1 == "Pkg.Revision" {print $2; exit}' "$image_package")
+          printf 'System image revision candidate: <%q>\n' "$image_revision"
           [[ "$image_revision" =~ ^[0-9]+([.][0-9]+)*$ ]]
           printf 'Resolved emulator=%s image=%s\n' "$version" "$image_revision"
           . /etc/os-release
