@@ -249,6 +249,64 @@ class WorkflowPathsTest(unittest.TestCase):
             with self.subTest(filename=filename, route_result="failure"):
                 self.assertNotEqual(completed.returncode, 0)
 
+    def test_android_avd_cache_key_covers_every_compatibility_input(self):
+        text = (WORKFLOW_DIR / "android.yml").read_text()
+        for value in (
+            "TV_API_LEVEL: \"36\"",
+            "TV_SYSTEM_IMAGE: android-tv",
+            "TV_ARCH: x86",
+            "TV_DEVICE_PROFILE: tv_1080p",
+            "${AVD_NAME}",
+            "${AVD_SNAPSHOT_NAME}",
+            "AVD_PREP_REVISION:",
+            "runner.os",
+            "runner.arch",
+            "image_revision",
+            "steps.avd-key.outputs.key",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
+    def test_android_avd_cache_contains_only_avd_and_emulator_local_adb_material(self):
+        text = (WORKFLOW_DIR / "android.yml").read_text()
+        self.assertIn("uses: actions/cache/restore@", text)
+        self.assertIn("uses: actions/cache/save@", text)
+        cache_paths = (
+            "path: |\n"
+            "            ~/.android/avd/${{ env.AVD_NAME }}.avd\n"
+            "            ~/.android/avd/${{ env.AVD_NAME }}.ini\n"
+            "            ~/.android/adbkey\n"
+            "            ~/.android/adbkey.pub"
+        )
+        self.assertEqual(text.count(cache_paths), 2)
+        cache_block = text[text.index("uses: actions/cache/restore@") : text.index("name: Prepare clean AVD snapshot")]
+        self.assertNotIn("secrets.", cache_block)
+        self.assertIn("steps.avd-cache.outputs.cache-hit != 'true'", text)
+        self.assertLess(text.index("name: Prepare clean AVD snapshot"), text.index("name: TV emulator smoke and Android coverage gate"))
+        self.assertLess(text.index("name: TV emulator smoke and Android coverage gate"), text.index("uses: actions/cache/save@"))
+
+    def test_android_avd_cache_preserves_tv_gate_and_diagnostics(self):
+        text = (WORKFLOW_DIR / "android.yml").read_text()
+        for value in (
+            "--device \"$TV_DEVICE_PROFILE\"",
+            "-snapshot \"$AVD_SNAPSHOT_NAME\"",
+            "sys.boot_completed",
+            "service check input",
+            "get-state",
+            "debug.qmix.snapshot_rev",
+            "-snapshot-list",
+            ":app:jacocoDebugCoverageVerification",
+            "if: always()",
+            "qmix-tv-emulator.log",
+            "qmix-tv-adb.log",
+            "qmix-tv-logcat.txt",
+            "qmix-tv-timings.log",
+            "CACHE_HIT: ${{ steps.avd-cache.outputs.cache-hit }}",
+            "name: Collect Android TV diagnostics",
+        ):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
     def _route_script(self, filename):
         text = (WORKFLOW_DIR / filename).read_text()
         route = re.search(

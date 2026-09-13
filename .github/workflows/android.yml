@@ -78,6 +78,14 @@ jobs:
     needs: route
     if: needs.route.outputs.android == 'true'
     runs-on: ubuntu-latest
+    env:
+      TV_API_LEVEL: "36"
+      TV_SYSTEM_IMAGE: android-tv
+      TV_ARCH: x86
+      TV_DEVICE_PROFILE: tv_1080p
+      AVD_NAME: qmixtv
+      AVD_SNAPSHOT_NAME: qmix-ci
+      AVD_PREP_REVISION: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: gradle/actions/wrapper-validation@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
@@ -90,6 +98,10 @@ jobs:
           java-version: "17"
           cache: gradle
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: Mark AVD setup start
+        run: |
+          mkdir -p android/app/build/reports
+          date +%s > "$RUNNER_TEMP/qmix-avd-setup-start"
       - name: Free disk space for TV emulator
         run: |
           sudo rm -rf \
@@ -111,45 +123,86 @@ jobs:
       - name: Install Android TV emulator SDK
         run: |
           sdkmanager \
-            "platforms;android-36" \
+            "platforms;android-$TV_API_LEVEL" \
             "build-tools;35.0.0" \
             "platform-tools" \
             "emulator" \
-            "system-images;android-36;android-tv;x86"
+            "system-images;android-$TV_API_LEVEL;$TV_SYSTEM_IMAGE;$TV_ARCH"
+      - id: avd-key
+        name: Resolve AVD compatibility key
+        env:
+          RUNNER_OS_KEY: ${{ runner.os }}
+          RUNNER_ARCH_KEY: ${{ runner.arch }}
+        run: |
+          version=$("$ANDROID_HOME/emulator/emulator" -version 2>&1 \
+            | awk '/^Android emulator version / {print $4; exit}')
+          [[ "$version" =~ ^[0-9]+([.][0-9]+)*$ ]]
+          image_package="$ANDROID_HOME/system-images/android-$TV_API_LEVEL/$TV_SYSTEM_IMAGE/$TV_ARCH/package.xml"
+          image_revision=$(python3 -c \
+            'import sys, xml.etree.ElementTree as ET; root=ET.parse(sys.argv[1]).getroot(); revision=next(e for e in root.iter() if e.tag.rsplit("}", 1)[-1] == "revision"); print(".".join(e.text for e in revision))' \
+            "$image_package")
+          [[ "$image_revision" =~ ^[0-9]+([.][0-9]+)*$ ]]
+          . /etc/os-release
+          host_os="${ID}-${VERSION_ID}"
+          key="avd-${RUNNER_OS_KEY}-${RUNNER_ARCH_KEY}-${host_os}-${AVD_NAME}-${AVD_SNAPSHOT_NAME}-api${TV_API_LEVEL}-${TV_SYSTEM_IMAGE}-${TV_ARCH}-${TV_DEVICE_PROFILE}-img${image_revision}-emu${version}-prep${AVD_PREP_REVISION}"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'image-revision=%s\nkey=%s\n' "$image_revision" "$key" >> "$GITHUB_OUTPUT"
+      - id: avd-cache
+        name: Restore Android TV AVD snapshot
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.android/avd/${{ env.AVD_NAME }}.avd
+            ~/.android/avd/${{ env.AVD_NAME }}.ini
+            ~/.android/adbkey
+            ~/.android/adbkey.pub
+          key: ${{ steps.avd-key.outputs.key }}
+      - name: Record AVD setup and restore timing
+        working-directory: android
+        env:
+          CACHE_HIT: ${{ steps.avd-cache.outputs.cache-hit }}
+        run: |
+          elapsed=$(( $(date +%s) - $(cat "$RUNNER_TEMP/qmix-avd-setup-start") ))
+          printf 'cache-hit=%s\nsetup-image-restore-seconds=%s\n' \
+            "$CACHE_HIT" "$elapsed" > app/build/reports/qmix-tv-timings.log
       - name: Enable KVM acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: TV emulator smoke and Android coverage gate
+      - name: Prepare clean AVD snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
         working-directory: android
         run: |
           export ANDROID_USER_HOME="$HOME/.android"
           export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
-          mkdir -p "$ANDROID_AVD_HOME"
+          mkdir -p "$ANDROID_AVD_HOME" app/build/reports
           if [[ ! -f "$ANDROID_USER_HOME/adbkey" ]]; then
             adb keygen "$ANDROID_USER_HOME/adbkey"
           fi
           chmod 600 "$ANDROID_USER_HOME/adbkey" "$ANDROID_USER_HOME/adbkey.pub"
           export ADB_VENDOR_KEYS="$ANDROID_USER_HOME"
           adb start-server
-          mkdir -p app/build/reports
+
+          prep_start=$(date +%s)
           echo no | avdmanager create avd \
             --force \
-            --name qmixtv \
-            --package "system-images;android-36;android-tv;x86" \
-            --device tv_1080p \
+            --name "$AVD_NAME" \
+            --package "system-images;android-$TV_API_LEVEL;$TV_SYSTEM_IMAGE;$TV_ARCH" \
+            --device "$TV_DEVICE_PROFILE" \
             > app/build/reports/qmix-tv-emulator.log 2>&1
           avds=$("$ANDROID_HOME/emulator/emulator" -list-avds)
-          printf 'Available AVDs:\n%s\n' "$avds" >> app/build/reports/qmix-tv-emulator.log
-          grep -Fxq qmixtv <<< "$avds"
+          printf 'Available AVDs after creation:\n%s\n' "$avds" \
+            >> app/build/reports/qmix-tv-emulator.log
+          grep -Fxq "$AVD_NAME" <<< "$avds"
 
-          "$ANDROID_HOME/emulator/emulator" -port 5554 -avd qmixtv \
+          "$ANDROID_HOME/emulator/emulator" -port 5554 -avd "$AVD_NAME" \
             -cores 2 \
             -no-window \
             -gpu swiftshader_indirect \
-            -no-snapshot \
+            -no-snapshot-load \
+            -no-snapshot-save \
             -noaudio \
             -no-boot-anim \
             -no-metrics \
@@ -157,21 +210,138 @@ jobs:
             >> app/build/reports/qmix-tv-emulator.log 2>&1 &
           emulator_pid=$!
           cleanup() {
+            status=$?
+            adb devices -l > app/build/reports/qmix-tv-adb.log 2>&1 || true
+            adb -s emulator-5554 shell getprop >> app/build/reports/qmix-tv-adb.log 2>&1 || true
+            adb -s emulator-5554 shell service check input >> app/build/reports/qmix-tv-adb.log 2>&1 || true
+            adb -s emulator-5554 logcat -d > app/build/reports/qmix-tv-logcat.txt 2>&1 || true
             adb -s emulator-5554 emu kill || true
             wait "$emulator_pid" || true
+            return "$status"
           }
           trap cleanup EXIT
 
-          timeout 600 bash -c '
-            until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null)" == "1" ]] \
+          if ! timeout 600 bash -c '
+            until [[ "$(adb -s emulator-5554 get-state 2>/dev/null)" == "device" ]] \
+              && [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null)" == "1" ]] \
               && adb -s emulator-5554 shell service check input 2>/dev/null | grep -q "found"; do
               sleep 2
             done
-          '
+          '; then
+            ps -p "$emulator_pid" -f || true
+            tail -n 200 app/build/reports/qmix-tv-emulator.log || true
+            exit 1
+          fi
+          [[ "$(adb -s emulator-5554 get-state)" == device ]]
           adb -s emulator-5554 shell settings put global window_animation_scale 0.0
           adb -s emulator-5554 shell settings put global transition_animation_scale 0.0
           adb -s emulator-5554 shell settings put global animator_duration_scale 0.0
+          adb -s emulator-5554 shell setprop debug.qmix.snapshot_rev "$AVD_PREP_REVISION"
+          adb -s emulator-5554 emu avd snapshot save "$AVD_SNAPSHOT_NAME"
+          cleanup
+          trap - EXIT
+          "$ANDROID_HOME/emulator/emulator" -avd "$AVD_NAME" -snapshot-list \
+            | grep -Fq "$AVD_SNAPSHOT_NAME"
+          printf 'snapshot-prep-seconds=%s\n' "$(( $(date +%s) - prep_start ))" \
+            >> app/build/reports/qmix-tv-timings.log
+      - name: TV emulator smoke and Android coverage gate
+        working-directory: android
+        env:
+          CACHE_HIT: ${{ steps.avd-cache.outputs.cache-hit }}
+        run: |
+          export ANDROID_USER_HOME="$HOME/.android"
+          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          test -f "$ANDROID_USER_HOME/adbkey"
+          test -f "$ANDROID_USER_HOME/adbkey.pub"
+          chmod 600 "$ANDROID_USER_HOME/adbkey" "$ANDROID_USER_HOME/adbkey.pub"
+          export ADB_VENDOR_KEYS="$ANDROID_USER_HOME"
+          adb start-server
+          mkdir -p app/build/reports
+          printf '\n=== coverage boot; cache-hit=%s ===\n' "$CACHE_HIT" \
+            >> app/build/reports/qmix-tv-emulator.log
+          test -d "$ANDROID_AVD_HOME/$AVD_NAME.avd"
+          test -f "$ANDROID_AVD_HOME/$AVD_NAME.ini"
+          avds=$("$ANDROID_HOME/emulator/emulator" -list-avds)
+          printf 'Available AVDs:\n%s\n' "$avds" >> app/build/reports/qmix-tv-emulator.log
+          grep -Fxq "$AVD_NAME" <<< "$avds"
+          "$ANDROID_HOME/emulator/emulator" -avd "$AVD_NAME" -snapshot-list \
+            | tee -a app/build/reports/qmix-tv-emulator.log \
+            | grep -Fq "$AVD_SNAPSHOT_NAME"
+
+          emulator_coverage_start=$(date +%s)
+          boot_start=$(date +%s)
+          "$ANDROID_HOME/emulator/emulator" -port 5554 -avd "$AVD_NAME" \
+            -cores 2 \
+            -no-window \
+            -gpu swiftshader_indirect \
+            -snapshot "$AVD_SNAPSHOT_NAME" \
+            -no-snapshot-save \
+            -noaudio \
+            -no-boot-anim \
+            -no-metrics \
+            -camera-back none \
+            >> app/build/reports/qmix-tv-emulator.log 2>&1 &
+          emulator_pid=$!
+          cleanup() {
+            status=$?
+            adb devices -l > app/build/reports/qmix-tv-adb.log 2>&1 || true
+            adb -s emulator-5554 shell getprop >> app/build/reports/qmix-tv-adb.log 2>&1 || true
+            adb -s emulator-5554 shell service check input >> app/build/reports/qmix-tv-adb.log 2>&1 || true
+            adb -s emulator-5554 logcat -d > app/build/reports/qmix-tv-logcat.txt 2>&1 || true
+            adb -s emulator-5554 emu kill || true
+            wait "$emulator_pid" || true
+            return "$status"
+          }
+          trap cleanup EXIT
+
+          if ! timeout 600 bash -c '
+            until [[ "$(adb -s emulator-5554 get-state 2>/dev/null)" == "device" ]] \
+              && [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null)" == "1" ]] \
+              && adb -s emulator-5554 shell service check input 2>/dev/null | grep -q "found"; do
+              sleep 2
+            done
+          '; then
+            ps -p "$emulator_pid" -f || true
+            tail -n 200 app/build/reports/qmix-tv-emulator.log || true
+            exit 1
+          fi
+          for _ in 1 2 3; do
+            [[ "$(adb -s emulator-5554 get-state)" == device ]]
+            sleep 2
+          done
+          [[ "$(adb -s emulator-5554 shell getprop debug.qmix.snapshot_rev)" == "$AVD_PREP_REVISION" ]]
+          printf 'snapshot-boot-seconds=%s\n' "$(( $(date +%s) - boot_start ))" \
+            >> app/build/reports/qmix-tv-timings.log
+          coverage_start=$(date +%s)
           ./gradlew --no-daemon :app:jacocoDebugCoverageVerification
+          printf 'coverage-seconds=%s\nemulator-coverage-seconds=%s\n' \
+            "$(( $(date +%s) - coverage_start ))" \
+            "$(( $(date +%s) - emulator_coverage_start ))" \
+            >> app/build/reports/qmix-tv-timings.log
+      - name: Save Android TV AVD snapshot
+        if: success() && steps.avd-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.android/avd/${{ env.AVD_NAME }}.avd
+            ~/.android/avd/${{ env.AVD_NAME }}.ini
+            ~/.android/adbkey
+            ~/.android/adbkey.pub
+          key: ${{ steps.avd-key.outputs.key }}
+      - name: Collect Android TV diagnostics
+        if: always()
+        working-directory: android
+        run: |
+          mkdir -p app/build/reports
+          touch \
+            app/build/reports/qmix-tv-emulator.log \
+            app/build/reports/qmix-tv-adb.log \
+            app/build/reports/qmix-tv-logcat.txt \
+            app/build/reports/qmix-tv-timings.log
+          if command -v adb >/dev/null 2>&1; then
+            adb devices -l >> app/build/reports/qmix-tv-adb.log 2>&1 || true
+          fi
       - name: Upload instrumentation and coverage reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -182,6 +352,9 @@ jobs:
             android/app/build/reports/androidTests/connected/
             android/app/build/reports/jacoco/jacocoDebugReport/
             android/app/build/reports/qmix-tv-emulator.log
+            android/app/build/reports/qmix-tv-adb.log
+            android/app/build/reports/qmix-tv-logcat.txt
+            android/app/build/reports/qmix-tv-timings.log
           if-no-files-found: error
 
   result:
