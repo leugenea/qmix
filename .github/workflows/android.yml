@@ -57,11 +57,21 @@ jobs:
       - name: Build, lint, and JVM tests
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+      - name: Generate and validate Android release SBOM
+        run: make sbom-android
       - name: Upload APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: qmix-tv-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Upload release APK and SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qmix-tv-unsigned-release-apk-sbom
+          path: |
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
+            dist/sbom/qmix-android.cdx.json
           if-no-files-found: error
       - name: Upload JVM and lint reports
         if: always()

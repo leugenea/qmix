@@ -1,4 +1,4 @@
-.PHONY: run build version test test-integration test-workflow-routing test-cyrillic check-cyrillic lint clean
+.PHONY: run build version test test-integration test-workflow-routing test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
 
 version:
 	go run ./internal/buildinfo/cmd/version -format=json
@@ -26,6 +26,15 @@ test-integration:
 test-workflow-routing:
 	python3 .github/scripts/workflow_paths_test.py -v
 
+test-public-readiness:
+	python3 .github/scripts/public_readiness_test.py -v
+
+test-sbom:
+	python3 .github/scripts/generate_sbom_test.py -v
+
+test-actionlint:
+	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml
+
 test-cyrillic:
 	python3 .github/scripts/check_cyrillic_test.py -v
 
@@ -36,5 +45,26 @@ lint: check-cyrillic
 	@test -z "$$(gofmt -l .)" || { echo "not gofmt-ed:"; gofmt -l .; exit 1; }
 	go vet ./...
 
+sbom: sbom-go sbom-android
+
+sbom-go: build
+	python3 .github/scripts/generate_sbom.py go --output dist/sbom/qmix-go.cdx.json
+	python3 .github/scripts/generate_sbom.py validate dist/sbom/qmix-go.cdx.json
+	.github/scripts/validate_sbom_schema.sh dist/sbom/qmix-go.cdx.json
+
+ANDROID_APK ?= android/app/build/outputs/apk/release/app-release-unsigned.apk
+sbom-android:
+	cd android && ./gradlew --no-daemon --dependency-verification=strict :app:assembleRelease
+	python3 .github/scripts/generate_sbom.py android --apk "$(ANDROID_APK)" --output dist/sbom/qmix-android.cdx.json
+	python3 .github/scripts/generate_sbom.py validate dist/sbom/qmix-android.cdx.json
+	.github/scripts/validate_sbom_schema.sh dist/sbom/qmix-android.cdx.json
+
+sbom-schema:
+	.github/scripts/validate_sbom_schema.sh dist/sbom/qmix-go.cdx.json dist/sbom/qmix-android.cdx.json
+
+sbom-validate:
+	python3 .github/scripts/generate_sbom.py validate dist/sbom/qmix-go.cdx.json dist/sbom/qmix-android.cdx.json
+	$(MAKE) sbom-schema
+
 clean:
-	rm -rf bin
+	rm -rf bin dist/sbom

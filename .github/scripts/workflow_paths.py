@@ -30,6 +30,8 @@ def classify(paths):
             routes.add("ci")
         if path in CI_ROOT_FILES or path.startswith(".github/scripts/"):
             routes.add("ci")
+        if path.startswith(".github/scripts/generate_sbom"):
+            routes.add("android")
         if path == ".github/workflows/ci.yml":
             routes.add("ci")
         elif path == ".github/workflows/android.yml":
