@@ -102,6 +102,10 @@ func (v *VKYandex) Resolve(ctx context.Context, rawurl string) (*Track, error) {
 	if svc == "" {
 		return nil, errors.Join(ErrUnsupported, errors.New("unsupported service for vk/yandex resolver"))
 	}
+	targetURL, err := url.Parse(strings.TrimSpace(rawurl))
+	if err != nil {
+		return nil, errors.Join(ErrInvalid, errors.New("invalid service URL"))
+	}
 
 	if svc == "vk" && v.Config.VKToken != "" {
 		audios, ok, err := vkAudioID(rawurl)
@@ -125,16 +129,36 @@ func (v *VKYandex) Resolve(ctx context.Context, rawurl string) (*Track, error) {
 		// No track segment: fall through to the anonymous og-meta path.
 	}
 
-	target := rawurl
-	if v.Endpoint != "" {
-		target = v.Endpoint
+	target := v.Endpoint
+	if target == "" {
+		host := strings.TrimSuffix(strings.ToLower(targetURL.Hostname()), ".")
+		// Keep the slash in each constant prefix: besides making the authority
+		// boundary explicit, it ensures that even a path beginning with "//"
+		// cannot be interpreted as a new authority.
+		suffix := strings.TrimPrefix(targetURL.RequestURI(), "/")
+		switch {
+		case svc == "vk" && hostMatchesDomain(host, "vk.com"):
+			target = "https://vk.com/" + suffix
+		case svc == "vk" && hostMatchesDomain(host, "vk.ru"):
+			target = "https://vk.ru/" + suffix
+		case svc == "vk" && hostMatchesDomain(host, "vk.cc"):
+			target = "https://vk.cc/" + suffix
+		case svc == "yandex music" && hostMatchesDomain(host, "music.yandex.ru"):
+			target = "https://music.yandex.ru/" + suffix
+		case svc == "yandex music" && hostMatchesDomain(host, "music.yandex.com"):
+			target = "https://music.yandex.com/" + suffix
+		case svc == "yandex music" && hostMatchesDomain(host, "yandex.ru"):
+			target = "https://yandex.ru/" + suffix
+		default:
+			return nil, errors.Join(ErrUnsupported, errors.New("unsupported service URL"))
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w: %v", svc, ErrService, err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (QMix resolver)")
-	resp, err := v.client().Do(req)
+	resp, err := v.clientForService(svc).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w: %v", svc, ErrService, err)
 	}
@@ -385,14 +409,35 @@ func serviceFor(rawurl string) string {
 		return ""
 	}
 	for _, d := range vkDomains {
-		if strings.Contains(host, d) {
+		if hostMatchesDomain(host, d) {
 			return "vk"
 		}
 	}
 	for _, d := range yandexDomains {
-		if strings.Contains(host, d) {
+		if hostMatchesDomain(host, d) {
 			return "yandex music"
 		}
 	}
 	return ""
+}
+
+// clientForService clones the configured client and prevents an approved
+// public URL from redirecting the anonymous metadata fetch to another service
+// or an arbitrary network target.
+func (v *VKYandex) clientForService(service string) *http.Client {
+	client := *v.client()
+	previous := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if serviceFor(req.URL.String()) != service {
+			return errors.New("redirect target is outside the approved service")
+		}
+		if previous != nil {
+			return previous(req, via)
+		}
+		return nil
+	}
+	return &client
 }
