@@ -7,7 +7,9 @@ package resolver
 import (
 	"context"
 	"errors"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -45,8 +47,8 @@ var (
 	ErrService = errors.New("service error")
 )
 
-// Matcher binds a resolver to a set of host substrings. A URL is routed to the
-// first matcher whose host contains any of the Domains (case-insensitive).
+// Matcher binds a resolver to a set of DNS domains. A URL is routed to the
+// first matcher whose host is one of the Domains or a subdomain of it.
 type Matcher struct {
 	Domains  []string
 	Resolver Resolver
@@ -68,14 +70,13 @@ func NewMux(matchers ...Matcher) *Mux {
 // returns ErrInvalid for malformed URLs and ErrUnsupported when no matcher
 // matches.
 func (m *Mux) Resolve(ctx context.Context, rawurl string) (*Track, error) {
-	u, err := url.Parse(strings.TrimSpace(rawurl))
-	if err != nil || u.Host == "" {
+	host, err := DomainOf(rawurl)
+	if err != nil {
 		return nil, fmtInvalid(rawurl)
 	}
-	host := strings.ToLower(u.Host)
 	for _, matcher := range m.matchers {
 		for _, domain := range matcher.Domains {
-			if strings.Contains(host, strings.ToLower(domain)) {
+			if hostMatchesDomain(host, domain) {
 				return matcher.Resolver.Resolve(ctx, rawurl)
 			}
 		}
@@ -87,10 +88,57 @@ func (m *Mux) Resolve(ctx context.Context, rawurl string) (*Track, error) {
 // resolvers that need to double-check their service.
 func DomainOf(rawurl string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(rawurl))
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || u.User != nil {
 		return "", ErrInvalid
 	}
-	return strings.ToLower(u.Host), nil
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", ErrInvalid
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" || !validHostname(host) {
+		return "", ErrInvalid
+	}
+	port := u.Port()
+	if port == "" && strings.HasSuffix(u.Host, ":") {
+		return "", ErrInvalid
+	}
+	if port != "" {
+		value, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || value == 0 {
+			return "", ErrInvalid
+		}
+	}
+	return host, nil
+}
+
+func validHostname(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// hostMatchesDomain applies a DNS-label boundary: example.com and its
+// subdomains match example.com, while example.com.attacker.invalid and
+// attacker-example.com do not.
+func hostMatchesDomain(host, domain string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	domain = strings.TrimSuffix(strings.ToLower(domain), ".")
+	return host == domain || strings.HasSuffix(host, "."+domain)
 }
 
 func fmtInvalid(rawurl string) error {
