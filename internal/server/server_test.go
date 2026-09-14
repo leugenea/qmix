@@ -609,6 +609,47 @@ func TestReorderRejectsReplacementRoomAfterAuthorization(t *testing.T) {
 	}
 }
 
+func TestReorderRejectsTokenChangedDuringDecode(t *testing.T) {
+	s, store := newTestServer()
+	mux := newTestMux(s)
+	code, token := createRoom(t, mux)
+	store.mu.Lock()
+	room := store.rooms[code]
+	room.Queue = []Track{{ID: "a"}, {ID: "b"}}
+	store.mu.Unlock()
+	body := &onReadReader{
+		onRead: func() {
+			store.mu.Lock()
+			room.HostToken = newToken()
+			store.mu.Unlock()
+		},
+		reader: strings.NewReader(`{"order":["b","a"]}`),
+	}
+	req := httptest.NewRequest(http.MethodPatch, "/rooms/"+code+"/queue", body)
+	req.Header.Set("X-Host-Token", token)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if got := room.Queue[0].ID; got != "a" {
+		t.Fatalf("queue[0] = %q, want a", got)
+	}
+}
+
+func TestReorderRejectsBadJSON(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, token := createRoom(t, mux)
+
+	rec := doReq(t, mux, http.MethodPatch, "/rooms/"+code+"/queue", `{`, token)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
 // readSSE reads one SSE event from a stream, returning its id, name and data.
 func readSSE(t *testing.T, r *bufio.Reader) (id, name, data string) {
 	t.Helper()
