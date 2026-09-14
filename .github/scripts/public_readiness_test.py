@@ -116,14 +116,52 @@ class PublicReadinessPolicyTest(unittest.TestCase):
             self.assertIn(f"secrets.{secret}", integration)
         self.assertRegex(trusted, r"(?m)^  result:\n    if: always\(\)")
 
+    def test_pr_code_jobs_cannot_write_checks_or_keep_checkout_credentials(self):
+        ci = read(".github/workflows/ci.yml")
+        self.assertRegex(ci, r"(?m)^permissions:\n  contents: read$")
+
+        for name in ("route", "policy", "ci", "integration-mandatory", "docker"):
+            body = job(ci, name)
+            with self.subTest(job=name):
+                self.assertNotIn("checks: write", body)
+                self.assertGreater(body.count("uses: actions/checkout@"), 0)
+                self.assertEqual(
+                    body.count("persist-credentials: false"),
+                    body.count("uses: actions/checkout@"),
+                )
+
+        publisher = job(ci, "publish-test-reports")
+        self.assertRegex(publisher, r"(?m)^    permissions:\n      checks: write$")
+        self.assertNotIn("actions/checkout@", publisher)
+        self.assertNotRegex(publisher, r"(?m)^\s+run:")
+        self.assertEqual(publisher.count("uses: mikepenz/action-junit-report@"), 2)
+
     def test_fork_pull_requests_skip_privileged_check_publication(self):
         ci = read(".github/workflows/ci.yml")
         reporter_condition = (
             "github.event_name != 'pull_request' || "
-            "github.event.pull_request.head.repo.full_name == github.repository"
+            "(github.event.pull_request.head.repo.full_name == github.repository && "
+            "github.actor != 'dependabot[bot]')"
         )
-        self.assertEqual(ci.count("uses: mikepenz/action-junit-report@"), 2)
-        self.assertEqual(ci.count(reporter_condition), 2)
+        publisher = job(ci, "publish-test-reports")
+        self.assertEqual(publisher.count(reporter_condition), 1)
+
+    def test_test_report_artifact_handoff_is_complete_and_fail_closed(self):
+        ci = read(".github/workflows/ci.yml")
+        unit = job(ci, "ci")
+        integration = job(ci, "integration-mandatory")
+        publisher = job(ci, "publish-test-reports")
+
+        self.assertIn("name: test-report-unit\n", unit)
+        self.assertIn("path: unit.xml\n", unit)
+        self.assertIn("name: test-report-integration-mandatory\n", integration)
+        self.assertIn("path: integration.xml\n", integration)
+        self.assertEqual(ci.count("if-no-files-found: error"), 2)
+        self.assertIn("pattern: test-report-*", publisher)
+        self.assertIn("report_paths: 'test-reports/unit.xml'", publisher)
+        self.assertIn("report_paths: 'test-reports/integration.xml'", publisher)
+        self.assertEqual(publisher.count("require_tests: true"), 2)
+        self.assertEqual(publisher.count("fail_on_parse_error: true"), 2)
 
     def test_all_actions_are_full_sha_pinned_and_permissions_are_explicit(self):
         action = re.compile(r"^\s*-?\s*uses:\s+[^@\s]+@([^\s#]+)", re.MULTILINE)
