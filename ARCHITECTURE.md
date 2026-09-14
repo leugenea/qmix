@@ -97,7 +97,8 @@ that cover the complete requirement.
 - `Queue` — ordered list of tracks
 - `Current` — current track (`*Current`, with `State` set to `idle` or `playing`
   and position in `PosSec`)
-- `LastActivity` — last activity time used to expire empty rooms
+- `LastActivity` — last queue or playback mutation time used to expire idle
+  rooms
 
 The in-memory `Store` holds multiple rooms. The public room representation
 contains only `code`, `current`, and `queue`; it never exposes `HostToken`.
@@ -123,10 +124,12 @@ through `StreamBackend` and caches the URL with a TTL
 **REST**
 - `POST /rooms` — create a room → `{code, host_token, url}` (`url` = `/r/{code}`)
 - `GET /rooms/{code}` — get public room state (`code`, `current`, and `queue`; no `host_token`)
-- `POST /rooms/{code}/queue` — append a track with `{url}`
+- `POST /rooms/{code}/queue` — append a track with `{url}`; the request body is
+  limited to 4 KiB and each room holds at most 100 queued tracks
 - `GET /r/{code}` — get the guest room page (no login)
 - `POST /r/{code}/queue` — append a track from the guest page; the response
-  includes a machine-readable status for the UI
+  includes a machine-readable status for the UI, including `queue_full` and
+  `request_too_large`
 - `PATCH /rooms/{code}/queue` — reorder the queue with `{"order": [trackID, ...]}` (host only; exact permutation of IDs)
 - `POST /rooms/{code}/skip` — advance to the next track (host only)
 - `GET /rooms/{code}/current/stream` — stream the current track with Range/seek support: 200 / 206 / 416; 404 when there is no current track
@@ -214,8 +217,9 @@ served through `stream.ServeStream`.
 
 - All state is held **in memory** in one process, without a database.
 - One `Store` supports multiple rooms.
-- Only empty rooms (no queued or current track) expire after their inactivity
-  **TTL**; non-empty rooms are not removed by the janitor.
+- Empty rooms (no queued or current track) expire after 12 hours of inactivity.
+  Non-empty rooms expire after 24 hours without a queue or playback mutation,
+  bounding memory retained by abandoned queues.
 - SSE clients can reconnect; on connection they receive a `queue_snapshot`
   containing the complete state.
 - State loss on backend restart is acceptable because MVP rooms are ephemeral.

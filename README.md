@@ -64,7 +64,9 @@ real socket with the full `App.Handler()`, without network access or secrets:
 - adding a track through a mock resolver (unknown link -> 422);
 - streaming through a fake `yt-dlp` (configured with `QMIX_YTDLP_BIN`) and a
   local mock upstream with Range support: 200/206;
-- TTL: an empty room expires, while a room with a queue remains active.
+- TTL: an empty room expires on the shorter TTL, while a recently active room
+  with a queue survives that interval; abandoned non-empty rooms expire after
+  24 hours.
 
 The tests use the `integration` build tag, so regular `go test ./...` runs and
 the coverage gate do not include them. CI runs them in the separate required

@@ -5,16 +5,19 @@ import (
 	"time"
 )
 
-// Store holds rooms in memory under a mutex. Empty rooms (no queue and no
-// current track) are removed by the janitor once their LastActivity is older
-// than TTL. TTL and the janitor tick interval are configurable so tests can
-// use small values.
+const defaultNonEmptyRoomTTL = 24 * time.Hour
+
+// Store holds rooms in memory under a mutex. Empty rooms use the shorter TTL;
+// non-empty rooms are also removed after NonEmptyTTL so abandoned queues cannot
+// consume memory indefinitely.
 type Store struct {
 	mu    sync.Mutex
 	rooms map[string]*Room
 
 	// TTL is how long an empty room may stay idle before being removed.
 	TTL time.Duration
+	// NonEmptyTTL is how long a room with queued or current tracks may stay idle.
+	NonEmptyTTL time.Duration
 	// Tick is the janitor sweep interval.
 	Tick time.Duration
 
@@ -22,17 +25,19 @@ type Store struct {
 	gen CodeGenerator
 }
 
-// NewStore returns a Store with the given TTL and janitor tick. gen may be nil
-// to use a random generator.
+// NewStore returns a Store with the given empty-room TTL and janitor tick.
+// Non-empty rooms use the 24-hour default. gen may be nil to use a random
+// generator.
 func NewStore(ttl, tick time.Duration, gen CodeGenerator) *Store {
 	if gen == nil {
 		gen = NewRandomCodeGenerator(nil)
 	}
 	return &Store{
-		rooms: make(map[string]*Room),
-		TTL:   ttl,
-		Tick:  tick,
-		gen:   gen,
+		rooms:       make(map[string]*Room),
+		TTL:         ttl,
+		NonEmptyTTL: defaultNonEmptyRoomTTL,
+		Tick:        tick,
+		gen:         gen,
 	}
 }
 
@@ -70,7 +75,7 @@ func (s *Store) touch(r *Room) {
 	r.LastActivity = time.Now()
 }
 
-// Janitor runs until stop is closed, sweeping expired empty rooms every Tick.
+// Janitor runs until stop is closed, sweeping expired idle rooms every Tick.
 func (s *Store) Janitor(stop <-chan struct{}) {
 	t := time.NewTicker(s.Tick)
 	defer t.Stop()
@@ -84,13 +89,14 @@ func (s *Store) Janitor(stop <-chan struct{}) {
 	}
 }
 
-// sweep removes empty rooms whose LastActivity is older than TTL.
+// sweep removes idle rooms using separate empty and non-empty TTLs.
 func (s *Store) sweep() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	for code, r := range s.rooms {
-		if r.isEmpty() && now.Sub(r.LastActivity) > s.TTL {
+		idle := now.Sub(r.LastActivity)
+		if (r.isEmpty() && idle > s.TTL) || (!r.isEmpty() && idle > s.NonEmptyTTL) {
 			delete(s.rooms, code)
 		}
 	}
