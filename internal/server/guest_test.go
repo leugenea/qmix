@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,7 +87,7 @@ func TestGuestAddTrackRejectsRoomExpiredDuringResolution(t *testing.T) {
 	go func() {
 		responses <- guestAdd(t, mux, code, "https://example.com/song", "")
 	}()
-	<-r.started
+	receiveWithin(t, r.started)
 
 	store.mu.Lock()
 	store.rooms[code].LastActivity = time.Now().Add(-2 * store.TTL)
@@ -94,7 +95,7 @@ func TestGuestAddTrackRejectsRoomExpiredDuringResolution(t *testing.T) {
 	store.sweep()
 	close(r.release)
 
-	rec := <-responses
+	rec := receiveWithin(t, responses)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
@@ -123,6 +124,90 @@ func TestGuestAddTrackAcceptedNoResolver(t *testing.T) {
 	decodeBody(t, rec, &resp)
 	if resp.Status != "accepted" || resp.Track.Title != "https://example.com/song" {
 		t.Fatalf("resp = %+v", resp)
+	}
+}
+
+func TestGuestAddTrackRejectsOversizedBody(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	body := fmt.Sprintf(`{"url":%q}`, "https://example.com/"+strings.Repeat("x", 4096))
+
+	rec := guestAdd(t, mux, code, "", body)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+	var resp guestErrResp
+	decodeBody(t, rec, &resp)
+	if resp.Error != "request_too_large" {
+		t.Fatalf("error = %q, want request_too_large", resp.Error)
+	}
+}
+
+func TestGuestAddTrackRejectsFullQueue(t *testing.T) {
+	s, store := newTestServer()
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	store.mu.Lock()
+	store.rooms[code].Queue = make([]Track, 100)
+	store.mu.Unlock()
+
+	rec := guestAdd(t, mux, code, "https://example.com/overflow", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var resp guestErrResp
+	decodeBody(t, rec, &resp)
+	if resp.Error != "queue_full" {
+		t.Fatalf("error = %q, want queue_full", resp.Error)
+	}
+}
+
+func TestGuestAddTrackDoesNotResolveWhenQueueAlreadyFull(t *testing.T) {
+	r := &countingResolver{}
+	s, store := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	store.mu.Lock()
+	store.rooms[code].Queue = make([]Track, 100)
+	store.mu.Unlock()
+
+	rec := guestAdd(t, mux, code, "https://example.com/overflow", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if r.calls != 0 {
+		t.Fatalf("resolver calls = %d, want 0 for an already-full queue", r.calls)
+	}
+}
+
+func TestGuestAddTrackRejectsQueueFilledDuringResolution(t *testing.T) {
+	r := blockingResolver{started: make(chan struct{}), release: make(chan struct{})}
+	s, store := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	store.mu.Lock()
+	store.rooms[code].Queue = make([]Track, 99)
+	store.mu.Unlock()
+
+	responses := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		responses <- guestAdd(t, mux, code, "https://example.com/overflow", "")
+	}()
+	receiveWithin(t, r.started)
+	store.mu.Lock()
+	store.rooms[code].Queue = append(store.rooms[code].Queue, Track{ID: "concurrent"})
+	store.mu.Unlock()
+	close(r.release)
+
+	rec := receiveWithin(t, responses)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var resp guestErrResp
+	decodeBody(t, rec, &resp)
+	if resp.Error != "queue_full" {
+		t.Fatalf("error = %q, want queue_full", resp.Error)
 	}
 }
 

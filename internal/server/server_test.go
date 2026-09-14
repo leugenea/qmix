@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -228,6 +229,108 @@ func TestAddTrackEmptyURL(t *testing.T) {
 	}
 }
 
+func TestAddTrackRejectsOversizedBody(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	body := fmt.Sprintf(`{"url":%q}`, "https://example.com/"+strings.Repeat("x", 4096))
+
+	rec := doReq(t, mux, http.MethodPost, "/rooms/"+code+"/queue", body, "")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+}
+
+func TestAddTrackRejectsOversizedTrailingData(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	body := `{"url":"https://example.com/song"}` + strings.Repeat(" ", 4096)
+
+	rec := doReq(t, mux, http.MethodPost, "/rooms/"+code+"/queue", body, "")
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+}
+
+func TestAddTrackRejectsMultipleJSONValues(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	body := `{"url":"https://example.com/song"}{}`
+
+	rec := doReq(t, mux, http.MethodPost, "/rooms/"+code+"/queue", body, "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestAddTrackBodyLimitBoundary(t *testing.T) {
+	const limit = 4096
+	prefix := `{"url":"https://example.com/song"}`
+	for _, endpoint := range []struct {
+		name  string
+		path  func(string) string
+		token bool
+	}{
+		{name: "host", path: func(code string) string { return "/rooms/" + code + "/queue" }, token: true},
+		{name: "guest", path: func(code string) string { return "/r/" + code + "/queue" }},
+	} {
+		for _, size := range []int{limit, limit + 1} {
+			t.Run(fmt.Sprintf("%s/%d", endpoint.name, size), func(t *testing.T) {
+				s, _ := newTestServer()
+				mux := newTestMux(s)
+				code, token := createRoom(t, mux)
+				if !endpoint.token {
+					token = ""
+				}
+				body := prefix + strings.Repeat(" ", size-len(prefix))
+
+				rec := doReq(t, mux, http.MethodPost, endpoint.path(code), body, token)
+				want := http.StatusCreated
+				if size > limit {
+					want = http.StatusRequestEntityTooLarge
+				}
+				if rec.Code != want {
+					t.Fatalf("status = %d, want %d; body=%s", rec.Code, want, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestAddTrackRejectsFullQueue(t *testing.T) {
+	s, store := newTestServer()
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	store.mu.Lock()
+	store.rooms[code].Queue = make([]Track, 100)
+	store.mu.Unlock()
+
+	rec := addTrack(t, mux, code, "https://example.com/overflow")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	store.mu.Lock()
+	queueLen := len(store.rooms[code].Queue)
+	store.mu.Unlock()
+	if queueLen != 100 {
+		t.Fatalf("queue length = %d, want 100", queueLen)
+	}
+}
+
+func TestCanAppendTrackRejectsDeletedRoom(t *testing.T) {
+	s, store := newTestServer()
+	room := store.CreateRoom()
+	store.mu.Lock()
+	delete(store.rooms, room.Code)
+	store.mu.Unlock()
+
+	if err := s.canAppendTrack(room); !errors.Is(err, errRoomNotFound) {
+		t.Fatalf("error = %v, want %v", err, errRoomNotFound)
+	}
+}
+
 func TestSkip(t *testing.T) {
 	s, _ := newTestServer()
 	mux := newTestMux(s)
@@ -312,6 +415,35 @@ func TestCurrentPayloadIncludesTrackMetadata(t *testing.T) {
 	decodeBody(t, rec, &view)
 	if view.Current.Title != "Song title" || view.Current.Artist != "Song artist" {
 		t.Fatalf("room current = %+v", view.Current)
+	}
+}
+
+func TestSkipRejectsReplacementRoom(t *testing.T) {
+	s, store := newTestServer()
+	oldRoom := store.CreateRoom()
+	oldRoom.Queue = []Track{{ID: "old"}}
+	replacement := &Room{
+		Code:         oldRoom.Code,
+		HostToken:    newToken(),
+		Queue:        []Track{{ID: "new"}},
+		LastActivity: time.Now(),
+	}
+	store.mu.Lock()
+	store.rooms[oldRoom.Code] = replacement
+	store.mu.Unlock()
+	events, cancel := s.hub.Subscribe(oldRoom.Code)
+	defer cancel()
+
+	if _, err := s.skipRoom(oldRoom, oldRoom.HostToken); !errors.Is(err, errRoomNotFound) {
+		t.Fatalf("error = %v, want %v", err, errRoomNotFound)
+	}
+	if got := replacement.Queue[0].ID; got != "new" {
+		t.Fatalf("replacement queue[0] = %q, want new", got)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected stale event: %+v", event)
+	default:
 	}
 }
 
@@ -430,6 +562,50 @@ func TestReorderNoToken(t *testing.T) {
 	rec := doReq(t, mux, http.MethodPatch, "/rooms/"+code+"/queue", `{"order":[]}`, "")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestReorderRejectsReplacementRoomAfterAuthorization(t *testing.T) {
+	s, store := newTestServer()
+	mux := newTestMux(s)
+	code, token := createRoom(t, mux)
+	store.mu.Lock()
+	store.rooms[code].Queue = []Track{{ID: "old-a"}, {ID: "old-b"}}
+	store.mu.Unlock()
+
+	replacement := &Room{
+		Code:         code,
+		HostToken:    newToken(),
+		Queue:        []Track{{ID: "new"}},
+		LastActivity: time.Now(),
+	}
+	events, cancel := s.hub.Subscribe(code)
+	defer cancel()
+	body := &onReadReader{
+		onRead: func() {
+			store.mu.Lock()
+			delete(store.rooms, code)
+			store.rooms[code] = replacement
+			store.mu.Unlock()
+		},
+		reader: strings.NewReader(`{"order":["old-b","old-a"]}`),
+	}
+	req := httptest.NewRequest(http.MethodPatch, "/rooms/"+code+"/queue", body)
+	req.Header.Set("X-Host-Token", token)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if got := replacement.Queue[0].ID; got != "new" {
+		t.Fatalf("replacement queue[0] = %q, want new", got)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected stale event: %+v", event)
+	default:
 	}
 }
 
@@ -825,12 +1001,27 @@ func TestTTLJanitor(t *testing.T) {
 		t.Fatalf("empty room %q not removed by janitor", code)
 	}
 
-	// Room with tracks: survives.
+	// Room with tracks: survives the shorter empty-room TTL.
 	code2, _ := createRoom(t, mux)
 	addTrack(t, mux, code2, "https://a.example/1")
 	time.Sleep(150 * time.Millisecond)
 	if store.Get(code2) == nil {
 		t.Fatalf("room with tracks %q was removed", code2)
+	}
+}
+
+func TestSweepRemovesAbandonedNonEmptyRoom(t *testing.T) {
+	store := NewStore(time.Hour, time.Hour, &seqCodeGen{})
+	room := store.CreateRoom()
+	store.mu.Lock()
+	room.Queue = []Track{trackFromURL("https://example.com/song")}
+	room.LastActivity = time.Now().Add(-25 * time.Hour)
+	store.mu.Unlock()
+
+	store.sweep()
+
+	if got := store.Get(room.Code); got != nil {
+		t.Fatalf("room = %+v, want abandoned non-empty room removed", got)
 	}
 }
 

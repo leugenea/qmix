@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -73,6 +74,36 @@ func hostToken(r *http.Request) string {
 	return r.Header.Get("X-Host-Token")
 }
 
+const maxAddTrackBodyBytes int64 = 4 << 10
+const maxQueueLength = 100
+
+var (
+	errRoomNotFound     = errors.New("room not found")
+	errQueueFull        = errors.New("queue is full")
+	errQueueEmpty       = errors.New("queue is empty")
+	errInvalidHostToken = errors.New("invalid host token")
+)
+
+func decodeAddTrackJSON(w http.ResponseWriter, r *http.Request, v interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAddTrackBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(v); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("request body must contain one json value")
+		}
+		return err
+	}
+	return nil
+}
+
+func isRequestTooLarge(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.As(err, &maxBytesErr)
+}
+
 // handleCreateRoom creates a room and returns its code, host token and URL.
 func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 	room := s.store.CreateRoom()
@@ -133,11 +164,23 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL string `json:"url"`
 	}
-	if !decodeJSON(w, r, &req) {
+	if err := decodeAddTrackJSON(w, r, &req); err != nil {
+		if isRequestTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	if strings.TrimSpace(req.URL) == "" {
 		writeError(w, http.StatusBadRequest, "url must not be empty")
+		return
+	}
+	if err := s.canAppendTrack(room); errors.Is(err, errQueueFull) {
+		writeError(w, http.StatusConflict, errQueueFull.Error())
+		return
+	} else if err != nil {
+		writeError(w, http.StatusNotFound, errRoomNotFound.Error())
 		return
 	}
 
@@ -148,8 +191,12 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	track, ok := s.appendTrack(room, track)
-	if !ok {
+	track, err = s.appendTrack(room, track)
+	if errors.Is(err, errQueueFull) {
+		writeError(w, http.StatusConflict, errQueueFull.Error())
+		return
+	}
+	if err != nil {
 		writeError(w, http.StatusNotFound, "room not found")
 		return
 	}
@@ -176,21 +223,39 @@ func (s *Server) trackFromRequest(ctx context.Context, rawurl string) (Track, er
 	}, nil
 }
 
-// appendTrack atomically finds the room, appends the track, touches the room,
-// and publishes a queue_updated event. It returns false if the room expired
-// while the track was being resolved.
-func (s *Server) appendTrack(room *Room, track Track) (Track, bool) {
+// appendTrack atomically validates the room identity and queue capacity,
+// appends the track, touches the room, and publishes a queue_updated event.
+func (s *Server) appendTrack(room *Room, track Track) (Track, error) {
 	s.store.mu.Lock()
 	if s.store.rooms[room.Code] != room {
 		s.store.mu.Unlock()
-		return Track{}, false
+		return Track{}, errRoomNotFound
+	}
+	if len(room.Queue) >= maxQueueLength {
+		s.store.mu.Unlock()
+		return Track{}, errQueueFull
 	}
 	room.Queue = append(room.Queue, track)
 	s.store.touch(room)
 	payload := queuePayload(room)
 	s.hub.Publish(room.Code, "queue_updated", payload)
 	s.store.mu.Unlock()
-	return track, true
+	return track, nil
+}
+
+// canAppendTrack avoids expensive resolution when the room is already gone or
+// full. appendTrack repeats these checks under the mutation lock because the
+// room can change while resolution is in flight.
+func (s *Server) canAppendTrack(room *Room) error {
+	s.store.mu.Lock()
+	defer s.store.mu.Unlock()
+	if s.store.rooms[room.Code] != room {
+		return errRoomNotFound
+	}
+	if len(room.Queue) >= maxQueueLength {
+		return errQueueFull
+	}
+	return nil
 }
 
 // trackFromURL returns the pre-resolver stub track (title == URL).
@@ -237,12 +302,23 @@ func (s *Server) handleGuestAddTrack(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL string `json:"url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeAddTrackJSON(w, r, &req); err != nil {
+		if isRequestTooLarge(err) {
+			writeGuestError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
+			return
+		}
 		writeGuestError(w, http.StatusBadRequest, "bad_request", "invalid json body")
 		return
 	}
 	if strings.TrimSpace(req.URL) == "" {
 		writeGuestError(w, http.StatusBadRequest, "invalid_url", "url must not be empty")
+		return
+	}
+	if err := s.canAppendTrack(room); errors.Is(err, errQueueFull) {
+		writeGuestError(w, http.StatusConflict, "queue_full", errQueueFull.Error())
+		return
+	} else if err != nil {
+		writeGuestError(w, http.StatusNotFound, "room_not_found", errRoomNotFound.Error())
 		return
 	}
 
@@ -253,8 +329,12 @@ func (s *Server) handleGuestAddTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	track, ok := s.appendTrack(room, track)
-	if !ok {
+	track, err = s.appendTrack(room, track)
+	if errors.Is(err, errQueueFull) {
+		writeGuestError(w, http.StatusConflict, "queue_full", errQueueFull.Error())
+		return
+	}
+	if err != nil {
 		writeGuestError(w, http.StatusNotFound, "room_not_found", "room not found")
 		return
 	}
@@ -283,16 +363,30 @@ func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "room not found")
 		return
 	}
-	if hostToken(r) != room.HostToken {
-		writeError(w, http.StatusForbidden, "invalid host token")
+	payload, err := s.skipRoom(room, hostToken(r))
+	if errors.Is(err, errRoomNotFound) {
+		writeError(w, http.StatusNotFound, errRoomNotFound.Error())
 		return
 	}
-
-	s.store.mu.Lock()
-	if len(room.Queue) == 0 {
-		s.store.mu.Unlock()
+	if errors.Is(err, errInvalidHostToken) {
+		writeError(w, http.StatusForbidden, errInvalidHostToken.Error())
+		return
+	}
+	if errors.Is(err, errQueueEmpty) {
 		writeError(w, http.StatusBadRequest, "queue is empty")
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"current": payload})
+}
+
+func (s *Server) skipRoom(room *Room, token string) (map[string]interface{}, error) {
+	s.store.mu.Lock()
+	defer s.store.mu.Unlock()
+	if err := s.validateHostRoomLocked(room, token); err != nil {
+		return nil, err
+	}
+	if len(room.Queue) == 0 {
+		return nil, errQueueEmpty
 	}
 	next := room.Queue[0]
 	room.Queue = room.Queue[1:]
@@ -310,8 +404,19 @@ func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request) {
 	s.hub.Publish(room.Code, "track_changed", payload)
 	s.hub.Publish(room.Code, "player_state", map[string]string{"state": cur.State})
 	s.hub.Publish(room.Code, "queue_updated", queue)
-	s.store.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]interface{}{"current": payload})
+	return payload, nil
+}
+
+// validateHostRoomLocked rejects stale room pointers and validates the host
+// token atomically with the mutation. The caller must hold Store.mu.
+func (s *Server) validateHostRoomLocked(room *Room, token string) error {
+	if s.store.rooms[room.Code] != room {
+		return errRoomNotFound
+	}
+	if token != room.HostToken {
+		return errInvalidHostToken
+	}
+	return nil
 }
 
 // handleReorder sets a new queue order. Host-only. The order must be an exact
@@ -335,6 +440,15 @@ func (s *Server) handleReorder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.store.mu.Lock()
+	if err := s.validateHostRoomLocked(room, hostToken(r)); err != nil {
+		s.store.mu.Unlock()
+		if errors.Is(err, errRoomNotFound) {
+			writeError(w, http.StatusNotFound, errRoomNotFound.Error())
+		} else {
+			writeError(w, http.StatusForbidden, errInvalidHostToken.Error())
+		}
+		return
+	}
 	if !isPermutation(req.Order, room.Queue) {
 		s.store.mu.Unlock()
 		writeError(w, http.StatusBadRequest, "order must be a permutation of current track ids")

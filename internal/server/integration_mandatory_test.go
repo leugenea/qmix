@@ -514,9 +514,8 @@ func TestIntegrationStreamFakeYtdlp(t *testing.T) {
 	}
 }
 
-// Scenario 6: an idle empty room expires (TTL) and disappears; a room with a
-// queue survives. The App is assembled manually with a short TTL — the stop
-// channel is unexported, but the test lives in package server.
+// Scenario 6: an idle empty room expires on the short TTL; a room with a queue
+// survives that window but expires on the longer non-empty TTL.
 func TestIntegrationRoomTTL(t *testing.T) {
 	fakeYtdlp(t, "http://127.0.0.1:1/never-called")
 	app := &App{
@@ -524,8 +523,7 @@ func TestIntegrationRoomTTL(t *testing.T) {
 		Hub:   NewHub(),
 		stop:  make(chan struct{}),
 	}
-	go app.Store.Janitor(app.stop)
-	t.Cleanup(app.Close)
+	app.Store.NonEmptyTTL = 240 * time.Millisecond
 	base := integServe(t, app.Handler())
 
 	code, _ := integCreateRoom(t, base)
@@ -536,6 +534,12 @@ func TestIntegrationRoomTTL(t *testing.T) {
 	// A room with a track must survive the same window.
 	code2, _ := integCreateRoom(t, base)
 	integAddTrack(t, base, code2, "https://www.youtube.com/watch?v=fake1")
+
+	app.Store.mu.Lock()
+	app.Store.rooms[code].LastActivity = time.Now().Add(-2 * app.Store.TTL)
+	app.Store.mu.Unlock()
+	go app.Store.Janitor(app.stop)
+	t.Cleanup(app.Close)
 
 	// Poll until the empty room is swept: GET by code → 404.
 	deadline := time.Now().Add(5 * time.Second)
@@ -554,5 +558,16 @@ func TestIntegrationRoomTTL(t *testing.T) {
 	r, view := integGetRoom(t, base, code2)
 	if r.status != http.StatusOK || len(view.Queue) != 1 {
 		t.Fatalf("tracked room status = %d, view = %+v", r.status, view)
+	}
+
+	for {
+		r, _ := integGetRoom(t, base, code2)
+		if r.status == http.StatusNotFound {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("non-empty room %q still alive (status %d) after TTL", code2, r.status)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

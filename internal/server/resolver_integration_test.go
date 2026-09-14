@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +34,38 @@ func (r blockingResolver) Resolve(_ context.Context, _ string) (*resolver.Track,
 	close(r.started)
 	<-r.release
 	return &resolver.Track{Title: "Resolved track", ResolvedBy: "test"}, nil
+}
+
+type countingResolver struct {
+	calls int
+}
+
+func (r *countingResolver) Resolve(_ context.Context, _ string) (*resolver.Track, error) {
+	r.calls++
+	return &resolver.Track{Title: "Resolved track", ResolvedBy: "test"}, nil
+}
+
+type onReadReader struct {
+	once   sync.Once
+	onRead func()
+	reader io.Reader
+}
+
+func (r *onReadReader) Read(p []byte) (int, error) {
+	r.once.Do(r.onRead)
+	return r.reader.Read(p)
+}
+
+func receiveWithin[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for test synchronization")
+		var zero T
+		return zero
+	}
 }
 
 // newResolverTestServer returns a Server with the given resolver wired in.
@@ -87,7 +121,7 @@ func TestAddTrackRejectsRoomExpiredDuringResolution(t *testing.T) {
 	go func() {
 		responses <- addTrack(t, mux, code, "https://example.com/song")
 	}()
-	<-r.started
+	receiveWithin(t, r.started)
 
 	store.mu.Lock()
 	store.rooms[code].LastActivity = time.Now().Add(-2 * store.TTL)
@@ -95,7 +129,7 @@ func TestAddTrackRejectsRoomExpiredDuringResolution(t *testing.T) {
 	store.sweep()
 	close(r.release)
 
-	rec := <-responses
+	rec := receiveWithin(t, responses)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
@@ -117,7 +151,7 @@ func TestAddTrackRejectsReplacementRoomDuringResolution(t *testing.T) {
 	go func() {
 		responses <- addTrack(t, mux, code, "https://example.com/song")
 	}()
-	<-r.started
+	receiveWithin(t, r.started)
 
 	store.mu.Lock()
 	delete(store.rooms, code)
@@ -128,7 +162,7 @@ func TestAddTrackRejectsReplacementRoomDuringResolution(t *testing.T) {
 	defer cancel()
 	close(r.release)
 
-	rec := <-responses
+	rec := receiveWithin(t, responses)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
@@ -140,6 +174,76 @@ func TestAddTrackRejectsReplacementRoomDuringResolution(t *testing.T) {
 	}
 	if len(ch) != 0 {
 		t.Fatalf("published %d events for replacement room, want none", len(ch))
+	}
+}
+
+func TestAddTrackDoesNotResolveWhenQueueAlreadyFull(t *testing.T) {
+	r := &countingResolver{}
+	s, store := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	store.mu.Lock()
+	store.rooms[code].Queue = make([]Track, 100)
+	store.mu.Unlock()
+
+	rec := addTrack(t, mux, code, "https://example.com/overflow")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if r.calls != 0 {
+		t.Fatalf("resolver calls = %d, want 0 for an already-full queue", r.calls)
+	}
+}
+
+func TestAddTrackDoesNotResolveWhenRoomDisappearsDuringDecode(t *testing.T) {
+	r := &countingResolver{}
+	s, store := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, token := createRoom(t, mux)
+	body := &onReadReader{
+		onRead: func() {
+			store.mu.Lock()
+			delete(store.rooms, code)
+			store.mu.Unlock()
+		},
+		reader: strings.NewReader(`{"url":"https://example.com/song"}`),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/rooms/"+code+"/queue", body)
+	req.Header.Set("X-Host-Token", token)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if r.calls != 0 {
+		t.Fatalf("resolver calls = %d, want 0", r.calls)
+	}
+}
+
+func TestAddTrackRejectsQueueFilledDuringResolution(t *testing.T) {
+	r := blockingResolver{started: make(chan struct{}), release: make(chan struct{})}
+	s, store := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	store.mu.Lock()
+	store.rooms[code].Queue = make([]Track, 99)
+	store.mu.Unlock()
+
+	responses := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		responses <- addTrack(t, mux, code, "https://example.com/overflow")
+	}()
+	receiveWithin(t, r.started)
+	store.mu.Lock()
+	store.rooms[code].Queue = append(store.rooms[code].Queue, Track{ID: "concurrent"})
+	store.mu.Unlock()
+	close(r.release)
+
+	rec := receiveWithin(t, responses)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
 	}
 }
 
