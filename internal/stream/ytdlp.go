@@ -166,8 +166,10 @@ func (b *YTDLP) resolveURL(ctx context.Context, t *Track) (string, error) {
 			return u, nil
 		}
 	}
-	v, err := c.Do(key, func() (interface{}, error) {
-		return b.searchURL(ctx, t)
+	// The shared lookup survives one caller leaving while other callers still
+	// need it, and is canceled when its final waiter disconnects.
+	v, err := c.DoContext(ctx, key, func(loadCtx context.Context) (interface{}, error) {
+		return b.searchURL(loadCtx, t)
 	})
 	if err != nil {
 		return "", err
