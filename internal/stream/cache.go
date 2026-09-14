@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -25,9 +26,11 @@ type entry struct {
 // call represents an in-flight load for a key. Its done channel is closed when
 // the loader finishes, releasing all waiters.
 type call struct {
-	done chan struct{}
-	val  interface{}
-	err  error
+	done    chan struct{}
+	cancel  context.CancelFunc
+	waiters int
+	val     interface{}
+	err     error
 }
 
 // NewCache returns an empty cache with the given TTL. A non-positive TTL makes
@@ -54,11 +57,22 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 	return nil, false
 }
 
-// Do runs loader for key, reusing an in-flight load for the same key. If a
-// fresh value is already cached for key it is returned without running loader.
-// On expiry a concurrent miss runs loader once and every waiter receives its
-// result.
+// Do runs loader for key without caller cancellation. See DoContext.
 func (c *Cache) Do(key string, loader func() (interface{}, error)) (interface{}, error) {
+	return c.DoContext(context.Background(), key, func(context.Context) (interface{}, error) {
+		return loader()
+	})
+}
+
+// DoContext runs loader for key, reusing an in-flight load for the same key. If
+// a fresh value is already cached for key it is returned without running
+// loader. The shared load runs while at least one caller is waiting: one caller
+// can leave without poisoning others, and the load is canceled when none remain.
+func (c *Cache) DoContext(ctx context.Context, key string, loader func(context.Context) (interface{}, error)) (interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	c.mu.Lock()
 	now := time.Now()
 	if e, ok := c.entries[key]; ok && now.Before(e.expiry) {
@@ -66,29 +80,55 @@ func (c *Cache) Do(key string, loader func() (interface{}, error)) (interface{},
 		c.mu.Unlock()
 		return v, nil
 	}
-	if pending, ok := c.inflight[key]; ok {
-		c.mu.Unlock()
-		<-pending.done
-		return pending.val, pending.err
+	pending, ok := c.inflight[key]
+	if !ok {
+		loadCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		pending = &call{done: make(chan struct{}), cancel: cancel}
+		c.inflight[key] = pending
+		go c.load(loadCtx, key, pending, loader)
 	}
-
-	cl := &call{done: make(chan struct{})}
-	c.inflight[key] = cl
+	pending.waiters++
 	c.mu.Unlock()
 
-	// Load outside the lock so a slow upstream does not block other keys.
-	val, err := loader()
+	select {
+	case <-pending.done:
+		return pending.val, pending.err
+	case <-ctx.Done():
+		c.stopWaiting(key, pending)
+		return nil, ctx.Err()
+	}
+}
+
+// stopWaiting releases one caller and cancels an abandoned shared load.
+func (c *Cache) stopWaiting(key string, cl *call) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.inflight[key] != cl {
+		return
+	}
+	cl.waiters--
+	if cl.waiters == 0 {
+		delete(c.inflight, key)
+		cl.cancel()
+	}
+}
+
+// load completes one shared call outside the lock and publishes its result.
+func (c *Cache) load(ctx context.Context, key string, cl *call, loader func(context.Context) (interface{}, error)) {
+	val, err := loader(ctx)
 
 	c.mu.Lock()
-	delete(c.inflight, key)
-	if err == nil {
-		c.entries[key] = &entry{value: val, expiry: time.Now().Add(c.ttl)}
+	if c.inflight[key] == cl {
+		delete(c.inflight, key)
+		if err == nil {
+			c.entries[key] = &entry{value: val, expiry: time.Now().Add(c.ttl)}
+		}
 	}
 	cl.val = val
 	cl.err = err
+	cl.cancel()
 	close(cl.done)
 	c.mu.Unlock()
-	return val, err
 }
 
 // Len returns the number of live cached entries (for diagnostics/tests).

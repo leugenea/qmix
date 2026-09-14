@@ -3,6 +3,7 @@ package stream
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -25,6 +27,24 @@ type fakeRunner struct {
 func (f *fakeRunner) Search(_ context.Context, query string) ([]byte, error) {
 	f.got = append(f.got, query)
 	return f.out, f.err
+}
+
+type blockingRunner struct {
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (r *blockingRunner) Search(ctx context.Context, _ string) ([]byte, error) {
+	if r.calls.Add(1) == 1 {
+		close(r.started)
+	}
+	select {
+	case <-r.release:
+		return []byte(searchFixture), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 const searchFixture = `{"title":"Some Song","artist":"Some Artist","url":"https://media.example/audio.webm"}`
@@ -153,6 +173,44 @@ func TestYtdlpConcurrentResolve(t *testing.T) {
 	}
 	if len(r.got) != 1 {
 		t.Fatalf("runner invoked %d times, want 1 under concurrency", len(r.got))
+	}
+}
+
+// TestYtdlpLeaderCancellationDoesNotPoisonWaiter verifies the shared search is
+// detached from its initiating request while every caller can stop waiting.
+func TestYtdlpLeaderCancellationDoesNotPoisonWaiter(t *testing.T) {
+	r := &blockingRunner{started: make(chan struct{}), release: make(chan struct{})}
+	b := &YTDLP{Runner: r, CacheTTL: time.Minute}
+	track := &Track{ID: "1", Title: "Some Song", Artist: "Some Artist"}
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := b.resolveURL(leaderCtx, track)
+		leaderDone <- err
+	}()
+	<-r.started
+
+	waiterDone := make(chan error, 1)
+	go func() {
+		url, err := b.resolveURL(context.Background(), track)
+		if err == nil && url != "https://media.example/audio.webm" {
+			err = fmt.Errorf("url = %q, want fixture URL", url)
+		}
+		waiterDone <- err
+	}()
+	waitForCacheWaiters(t, b.cacheRef(), cacheKey(track), 2)
+	cancelLeader()
+	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader error = %v, want context.Canceled", err)
+	}
+
+	close(r.release)
+	if err := <-waiterDone; err != nil {
+		t.Fatalf("waiter error = %v", err)
+	}
+	if calls := r.calls.Load(); calls != 1 {
+		t.Fatalf("runner calls = %d, want 1 shared search", calls)
 	}
 }
 
