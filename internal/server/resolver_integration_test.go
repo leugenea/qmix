@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,17 @@ type stubResolver struct {
 
 func (s stubResolver) Resolve(_ context.Context, _ string) (*resolver.Track, error) {
 	return s.meta, s.err
+}
+
+type blockingResolver struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r blockingResolver) Resolve(_ context.Context, _ string) (*resolver.Track, error) {
+	close(r.started)
+	<-r.release
+	return &resolver.Track{Title: "Resolved track", ResolvedBy: "test"}, nil
 }
 
 // newResolverTestServer returns a Server with the given resolver wired in.
@@ -60,6 +72,74 @@ func TestAddTrackResolvesMetadata(t *testing.T) {
 	decodeBody(t, rec, &view)
 	if len(view.Queue) != 1 || view.Queue[0].Title != "Some Song" || view.Queue[0].Artist != "Some Artist" {
 		t.Fatalf("view = %+v", view)
+	}
+}
+
+// TestAddTrackRejectsRoomExpiredDuringResolution covers qmix#90: resolution
+// must not return success after the janitor removes the room.
+func TestAddTrackRejectsRoomExpiredDuringResolution(t *testing.T) {
+	r := blockingResolver{started: make(chan struct{}), release: make(chan struct{})}
+	s, store := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+
+	responses := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		responses <- addTrack(t, mux, code, "https://example.com/song")
+	}()
+	<-r.started
+
+	store.mu.Lock()
+	store.rooms[code].LastActivity = time.Now().Add(-2 * store.TTL)
+	store.mu.Unlock()
+	store.sweep()
+	close(r.release)
+
+	rec := <-responses
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if room := store.Get(code); room != nil {
+		t.Fatalf("room = %+v, want expired room to remain absent", room)
+	}
+}
+
+// TestAddTrackRejectsReplacementRoomDuringResolution covers room-code reuse:
+// an add started for an expired room must not mutate a newer room with the same
+// code.
+func TestAddTrackRejectsReplacementRoomDuringResolution(t *testing.T) {
+	r := blockingResolver{started: make(chan struct{}), release: make(chan struct{})}
+	s, store := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+
+	responses := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		responses <- addTrack(t, mux, code, "https://example.com/song")
+	}()
+	<-r.started
+
+	store.mu.Lock()
+	delete(store.rooms, code)
+	replacement := &Room{Code: code, HostToken: newToken(), LastActivity: time.Now()}
+	store.rooms[code] = replacement
+	store.mu.Unlock()
+	ch, cancel := s.hub.Subscribe(code)
+	defer cancel()
+	close(r.release)
+
+	rec := <-responses
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	store.mu.Lock()
+	queueLen := len(replacement.Queue)
+	store.mu.Unlock()
+	if queueLen != 0 {
+		t.Fatalf("replacement queue length = %d, want 0", queueLen)
+	}
+	if len(ch) != 0 {
+		t.Fatalf("published %d events for replacement room, want none", len(ch))
 	}
 }
 

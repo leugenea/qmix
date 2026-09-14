@@ -148,7 +148,11 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	track = s.appendTrack(room, track)
+	track, ok := s.appendTrack(room, track)
+	if !ok {
+		writeError(w, http.StatusNotFound, "room not found")
+		return
+	}
 	writeJSON(w, http.StatusCreated, track)
 }
 
@@ -172,16 +176,21 @@ func (s *Server) trackFromRequest(ctx context.Context, rawurl string) (Track, er
 	}, nil
 }
 
-// appendTrack appends the track to the room's queue, touches the room and
-// publishes a queue_updated event. It returns the appended track.
-func (s *Server) appendTrack(room *Room, track Track) Track {
+// appendTrack atomically finds the room, appends the track, touches the room,
+// and publishes a queue_updated event. It returns false if the room expired
+// while the track was being resolved.
+func (s *Server) appendTrack(room *Room, track Track) (Track, bool) {
 	s.store.mu.Lock()
+	if s.store.rooms[room.Code] != room {
+		s.store.mu.Unlock()
+		return Track{}, false
+	}
 	room.Queue = append(room.Queue, track)
 	s.store.touch(room)
 	payload := queuePayload(room)
 	s.hub.Publish(room.Code, "queue_updated", payload)
 	s.store.mu.Unlock()
-	return track
+	return track, true
 }
 
 // trackFromURL returns the pre-resolver stub track (title == URL).
@@ -244,7 +253,11 @@ func (s *Server) handleGuestAddTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	track = s.appendTrack(room, track)
+	track, ok := s.appendTrack(room, track)
+	if !ok {
+		writeGuestError(w, http.StatusNotFound, "room_not_found", "room not found")
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]interface{}{"status": "accepted", "track": track})
 }
 

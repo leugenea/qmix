@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/leugenea/qmix/internal/resolver"
 )
@@ -68,6 +69,42 @@ func TestGuestAddTrackAccepted(t *testing.T) {
 	decodeBody(t, rec, &view)
 	if len(view.Queue) != 1 || view.Queue[0].ID != tr.ID || view.Queue[0].Title != "Some Song" {
 		t.Fatalf("view = %+v, want one track id=%q", view.Queue, tr.ID)
+	}
+}
+
+// TestGuestAddTrackRejectsRoomExpiredDuringResolution covers qmix#90 for the
+// guest API, including its machine-readable room_not_found response.
+func TestGuestAddTrackRejectsRoomExpiredDuringResolution(t *testing.T) {
+	r := blockingResolver{started: make(chan struct{}), release: make(chan struct{})}
+	s, store := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	ch, cancel := s.hub.Subscribe(code)
+	defer cancel()
+
+	responses := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		responses <- guestAdd(t, mux, code, "https://example.com/song", "")
+	}()
+	<-r.started
+
+	store.mu.Lock()
+	store.rooms[code].LastActivity = time.Now().Add(-2 * store.TTL)
+	store.mu.Unlock()
+	store.sweep()
+	close(r.release)
+
+	rec := <-responses
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	var resp guestErrResp
+	decodeBody(t, rec, &resp)
+	if resp.Error != "room_not_found" {
+		t.Fatalf("error = %q, want room_not_found", resp.Error)
+	}
+	if len(ch) != 0 {
+		t.Fatalf("published %d events for expired room, want none", len(ch))
 	}
 }
 
