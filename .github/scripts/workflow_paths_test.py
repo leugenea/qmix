@@ -228,6 +228,7 @@ class WorkflowPathsTest(unittest.TestCase):
             "ci.yml": (
                 "CI_RESULT",
                 "INTEGRATION_RESULT",
+                "REPORT_RESULT",
                 "DOCKER_RESULT",
             ),
             "android.yml": ("BUILD_RESULT", "INSTRUMENTATION_RESULT"),
@@ -239,6 +240,9 @@ class WorkflowPathsTest(unittest.TestCase):
                 "ROUTE_RESULT": "success",
                 "POLICY_RESULT": "success",
                 "REF": "refs/heads/main",
+                "EVENT_NAME": "push",
+                "HEAD_REPOSITORY": "",
+                "REPOSITORY": "leugenea/qmix",
             }
             for route, result, succeeds in (
                 ("true", "success", True),
@@ -258,6 +262,40 @@ class WorkflowPathsTest(unittest.TestCase):
             env.update(dict.fromkeys(job_results, "skipped"))
             completed = subprocess.run(["bash", "-e", "-c", script], env=env)
             with self.subTest(filename=filename, route_result="failure"):
+                self.assertNotEqual(completed.returncode, 0)
+
+    def test_ci_result_allows_skipped_publication_for_unprivileged_prs(self):
+        script = self._result_script("ci.yml")
+        base = {
+            "ROUTE_RESULT": "success",
+            "ROUTE_OUTPUT": "true",
+            "POLICY_RESULT": "success",
+            "CI_RESULT": "success",
+            "INTEGRATION_RESULT": "success",
+            "DOCKER_RESULT": "success",
+            "REPORT_RESULT": "skipped",
+            "EVENT_NAME": "pull_request",
+            "REPOSITORY": "leugenea/qmix",
+        }
+        cases = (
+            ({"HEAD_REPOSITORY": "contributor/qmix", "ACTOR": "contributor"}, "skipped"),
+            ({"HEAD_REPOSITORY": "leugenea/qmix", "ACTOR": "dependabot[bot]"}, "skipped"),
+            ({"HEAD_REPOSITORY": "leugenea/qmix", "ACTOR": "leugenea"}, "success"),
+        )
+        for case, expected_report in cases:
+            completed = subprocess.run(
+                ["bash", "-e", "-c", script],
+                env=base | case | {"REPORT_RESULT": expected_report},
+            )
+            with self.subTest(**case, report=expected_report):
+                self.assertEqual(completed.returncode, 0)
+
+            unexpected_report = "success" if expected_report == "skipped" else "failure"
+            completed = subprocess.run(
+                ["bash", "-e", "-c", script],
+                env=base | case | {"REPORT_RESULT": unexpected_report},
+            )
+            with self.subTest(**case, report=unexpected_report):
                 self.assertNotEqual(completed.returncode, 0)
 
     def test_live_manual_non_main_ref_never_requires_nas(self):
