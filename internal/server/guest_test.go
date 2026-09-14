@@ -181,6 +181,37 @@ func TestGuestAddTrackDoesNotResolveWhenQueueAlreadyFull(t *testing.T) {
 	}
 }
 
+func TestGuestAddTrackDoesNotResolveWhenRoomDisappearsDuringDecode(t *testing.T) {
+	r := &countingResolver{}
+	s, store := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	body := &onReadReader{
+		onRead: func() {
+			store.mu.Lock()
+			delete(store.rooms, code)
+			store.mu.Unlock()
+		},
+		reader: strings.NewReader(`{"url":"https://example.com/song"}`),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/r/"+code+"/queue", body)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	var resp guestErrResp
+	decodeBody(t, rec, &resp)
+	if resp.Error != "room_not_found" {
+		t.Fatalf("error = %q, want room_not_found", resp.Error)
+	}
+	if r.calls != 0 {
+		t.Fatalf("resolver calls = %d, want 0", r.calls)
+	}
+}
+
 func TestGuestAddTrackRejectsQueueFilledDuringResolution(t *testing.T) {
 	r := blockingResolver{started: make(chan struct{}), release: make(chan struct{})}
 	s, store := newResolverTestServer(r)
