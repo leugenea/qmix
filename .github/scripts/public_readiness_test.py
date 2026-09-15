@@ -41,6 +41,15 @@ class PublicReadinessPolicyTest(unittest.TestCase):
     def test_public_readme_has_no_private_idea_engine_reference(self):
         self.assertNotIn("idea-engine", read("README.md").lower())
 
+    def test_compose_resolves_to_the_agent_apps_project(self):
+        compose = read("docker-compose.yml")
+        self.assertRegex(compose, r"(?m)^name: agent-apps$")
+
+        policy = job(read(".github/workflows/ci.yml"), "policy")
+        self.assertIn("set -o pipefail", policy)
+        self.assertIn("docker compose config --format json", policy)
+        self.assertIn("jq -e '.name == \"agent-apps\"'", policy)
+
     def test_live_workflow_is_trusted_only_and_read_only(self):
         text = read(".github/workflows/live.yml")
         trigger = text.split("\nconcurrency:", 1)[0]

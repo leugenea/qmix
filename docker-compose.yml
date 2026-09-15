@@ -1,3 +1,5 @@
+name: agent-apps
+
 services:
   backend:
     build:
