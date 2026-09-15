@@ -26,7 +26,8 @@ licensed under Apache License 2.0:
 - `androidx.*` — Android Open Source Project and AndroidX contributors;
 - `org.jetbrains.kotlin*` and `org.jetbrains.kotlinx*` — JetBrains and Kotlin
   contributors;
-- `com.squareup.okhttp3*` and `com.squareup.okio*` — Square and contributors;
+- `com.squareup.okhttp3*` (including OkHttp and OkHttp SSE) and
+  `com.squareup.okio*` — Square and contributors;
 - `com.google.guava*` — Google and Guava contributors;
 - `com.google.zxing:core` — ZXing authors;
 - `org.jetbrains:annotations` — JetBrains and contributors;

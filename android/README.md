@@ -42,6 +42,22 @@ The suite installs the APK, launches the activity through `LEANBACK_LAUNCHER`,
 checks the initial focus, and sends D-pad OK. CI uses Android TV API 36
 (`android-tv`, x86, `tv_1080p` profile).
 
+## Room synchronization
+
+The application-scoped host session owns one `SequentialRoomRepository` while a
+room is active. The repository treats SSE as invalidation only: the four room
+change events trigger a complete `GET /rooms/{code}` reconciliation, while
+heartbeats and payload data are ignored. REST reads are serialized and
+coalesced, so an event received during a request causes exactly one follow-up
+request without allowing older responses to overwrite newer state.
+
+The SSE connection reconnects with capped exponential backoff and jitter. A
+fixed 15-second REST refresh repairs silently missed events. REST retains the
+15-second call timeout; the long-lived SSE client disables call and read
+timeouts and owns reconnect policy explicitly. A 404 ends synchronization,
+network failures preserve the last room state as stale, and ending the host
+session cancels the request, event stream, retry, and periodic timers.
+
 ## Coverage
 
 The required gate is at least 95% instruction coverage for all bytecode in the

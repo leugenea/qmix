@@ -12,6 +12,13 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class HostSessionLifecycleTest {
     @Test
+    fun activity_teardown_ends_sync_only_when_the_host_session_actually_finishes() {
+        assertEquals(true, shouldEndHostSession(isFinishing = true, isChangingConfigurations = false))
+        assertEquals(false, shouldEndHostSession(isFinishing = false, isChangingConfigurations = false))
+        assertEquals(false, shouldEndHostSession(isFinishing = true, isChangingConfigurations = true))
+    }
+
+    @Test
     fun in_memory_session_survives_activity_recreation() {
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         lateinit var before: HostSessionController

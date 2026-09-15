@@ -104,6 +104,7 @@ dependencies {
     implementation(libs.androidx.tv.material)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.okhttp)
+    implementation(libs.okhttp.sse)
     implementation(libs.zxing.core)
 
     testImplementation(libs.junit)
