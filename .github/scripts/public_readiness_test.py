@@ -259,6 +259,12 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         )
         self.assertIn("cyclonedx-linux-x64", validator)
 
+    def test_android_setup_does_not_request_removed_legacy_tools_package(self):
+        android = read(".github/workflows/android.yml")
+        self.assertEqual(2, android.count("android-actions/setup-android@"))
+        self.assertEqual(2, android.count("packages: platform-tools"))
+        self.assertNotIn("packages: tools", android)
+
     def test_android_ci_uploads_the_apk_bound_to_its_sbom(self):
         android = read(".github/workflows/android.yml")
         release_upload = re.search(
