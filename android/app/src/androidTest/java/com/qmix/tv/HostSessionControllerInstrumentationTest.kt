@@ -31,7 +31,7 @@ class HostSessionControllerInstrumentationTest {
     }
 
     @Test
-    fun observer_settings_pending_invitation_and_placeholder_form_one_session() {
+    fun observer_settings_pending_invitation_and_live_room_form_one_session() {
         server.enqueue(
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
@@ -57,7 +57,13 @@ class HostSessionControllerInstrumentationTest {
             )
             assertFalse(controller.state.toString().contains("host-secret"))
             controller.enterRoom()
-            assertEquals(HostingState.RoomPlaceholder("ABCD"), controller.state)
+            assertEquals(
+                HostingState.LiveRoom(
+                    GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                    RoomSyncState.Active("ABCD", null, Freshness.LOADING, LiveConnection.CONNECTING),
+                ),
+                controller.state,
+            )
             controller.enterRoom()
             assertEquals(1, server.requestCount)
         } finally {
@@ -149,26 +155,33 @@ class HostSessionControllerInstrumentationTest {
                 repository
             },
         )
+        val observed = mutableListOf<HostingState>()
+        val observation = controller.observe(observed::add)
 
-        assertTrue(controller.createRoom())
-        controller.enterRoom()
-        val synchronized = RoomSyncState.Active(
-            "ABCD",
-            RoomState("ABCD", null, emptyList()),
-            Freshness.FRESH,
-            LiveConnection.CONNECTED,
-        )
-        repository.publish(synchronized)
+        try {
+            assertTrue(controller.createRoom())
+            controller.enterRoom()
+            val synchronized = RoomSyncState.Active(
+                "ABCD",
+                RoomState("ABCD", null, emptyList()),
+                Freshness.FRESH,
+                LiveConnection.CONNECTED,
+            )
+            repository.publish(synchronized)
 
-        assertEquals("ABCD", repository.roomCode)
-        assertEquals(synchronized, controller.roomSyncState)
-        controller.endRoom()
+            assertEquals("ABCD", repository.roomCode)
+            assertEquals(synchronized, controller.roomSyncState)
+            assertEquals(synchronized, (observed.last() as HostingState.LiveRoom).synchronization)
+            controller.endRoom()
 
-        assertTrue(repository.closed)
-        assertNull(controller.roomSyncState)
-        assertEquals(HostingState.Setup(backend, "https://guest.example"), controller.state)
-        repository.publish(synchronized.copy(freshness = Freshness.STALE))
-        assertNull(controller.roomSyncState)
+            assertTrue(repository.closed)
+            assertNull(controller.roomSyncState)
+            assertEquals(HostingState.Setup(backend, "https://guest.example"), controller.state)
+            repository.publish(synchronized.copy(freshness = Freshness.STALE))
+            assertNull(controller.roomSyncState)
+        } finally {
+            observation.close()
+        }
     }
 
     private class RecordingRoomRepository : RoomRepository {

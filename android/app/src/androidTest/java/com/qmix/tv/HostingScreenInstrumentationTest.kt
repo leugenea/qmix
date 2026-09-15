@@ -113,10 +113,13 @@ class HostingScreenInstrumentationTest {
     }
 
     @Test
-    fun room_placeholder_shows_room_and_next_step() {
+    fun initial_live_room_shows_room_and_next_step() {
         composeRule.setContent {
             HostingScreen(
-                HostingState.RoomPlaceholder("ABCD"),
+                HostingState.LiveRoom(
+                    GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                    RoomSyncState.Active("ABCD", null, Freshness.LOADING, LiveConnection.CONNECTING),
+                ),
                 onSettingsChanged = { _, _ -> },
                 onCreate = {},
                 onEnterRoom = {},

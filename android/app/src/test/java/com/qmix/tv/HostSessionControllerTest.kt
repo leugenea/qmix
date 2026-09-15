@@ -95,7 +95,7 @@ class HostSessionControllerTest {
     }
 
     @Test
-    fun invitation_action_transitions_to_room_placeholder() {
+    fun invitation_action_transitions_to_initial_live_room_state() {
         server.enqueue(
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
@@ -109,7 +109,13 @@ class HostSessionControllerTest {
 
         controller.enterRoom()
 
-        assertEquals(HostingState.RoomPlaceholder("ABCD"), controller.state)
+        assertEquals(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active("ABCD", null, Freshness.LOADING, LiveConnection.CONNECTING),
+            ),
+            controller.state,
+        )
     }
 
     @Test

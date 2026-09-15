@@ -61,7 +61,7 @@ internal fun HostingScreen(
                 onCreate,
             )
             is HostingState.Invitation -> InvitationContent(state.invite, onEnterRoom)
-            is HostingState.RoomPlaceholder -> RoomPlaceholderContent(state.code)
+            is HostingState.LiveRoom -> RoomPlaceholderContent(state.invite.code)
         }
     }
 }
