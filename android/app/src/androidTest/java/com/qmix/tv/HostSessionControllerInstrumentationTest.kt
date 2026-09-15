@@ -7,6 +7,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -128,6 +129,62 @@ class HostSessionControllerInstrumentationTest {
             ),
             controller.state,
         )
+    }
+
+    @Test
+    fun room_synchronization_is_owned_and_terminated_by_the_host_session() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val repository = RecordingRoomRepository()
+        val backend = server.url("/").toString()
+        val controller = HostSessionController(
+            OkHttpClient(),
+            initialBackendUrl = backend,
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+            roomRepositoryFactory = {
+                assertEquals(backend, it)
+                repository
+            },
+        )
+
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        val synchronized = RoomSyncState.Active(
+            "ABCD",
+            RoomState("ABCD", null, emptyList()),
+            Freshness.FRESH,
+            LiveConnection.CONNECTED,
+        )
+        repository.publish(synchronized)
+
+        assertEquals("ABCD", repository.roomCode)
+        assertEquals(synchronized, controller.roomSyncState)
+        controller.endRoom()
+
+        assertTrue(repository.closed)
+        assertNull(controller.roomSyncState)
+        assertEquals(HostingState.Setup(backend, "https://guest.example"), controller.state)
+        repository.publish(synchronized.copy(freshness = Freshness.STALE))
+        assertNull(controller.roomSyncState)
+    }
+
+    private class RecordingRoomRepository : RoomRepository {
+        var roomCode: String? = null
+        var closed = false
+        private var observer: ((RoomSyncState) -> Unit)? = null
+
+        override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
+            this.roomCode = roomCode
+            observer = onUpdate
+            return AutoCloseable { closed = true }
+        }
+
+        fun publish(state: RoomSyncState) {
+            observer?.invoke(state)
+        }
     }
 
     private class QueuedExecutor : Executor {

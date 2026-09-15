@@ -10,9 +10,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
@@ -197,6 +199,32 @@ class RoomApiClientInstrumentationTest {
         } finally {
             otherOrigin.shutdown()
         }
+    }
+
+    @Test
+    fun asynchronous_room_fetch_classifies_success_missing_decode_and_transport_failures() {
+        fun fetch(response: MockResponse): RoomFetchResult {
+            server.enqueue(response)
+            val completed = CountDownLatch(1)
+            var result: RoomFetchResult? = null
+            api.fetch("ABCD") {
+                result = it
+                completed.countDown()
+            }
+            assertTrue(completed.await(5, TimeUnit.SECONDS))
+            return requireNotNull(result)
+        }
+
+        assertEquals(
+            RoomFetchResult.Success(RoomState("ABCD", null, emptyList())),
+            fetch(MockResponse().setBody("""{"code":"ABCD","current":null,"queue":[]}""")),
+        )
+        assertEquals(RoomFetchResult.Missing, fetch(MockResponse().setResponseCode(404)))
+        assertEquals(RoomFetchResult.Failure, fetch(MockResponse().setBody("not json")))
+        assertEquals(
+            RoomFetchResult.Failure,
+            fetch(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)),
+        )
     }
 
     private fun assertInvalid(block: () -> Unit) {
