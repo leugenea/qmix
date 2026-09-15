@@ -20,9 +20,21 @@ class HostSessionController(
     private val executor: Executor = Executor { command ->
         Thread(command, "qmix-room-request").apply { isDaemon = true }.start()
     },
+    private val roomRepositoryFactory: ((String) -> RoomRepository)? = null,
 ) {
     private val observers = CopyOnWriteArrayList<(HostingState) -> Unit>()
+    private var setupState = HostingState.Setup(initialBackendUrl, initialGuestOrigin)
     private var credentials: RoomCredentials? = null
+    private var activeBackendUrl: String? = null
+    private var roomSubscription: AutoCloseable? = null
+    private var createGeneration = 0L
+
+    @Volatile
+    private var syncGeneration = 0L
+
+    @Volatile
+    var roomSyncState: RoomSyncState? = null
+        private set
 
     @Volatile
     var state: HostingState = HostingState.Setup(initialBackendUrl, initialGuestOrigin)
@@ -37,7 +49,8 @@ class HostSessionController(
     @Synchronized
     fun updateSettings(backendUrl: String, guestOrigin: String) {
         if (state is HostingState.Setup || state is HostingState.Error) {
-            publish(HostingState.Setup(backendUrl, guestOrigin))
+            setupState = HostingState.Setup(backendUrl, guestOrigin)
+            publish(setupState)
         }
     }
 
@@ -52,30 +65,68 @@ class HostSessionController(
             publish(HostingState.Error("Enter valid absolute http(s) URLs.", settings.backendUrl, settings.guestOrigin))
             return false
         }
+        setupState = settings
+        val generation = ++createGeneration
         publish(HostingState.Pending(settings.backendUrl, settings.guestOrigin))
         executor.execute {
             try {
                 val created = RoomApiClient(httpClient, settings.backendUrl).createRoom()
-                credentials = created
-                publish(HostingState.Invitation(GuestInvite.create(created, settings.guestOrigin)))
+                synchronized(this) {
+                    if (generation != createGeneration) return@execute
+                    credentials = created
+                    activeBackendUrl = settings.backendUrl
+                    publish(HostingState.Invitation(GuestInvite.create(created, settings.guestOrigin)))
+                }
             } catch (error: RoomApiException) {
-                publish(
-                    HostingState.Error(
-                        error.message ?: "The request failed.",
-                        settings.backendUrl,
-                        settings.guestOrigin,
-                    ),
-                )
+                synchronized(this) {
+                    if (generation != createGeneration) return@execute
+                    publish(
+                        HostingState.Error(
+                            error.message ?: "The request failed.",
+                            settings.backendUrl,
+                            settings.guestOrigin,
+                        ),
+                    )
+                }
             } catch (_: IllegalArgumentException) {
-                publish(HostingState.Error("Enter valid absolute http(s) URLs.", settings.backendUrl, settings.guestOrigin))
+                synchronized(this) {
+                    if (generation != createGeneration) return@execute
+                    publish(HostingState.Error("Enter valid absolute http(s) URLs.", settings.backendUrl, settings.guestOrigin))
+                }
             }
         }
         return true
     }
 
+    @Synchronized
     fun enterRoom() {
         val invitation = state as? HostingState.Invitation ?: return
         publish(HostingState.RoomPlaceholder(invitation.invite.code))
+        val factory = roomRepositoryFactory ?: return
+        val backendUrl = activeBackendUrl ?: return
+        roomSubscription?.close()
+        syncGeneration++
+        val generation = syncGeneration
+        roomSubscription = factory(backendUrl).observe(invitation.invite.code) { syncState ->
+            synchronized(this@HostSessionController) {
+                if (generation == syncGeneration) roomSyncState = syncState
+            }
+        }
+    }
+
+    fun endRoom() {
+        val subscription = synchronized(this) {
+            createGeneration++
+            syncGeneration++
+            val owned = roomSubscription
+            roomSubscription = null
+            roomSyncState = null
+            credentials = null
+            activeBackendUrl = null
+            publish(setupState)
+            owned
+        }
+        subscription?.close()
     }
 
     private fun publish(newState: HostingState) {

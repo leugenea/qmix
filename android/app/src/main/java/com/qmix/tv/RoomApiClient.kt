@@ -1,9 +1,12 @@
 package com.qmix.tv
 
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Response
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
@@ -45,7 +48,7 @@ data class RoomCredentials(
 class RoomApiClient(
     httpClient: OkHttpClient,
     backendUrl: String,
-) {
+) : RoomStateFetcher {
     private val httpClient = httpClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
@@ -69,41 +72,72 @@ class RoomApiClient(
     }
 
     fun getRoom(code: String): RoomState {
-        val request = Request.Builder().url(
-            backend.newBuilder().addPathSegment("rooms").addPathSegment(code).build(),
-        ).get().build()
-        return execute(request, 200) { body ->
-            val json = parseObject(body)
-            if (!json.has("current")) {
-                throw RoomApiException("The server returned an invalid response.")
+        val request = roomRequest(code)
+        return execute(request, 200, ::decodeRoom)
+    }
+
+    override fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable {
+        val call = httpClient.newCall(roomRequest(roomCode))
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                callback(RoomFetchResult.Failure)
             }
-            val current = when (val value = json.opt("current")) {
-                JSONObject.NULL -> null
-                is JSONObject -> CurrentTrack(
-                    trackId = value.requiredString("track_id"),
-                    positionSeconds = value.requiredInt("pos_sec"),
-                    state = value.requiredString("state"),
-                    title = value.requiredString("title"),
-                    artist = value.requiredString("artist", allowBlank = true),
-                )
-                else -> throw RoomApiException("The server returned an invalid response.")
+
+            override fun onResponse(call: Call, response: Response) {
+                val result = try {
+                    response.use {
+                        when (it.code) {
+                            200 -> RoomFetchResult.Success(decodeRoom(it.body.string()))
+                            404 -> RoomFetchResult.Missing
+                            else -> RoomFetchResult.Failure
+                        }
+                    }
+                } catch (_: IOException) {
+                    RoomFetchResult.Failure
+                } catch (_: RoomApiException) {
+                    RoomFetchResult.Failure
+                }
+                callback(result)
             }
-            val queueJson = json.optJSONArray("queue")
-                ?: throw RoomApiException("The server returned an invalid response.")
-            val queue = (0 until queueJson.length()).map { index ->
-                val track = queueJson.optJSONObject(index)
-                    ?: throw RoomApiException("The server returned an invalid response.")
-                QueuedTrack(
-                    id = track.requiredString("id"),
-                    url = track.requiredString("url"),
-                    title = track.requiredString("title"),
-                    artist = track.requiredString("artist", allowBlank = true),
-                    durationSeconds = track.requiredInt("duration_sec"),
-                    resolvedBy = track.requiredString("resolved_by", allowBlank = true),
-                )
-            }
-            RoomState(json.requiredString("code"), current, queue)
+        })
+        return Cancelable(call::cancel)
+    }
+
+    private fun roomRequest(code: String): Request = Request.Builder().url(
+        backend.newBuilder().addPathSegment("rooms").addPathSegment(code).build(),
+    ).get().build()
+
+    private fun decodeRoom(body: String): RoomState {
+        val json = parseObject(body)
+        if (!json.has("current")) {
+            throw RoomApiException("The server returned an invalid response.")
         }
+        val current = when (val value = json.opt("current")) {
+            JSONObject.NULL -> null
+            is JSONObject -> CurrentTrack(
+                trackId = value.requiredString("track_id"),
+                positionSeconds = value.requiredInt("pos_sec"),
+                state = value.requiredString("state"),
+                title = value.requiredString("title"),
+                artist = value.requiredString("artist", allowBlank = true),
+            )
+            else -> throw RoomApiException("The server returned an invalid response.")
+        }
+        val queueJson = json.optJSONArray("queue")
+            ?: throw RoomApiException("The server returned an invalid response.")
+        val queue = (0 until queueJson.length()).map { index ->
+            val track = queueJson.optJSONObject(index)
+                ?: throw RoomApiException("The server returned an invalid response.")
+            QueuedTrack(
+                id = track.requiredString("id"),
+                url = track.requiredString("url"),
+                title = track.requiredString("title"),
+                artist = track.requiredString("artist", allowBlank = true),
+                durationSeconds = track.requiredInt("duration_sec"),
+                resolvedBy = track.requiredString("resolved_by", allowBlank = true),
+            )
+        }
+        return RoomState(json.requiredString("code"), current, queue)
     }
 
     fun skip(code: String, hostToken: String): CurrentTrack {

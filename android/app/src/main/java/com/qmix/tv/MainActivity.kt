@@ -9,9 +9,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 class MainActivity : ComponentActivity() {
+    private lateinit var controller: HostSessionController
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val controller = (application as QMixApplication).hostSession
+        controller = (application as QMixApplication).hostSession
         var uiState by mutableStateOf(controller.state)
         setContent {
             DisposableEffect(controller) {
@@ -28,4 +30,14 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
+
+    override fun onDestroy() {
+        if (::controller.isInitialized && shouldEndHostSession(isFinishing, isChangingConfigurations)) {
+            controller.endRoom()
+        }
+        super.onDestroy()
+    }
 }
+
+internal fun shouldEndHostSession(isFinishing: Boolean, isChangingConfigurations: Boolean): Boolean =
+    isFinishing && !isChangingConfigurations
