@@ -58,6 +58,15 @@ timeouts and owns reconnect policy explicitly. A 404 ends synchronization,
 network failures preserve the last room state as stale, and ending the host
 session cancels the request, event stream, retry, and periodic timers.
 
+`HostSessionController` publishes each current-session repository update as a
+`HostingState.LiveRoom`, carrying the safe guest invitation, synchronization
+state, and command-pending input used by the TV presentation. Room mutations
+are considered reliable only when a non-null room is fresh and the live
+connection is connected. The controller implements the live-room action
+boundary: Start/Next is delegated without implementing playback, Invite is a
+reversible presentation state, and Back closes Invite before ending the host
+session and returning an explicit `EXIT_ACTIVITY` result to the UI.
+
 ## Coverage
 
 The required gate is at least 95% instruction coverage for all bytecode in the
