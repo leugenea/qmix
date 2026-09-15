@@ -54,6 +54,24 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", nas)
         self.assertIn("persist-credentials: false", nas)
 
+    def test_live_stream_acceptance_is_explicit_and_blocking(self):
+        text = read(".github/workflows/live.yml")
+        trigger = text.split("\nconcurrency:", 1)[0]
+        self.assertRegex(
+            trigger,
+            r"(?ms)^  workflow_dispatch:\n    inputs:\n      stream_acceptance:.*?"
+            r"^        type: boolean$",
+        )
+        nas = job(text, "live-nas")
+        self.assertIn("continue-on-error: ${{ !inputs.stream_acceptance }}", nas)
+        self.assertIn("timeout-minutes: 25", nas)
+        self.assertIn('QMIX_STREAM_ACCEPTANCE: "1"', nas)
+        self.assertIn("shell: bash", nas)
+        self.assertIn("set -o pipefail", nas)
+        self.assertIn("go test -count=1", nas)
+        self.assertIn("-run '^TestStreamProxyAcceptanceLive$' ./internal/server", nas)
+        self.assertIn("qmix-stream-acceptance.txt", nas)
+
     def test_live_yt_dlp_is_pinned_verified_and_job_temporary(self):
         text = read(".github/workflows/live.yml")
         expected_url = (

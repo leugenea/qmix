@@ -4,6 +4,12 @@ name: live
 
 on:
   workflow_dispatch:
+    inputs:
+      stream_acceptance:
+        description: Run the blocking 10-minute QMix stream acceptance
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
   push:
@@ -46,8 +52,10 @@ jobs:
     needs: route
     if: needs.route.outputs.live == 'true' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, nas]
-    continue-on-error: true
-    timeout-minutes: 15
+    # The regular smoke remains advisory because YouTube is external. An
+    # explicitly requested acceptance run is blocking evidence for M3.
+    continue-on-error: ${{ !inputs.stream_acceptance }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -81,6 +89,28 @@ jobs:
           QMIX_STREAM_LIVE: "1"
           QMIX_YTDLP_BIN: ${{ runner.temp }}/yt-dlp
         run: go test -run 'Live' ./internal/stream/...
+      - name: 10-minute QMix stream acceptance
+        if: inputs.stream_acceptance
+        shell: bash
+        env:
+          QMIX_STREAM_ACCEPTANCE: "1"
+          QMIX_YTDLP_BIN: ${{ runner.temp }}/yt-dlp
+        run: |
+          set -o pipefail
+          {
+            printf 'utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            go version
+            "$QMIX_YTDLP_BIN" --version
+            go test -count=1 -v -timeout 15m \
+              -run '^TestStreamProxyAcceptanceLive$' ./internal/server
+          } 2>&1 | tee "$RUNNER_TEMP/qmix-stream-acceptance.txt"
+      - name: Upload stream acceptance evidence
+        if: always() && inputs.stream_acceptance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qmix-stream-acceptance
+          path: ${{ runner.temp }}/qmix-stream-acceptance.txt
+          if-no-files-found: error
 
   result:
     name: Live result

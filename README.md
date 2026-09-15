@@ -11,7 +11,6 @@ Completed:
 - **M0** — foundation: Go backend scaffold with `/healthz`, Makefile, docker-compose, and CI.
 - **M1** — rooms and queues: create/get, add track, skip/reorder, and SSE events.
 - **M2** — URL-to-track resolver through public endpoints. Spotify uses oEmbed; anonymous VK and Yandex Music resolution first attempts Open Graph metadata and returns 422 if metadata is unavailable.
-- **M3** — streaming: `yt-dlp` StreamBackend plus an HTTP proxy with Range/seek support and a TTL link cache.
 - **token-vk v2** — api.vk.com token with the `audio` scope (unblocks #9).
 - **token-ym** — small CLI for obtaining a Yandex Music OAuth token through device flow, without sqlite (closes #12).
 - **Authenticated Spotify resolution** (#8) — Client Credentials (`accounts.spotify.com/api/token`) + Web API (`api.spotify.com`); oEmbed remains the fallback when credentials are absent.
@@ -23,6 +22,7 @@ Completed:
 
 In progress / next:
 
+- **M3 acceptance** — the streaming implementation is complete, but M3 remains pending until the required 10-minute continuous playback and repeated seek acceptance passes through the QMix proxy.
 - **M4** — the single-module Kotlin/Compose for TV scaffold, Media3 playback engine, and room creation/QR flow are implemented via #71, #72, and #73. Live room synchronization and coordinated playback remain to be completed (see [`android/README.md`](android/README.md)).
 - **M6** — Definition of Done (E2E + v0.1.0).
 - Automatic Yandex token refresh through `QMIX_YM_REFRESH_TOKEN` (`goym` does not provide built-in refresh support, so this is a separate task).
@@ -76,6 +76,23 @@ Network-dependent scenarios remain optional and isolated from pull requests.
 Credentialed VK/Spotify/Yandex checks run after pushes to trusted `main` or a
 manual dispatch of `main`; `live.yml` runs only trusted code on a self-hosted
 runner.
+
+### M3 live acceptance
+
+After the acceptance harness is reviewed and merged to `main`, run the `live`
+workflow manually on `main` with **stream_acceptance** enabled. The blocking
+test streams a long-form track through
+`GET /rooms/{code}/current/stream` for 10 continuous minutes, then verifies
+repeated non-adjacent Range seeks, including a fresh lookup after the five-minute
+direct-URL cache expires. The fixture is pinned by YouTube video ID and must
+report a duration of at least 10 minutes. Playback fails if any read makes no
+progress for five seconds; its byte target and pacing are derived from the
+selected format's duration and Content-Length so the run consumes 10 minutes of
+media over 10 wall-clock minutes. The workflow bypasses Go's test cache and
+uploads the timestamp, tool versions, selected media identity, elapsed time,
+byte count, lookup count, and seek results as the `qmix-stream-acceptance`
+artifact. Link the successful run from the acceptance issue before marking M3
+complete.
 
 ## Running
 
