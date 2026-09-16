@@ -9,9 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
@@ -29,7 +32,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
@@ -61,7 +66,7 @@ internal fun HostingScreen(
                 onCreate,
             )
             is HostingState.Invitation -> InvitationContent(state.invite, onEnterRoom)
-            is HostingState.LiveRoom -> RoomPlaceholderContent(state.invite.code)
+            is HostingState.LiveRoom -> LiveRoomContent(state)
         }
     }
 }
@@ -151,14 +156,91 @@ private fun InvitationContent(invite: GuestInvite, onEnterRoom: () -> Unit) {
 }
 
 @Composable
-private fun RoomPlaceholderContent(code: String) {
+private fun LiveRoomContent(state: HostingState.LiveRoom) {
+    val room = (state.synchronization as? RoomSyncState.Active)?.room
     Column(
-        Modifier.fillMaxSize().background(Color(0xFF101218)),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+        Modifier.fillMaxSize().background(Color(0xFF101218)).padding(48.dp),
     ) {
-        Text("Room $code", fontSize = 42.sp)
-        Text("Playback and live updates are coming next.", modifier = Modifier.padding(16.dp))
+        Text("Room ${state.invite.code}", fontSize = 42.sp)
+        synchronizationMessage(state.synchronization)?.let { message ->
+            Text(message, color = Color(0xFFFFDDB3), modifier = Modifier.padding(top = 12.dp))
+        }
+        if (room != null) {
+            Text("Now playing", fontSize = 28.sp, modifier = Modifier.padding(top = 24.dp))
+            if (room.current == null) {
+                Text("No track playing", modifier = Modifier.padding(top = 8.dp))
+            } else {
+                Text(
+                    room.current.title,
+                    fontSize = 24.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                Text(
+                    room.current.artist,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Text("Queue", fontSize = 28.sp, modifier = Modifier.padding(top = 24.dp))
+            if (room.queue.isEmpty()) {
+                Text("Queue is empty", modifier = Modifier.padding(top = 8.dp))
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp).testTag("queue-list"),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(room.queue, key = { track -> track.id }) { track ->
+                        QueueTrackRow(track)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueTrackRow(track: QueuedTrack) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {}
+            .testTag("queue-track-${track.id}")
+            .background(Color(0xFF252833), RoundedCornerShape(8.dp))
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color(0xFFCAC4D0))
+        Text(formatDuration(track.durationSeconds), fontSize = 14.sp, color = Color(0xFFCAC4D0))
+    }
+}
+
+private fun formatDuration(durationSeconds: Int): String {
+    if (durationSeconds <= 0) return "Duration unknown"
+    val hours = durationSeconds / 3600
+    val minutes = (durationSeconds % 3600) / 60
+    val seconds = durationSeconds % 60
+    return if (hours > 0) {
+        "$hours:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
+    } else {
+        "$minutes:${seconds.toString().padStart(2, '0')}"
+    }
+}
+
+private fun synchronizationMessage(synchronization: RoomSyncState): String? = when (synchronization) {
+    is RoomSyncState.Missing -> "Room not found."
+    is RoomSyncState.Active -> when {
+        synchronization.connection == LiveConnection.CONNECTING -> "Connecting to room…"
+        synchronization.connection == LiveConnection.RECONNECTING && synchronization.room != null ->
+            "Reconnecting… Showing last known room."
+        synchronization.connection == LiveConnection.RECONNECTING -> "Reconnecting…"
+        synchronization.freshness == Freshness.STALE && synchronization.room != null ->
+            "Updates are stale. Showing last known room."
+        synchronization.freshness == Freshness.STALE -> "Could not refresh the room."
+        synchronization.freshness == Freshness.LOADING -> "Waiting for room data…"
+        else -> null
     }
 }
 
