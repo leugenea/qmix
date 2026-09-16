@@ -1,5 +1,6 @@
 package com.qmix.tv
 
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
@@ -7,6 +8,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextReplacement
@@ -113,12 +115,24 @@ class HostingScreenInstrumentationTest {
     }
 
     @Test
-    fun initial_live_room_shows_room_and_next_step() {
+    fun live_room_renders_content_duration_and_every_synchronization_state() {
+        val room = RoomState(
+            "ABCD",
+            CurrentTrack("current-1", 12, "playing", "Current title", "Current artist"),
+            listOf(
+                QueuedTrack("queued-0", "https://example/0", "Unknown", "Artist", 0, "fixture"),
+                QueuedTrack("queued-1", "https://example/1", "Short", "Artist", 65, "fixture"),
+                QueuedTrack("queued-2", "https://example/2", "Long", "Artist", 3661, "fixture"),
+            ),
+        )
+        val synchronization = mutableStateOf<RoomSyncState>(
+            RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.RECONNECTING),
+        )
         composeRule.setContent {
             HostingScreen(
                 HostingState.LiveRoom(
                     GuestInvite("ABCD", "https://guest.example/r/ABCD"),
-                    RoomSyncState.Active("ABCD", null, Freshness.LOADING, LiveConnection.CONNECTING),
+                    synchronization.value,
                 ),
                 onSettingsChanged = { _, _ -> },
                 onCreate = {},
@@ -127,6 +141,75 @@ class HostingScreenInstrumentationTest {
         }
 
         composeRule.onNodeWithText("Room ABCD").assertExists()
-        composeRule.onNodeWithText("Playback and live updates are coming next.").assertExists()
+        composeRule.onNodeWithText("Reconnecting… Showing last known room.").assertExists()
+        composeRule.onNodeWithText("Current title").assertExists()
+        composeRule.onNodeWithTag("queue-track-queued-0").assertTextContains("Duration unknown")
+        composeRule.onNodeWithTag("queue-track-queued-1").assertTextContains("1:05")
+        composeRule.onNodeWithTag("queue-track-queued-2").assertTextContains("1:01:01")
+
+        composeRule.runOnIdle {
+            synchronization.value = RoomSyncState.Active(
+                "ABCD",
+                RoomState("ABCD", null, emptyList()),
+                Freshness.FRESH,
+                LiveConnection.CONNECTED,
+            )
+        }
+        composeRule.onNodeWithText("No track playing").assertExists()
+        composeRule.onNodeWithText("Queue is empty").assertExists()
+
+        composeRule.runOnIdle {
+            synchronization.value = RoomSyncState.Active(
+                "ABCD",
+                null,
+                Freshness.LOADING,
+                LiveConnection.CONNECTING,
+            )
+        }
+        composeRule.onNodeWithText("Connecting to room…").assertExists()
+
+        composeRule.runOnIdle {
+            synchronization.value = RoomSyncState.Active(
+                "ABCD",
+                null,
+                Freshness.LOADING,
+                LiveConnection.RECONNECTING,
+            )
+        }
+        composeRule.onNodeWithText("Reconnecting…").assertExists()
+
+        composeRule.runOnIdle {
+            synchronization.value = RoomSyncState.Active(
+                "ABCD",
+                null,
+                Freshness.LOADING,
+                LiveConnection.CONNECTED,
+            )
+        }
+        composeRule.onNodeWithText("Waiting for room data…").assertExists()
+
+        composeRule.runOnIdle {
+            synchronization.value = RoomSyncState.Active(
+                "ABCD",
+                room,
+                Freshness.STALE,
+                LiveConnection.CONNECTED,
+            )
+        }
+        composeRule.onNodeWithText("Updates are stale. Showing last known room.").assertExists()
+        composeRule.onNodeWithText("Current title").assertExists()
+
+        composeRule.runOnIdle {
+            synchronization.value = RoomSyncState.Active(
+                "ABCD",
+                null,
+                Freshness.STALE,
+                LiveConnection.CONNECTED,
+            )
+        }
+        composeRule.onNodeWithText("Could not refresh the room.").assertExists()
+
+        composeRule.runOnIdle { synchronization.value = RoomSyncState.Missing("ABCD") }
+        composeRule.onNodeWithText("Room not found.").assertExists()
     }
 }
