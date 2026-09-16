@@ -150,12 +150,12 @@ func (s *Spotify) resolveViaOEmbed(ctx context.Context, rawurl string) (*Track, 
 	u := s.endpoint() + "?url=" + url.QueryEscape(rawurl) + "&format=json"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, fmt.Errorf("spotify: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("spotify: %w: %w", ErrService, err)
 	}
 	req.Header.Set("User-Agent", "QMix resolver/1.0")
 	resp, err := s.client().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("spotify: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("spotify: %w: %w", ErrService, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -163,11 +163,11 @@ func (s *Spotify) resolveViaOEmbed(ctx context.Context, rawurl string) (*Track, 
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("spotify: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("spotify: %w: %w", ErrService, err)
 	}
 	var oe oembedResponse
 	if err := json.Unmarshal(body, &oe); err != nil {
-		return nil, fmt.Errorf("spotify oembed: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("spotify oembed: %w: %w", ErrService, err)
 	}
 	if oe.Title == "" {
 		return nil, errors.Join(ErrService, errors.New("spotify oembed returned empty title"))
@@ -193,13 +193,13 @@ func (s *Spotify) token(ctx context.Context) (string, error) {
 	form := url.Values{"grant_type": {"client_credentials"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.tokenURL(), strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", fmt.Errorf("spotify token: %w: %v", ErrService, err)
+		return "", fmt.Errorf("spotify token: %w: %w", ErrService, err)
 	}
 	req.SetBasicAuth(s.Config.SpotifyClientID, s.Config.SpotifyClientSecret)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := s.client().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("spotify token: %w: %v", ErrService, err)
+		return "", fmt.Errorf("spotify token: %w: %w", ErrService, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -207,11 +207,11 @@ func (s *Spotify) token(ctx context.Context) (string, error) {
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("spotify token: %w: %v", ErrService, err)
+		return "", fmt.Errorf("spotify token: %w: %w", ErrService, err)
 	}
 	var tr tokenResponse
 	if err := json.Unmarshal(body, &tr); err != nil {
-		return "", fmt.Errorf("spotify token: %w: %v", ErrService, err)
+		return "", fmt.Errorf("spotify token: %w: %w", ErrService, err)
 	}
 	if tr.AccessToken == "" {
 		return "", errors.Join(ErrService, errors.New("spotify token endpoint returned empty access_token"))
@@ -230,12 +230,12 @@ func (s *Spotify) resolveViaAPI(ctx context.Context, id, rawurl string) (*Track,
 	u := s.apiBase() + "/v1/tracks/" + url.PathEscape(id)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, fmt.Errorf("spotify: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("spotify: %w: %w", ErrService, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := s.client().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("spotify api: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("spotify api: %w: %w", ErrService, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -243,11 +243,11 @@ func (s *Spotify) resolveViaAPI(ctx context.Context, id, rawurl string) (*Track,
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("spotify api: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("spotify api: %w: %w", ErrService, err)
 	}
 	var at apiTrack
 	if err := json.Unmarshal(body, &at); err != nil {
-		return nil, fmt.Errorf("spotify api: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("spotify api: %w: %w", ErrService, err)
 	}
 	if at.Name == "" {
 		return nil, errors.Join(ErrService, errors.New("spotify api returned empty name"))

@@ -103,11 +103,50 @@ make run
 curl localhost:8080/healthz
 
 # or with Docker (external port 8180)
-eval "$(go run ./internal/buildinfo/cmd/version -format=env)"
-export VERSION COMMIT DIRTY ANDROID_VERSION_CODE
-docker compose up --build
+make compose-up
 curl localhost:8180/healthz
 ```
+
+## Backend logs
+
+The backend emits structured JSON to stderr (visible with
+`docker compose logs backend`) and to one persistent file. The effective
+default level is `WARN`. Set `QMIX_LOG_LEVEL` to `debug`, `info`, `warn`, or
+`error`; invalid values stop startup with a configuration error. Set
+`QMIX_LOG_FILE` to choose the file used outside Compose (default: `qmix.log`).
+
+Compose fixes the container path at `/var/log/qmix/qmix.log` and persists it at
+`agent-apps-data/qmix/logs/qmix.log` on the host. `make compose-up` runs an
+unprivileged preparation helper that creates each directory without following
+symlinks, sets the log directory to mode `0770`, and grants the non-root backend
+write access through the host user's group. Compose refuses to create a missing
+bind source; this keeps privileged containers from changing host ownership or
+permissions.
+
+```bash
+# Raise verbosity for one run and follow Docker's standard stream.
+QMIX_LOG_LEVEL=debug make compose-up COMPOSE_ARGS=-d
+docker compose logs backend --follow
+
+# Read or copy the persistent file through the running container.
+docker compose exec backend tail -n 200 /var/log/qmix/qmix.log
+docker compose cp backend:/var/log/qmix/qmix.log ./qmix-debug.log
+```
+
+The process fails before listening if the persistent file cannot be opened. The
+persistent sink is capped at `10 MiB`; reaching that bound, or any other later
+write failure, leaves console logging active, emits the structured JSON diagnostic
+`persistent log write failed`, and disables the file sink for the rest of the process.
+Existing log files are restricted to mode `0600`, and symlinks or non-regular
+files are rejected. Rotate the file before it reaches the cap with an external
+size/retention policy using `copytruncate` so the process keeps writing to the
+same inode. Records use
+stable `component` values including `server/http`, `store/rooms`, `sse`,
+`resolver`, and `stream`. Request bodies, query strings, authorization headers,
+host tokens, OAuth tokens, credentials, and secret-bearing upstream URLs are
+never written to logs.
+
+Compose also bounds Docker's standard JSON log stream to three `10 MiB` files.
 
 ## Build version
 

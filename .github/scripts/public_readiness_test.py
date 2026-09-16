@@ -3,6 +3,9 @@
 
 import pathlib
 import re
+import os
+import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -24,6 +27,32 @@ def job(text, name):
 
 
 class PublicReadinessPolicyTest(unittest.TestCase):
+    def test_compose_log_preparation_rejects_symlink_components(self):
+        script = ROOT / "scripts" / "prepare_compose_logs.py"
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp) / "repo"
+            outside = pathlib.Path(temp) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (root / "agent-apps-data").symlink_to(outside, target_is_directory=True)
+
+            result = subprocess.run(
+                ["python3", str(script), "--root", str(root)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse((outside / "qmix").exists())
+
+            (root / "agent-apps-data").unlink()
+            gid = subprocess.check_output(
+                ["python3", str(script), "--root", str(root)], text=True
+            ).strip()
+            logs = root / "agent-apps-data" / "qmix" / "logs"
+            self.assertEqual(str(os.getgid()), gid)
+            self.assertEqual(0o770, logs.stat().st_mode & 0o777)
+
     def test_mit_license_and_public_documents_are_present(self):
         license_text = read("LICENSE")
         self.assertIn("MIT License", license_text)
@@ -47,8 +76,65 @@ class PublicReadinessPolicyTest(unittest.TestCase):
 
         policy = job(read(".github/workflows/ci.yml"), "policy")
         self.assertIn("set -o pipefail", policy)
+        self.assertIn("QMIX_LOG_GID=$(python3 scripts/prepare_compose_logs.py)", policy)
+        self.assertIn("export QMIX_LOG_GID", policy)
         self.assertIn("docker compose config --format json", policy)
         self.assertIn("jq -e '.name == \"agent-apps\"'", policy)
+
+    def test_backend_logging_is_persistent_and_smoke_tested(self):
+        compose = read("docker-compose.yml")
+        self.assertIn('QMIX_LOG_LEVEL: "${QMIX_LOG_LEVEL:-warn}"', compose)
+        self.assertIn('QMIX_LOG_FILE: "/var/log/qmix/qmix.log"', compose)
+        self.assertIn("source: ./agent-apps-data/qmix/logs", compose)
+        self.assertIn("target: /var/log/qmix", compose)
+        self.assertIn("create_host_path: false", compose)
+        self.assertIn('"${QMIX_LOG_GID:?run make compose-up}"', compose)
+        self.assertIn('max-size: "10m"', compose)
+        self.assertIn('max-file: "3"', compose)
+        self.assertNotIn("log-init:", compose)
+        self.assertNotIn('user: "0:0"', compose)
+
+        prepare = read("scripts/prepare_compose_logs.py")
+        self.assertIn("os.O_NOFOLLOW", prepare)
+        self.assertIn("dir_fd=", prepare)
+        self.assertIn("os.fchmod", prepare)
+        makefile = read("Makefile")
+        self.assertIn("compose-up:", makefile)
+        self.assertIn("scripts/prepare_compose_logs.py", makefile)
+
+        dockerfile = read("Dockerfile")
+        self.assertIn("adduser -D -H -u 10001 qmix", dockerfile)
+        self.assertIn("chown -R qmix:qmix /var/log/qmix", dockerfile)
+
+        docker = job(read(".github/workflows/ci.yml"), "docker")
+        self.assertIn("docker compose logs --no-color --no-log-prefix backend", docker)
+        self.assertIn("docker compose rm -s -f backend", docker)
+        self.assertGreaterEqual(docker.count("qmix.log"), 2)
+        self.assertNotIn("chmod 0777", docker)
+        self.assertNotIn("chown 10001:10001 agent-apps-data/qmix/logs", docker)
+        self.assertIn('"msg":"server listening"', docker)
+        self.assertIn('"component":"server/http"', docker)
+        self.assertIn('"level":"INFO"', docker)
+        self.assertIn("jq -e .", docker)
+        self.assertIn("stat -c '%a %u %g' agent-apps-data/qmix/logs", docker)
+        self.assertIn("QMIX_LOG_GID=$(python3 scripts/prepare_compose_logs.py)", docker)
+        self.assertIn('test "$log_dir_mode_owner" = "770 $host_uid $QMIX_LOG_GID"', docker)
+        self.assertIn("test \"$log_file_mode_owner\" = \"600 10001 10001\"", docker)
+        self.assertIn('test "$(docker compose exec -T backend id -u)" = "10001"', docker)
+        self.assertEqual(2, docker.count('if [ -z "$ready" ]; then'))
+        self.assertIn("(( after > before ))", docker)
+
+        readme = read("README.md")
+        for phrase in (
+            "QMIX_LOG_LEVEL",
+            "QMIX_LOG_FILE",
+            "docker compose logs backend",
+            "agent-apps-data/qmix/logs/qmix.log",
+            "persistent log write failed",
+            "10 MiB",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme)
 
     def test_live_workflow_is_trusted_only_and_read_only(self):
         text = read(".github/workflows/live.yml")

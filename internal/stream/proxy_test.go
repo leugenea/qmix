@@ -164,3 +164,31 @@ func TestProxyDefaultStatusZero(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }
+
+type failingResponseWriter struct {
+	header http.Header
+	err    error
+}
+
+func (w *failingResponseWriter) Header() http.Header       { return w.header }
+func (*failingResponseWriter) WriteHeader(int)             {}
+func (w *failingResponseWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestProxyClassifiesClientWriteFailure(t *testing.T) {
+	wantErr := errors.New("broken pipe")
+	w := &failingResponseWriter{header: http.Header{}, err: wantErr}
+	backend := &mockBackend{res: bodyResult("audio", "audio/webm", http.StatusOK, 5, "", "bytes")}
+	err := ServeStream(w, httptest.NewRequest(http.MethodGet, "/stream", nil), backend, testTrack())
+	if !errors.Is(err, ErrClientWrite) || !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want ErrClientWrite and wrapped writer error", err)
+	}
+}
+
+func TestProxyClassifiesClientShortWrite(t *testing.T) {
+	w := &failingResponseWriter{header: http.Header{}}
+	backend := &mockBackend{res: bodyResult("audio", "audio/webm", http.StatusOK, 5, "", "bytes")}
+	err := ServeStream(w, httptest.NewRequest(http.MethodGet, "/stream", nil), backend, testTrack())
+	if !errors.Is(err, ErrClientWrite) || !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("err = %v, want ErrClientWrite and io.ErrShortWrite", err)
+	}
+}

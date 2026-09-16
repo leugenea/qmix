@@ -155,17 +155,17 @@ func (v *VKYandex) Resolve(ctx context.Context, rawurl string) (*Track, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w: %v", svc, ErrService, err)
+		return nil, fmt.Errorf("%s: %w: %w", svc, ErrService, err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (QMix resolver)")
 	resp, err := v.clientForService(svc).Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w: %v", svc, ErrService, err)
+		return nil, fmt.Errorf("%s: %w: %w", svc, ErrService, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w: %v", svc, ErrService, err)
+		return nil, fmt.Errorf("%s: %w: %w", svc, ErrService, err)
 	}
 	m := ogTitlePattern.FindSubmatch(body)
 	if m == nil || len(m) < 2 {
@@ -363,7 +363,7 @@ func (v *VKYandex) resolveViaAPI(ctx context.Context, rawurl, audios string) (*T
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.apiBase()+"/audio.getById", strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("vk api: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("vk api: %w: %w", ErrService, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", vkMobileUA)

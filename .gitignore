@@ -1,8 +1,10 @@
 bin/
 *.test
 *.out
+__pycache__/
 coverage/
 dist/sbom/
+agent-apps-data/
 .env
 .env.*
 

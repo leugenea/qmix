@@ -1,4 +1,4 @@
-.PHONY: run build version test test-integration test-workflow-routing test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
+.PHONY: run compose-up build version test test-integration test-workflow-routing test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
 
 version:
 	go run ./internal/buildinfo/cmd/version -format=json
@@ -6,6 +6,11 @@ version:
 run:
 	@set -eu; ldflags="$$(go run ./internal/buildinfo/cmd/version -format=ldflags)"; \
 		go run -ldflags "$$ldflags" ./cmd/qmix
+
+compose-up:
+	@set -eu; eval "$$(go run ./internal/buildinfo/cmd/version -format=env)"; \
+		export VERSION COMMIT DIRTY ANDROID_VERSION_CODE; \
+		QMIX_LOG_GID="$$(python3 scripts/prepare_compose_logs.py)" docker compose up --build $(COMPOSE_ARGS)
 
 build:
 	@mkdir -p bin

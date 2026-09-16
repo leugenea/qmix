@@ -186,7 +186,7 @@ func (b *YTDLP) resolveURL(ctx context.Context, t *Track) (string, error) {
 func (b *YTDLP) searchURL(ctx context.Context, t *Track) (string, error) {
 	out, err := b.runner().Search(ctx, searchQuery(t))
 	if err != nil {
-		return "", fmt.Errorf("ytdlp: %w: %v", ErrService, err)
+		return "", fmt.Errorf("ytdlp: %w: %w", ErrService, err)
 	}
 	r, err := parseFirstSearchResult(out)
 	if err != nil {
@@ -207,7 +207,7 @@ func parseFirstSearchResult(out []byte) (*searchResult, error) {
 	}
 	var r searchResult
 	if err := json.Unmarshal(line, &r); err != nil {
-		return nil, fmt.Errorf("ytdlp: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("ytdlp: %w: %w", ErrService, err)
 	}
 	return &r, nil
 }
@@ -243,7 +243,7 @@ func (b *YTDLP) Stream(ctx context.Context, t *Track, rangeHeader string) (*Resu
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("ytdlp: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("ytdlp: %w: %w", ErrService, err)
 	}
 	if rangeHeader != "" {
 		req.Header.Set("Range", rangeHeader)
@@ -251,7 +251,7 @@ func (b *YTDLP) Stream(ctx context.Context, t *Track, rangeHeader string) (*Resu
 
 	resp, err := b.client().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ytdlp: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("ytdlp: %w: %w", ErrService, err)
 	}
 
 	res := &Result{

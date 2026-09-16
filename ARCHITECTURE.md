@@ -245,6 +245,16 @@ served through `stream.ServeStream`.
 - Deployment constraints: a dedicated Compose project, `mem_limit: 512m`,
   `restart: on-failure:3`, and external port `8180` (reserved for qmix in the
   8100–8199 range).
+- Backend diagnostics are structured JSON with a default `WARN` level. One
+  injected logger attributes records to `server/http`, `store/rooms`, `sse`,
+  `resolver`, or `stream`, fans accepted records to stderr and a persistent
+  file capped at 10 MiB, and excludes request bodies, authorization data, tokens,
+  query strings, and secret-bearing upstream URLs. Compose persists `/var/log/qmix/qmix.log`
+  below `agent-apps-data/qmix/logs`; an unprivileged no-follow preparation
+  helper creates the bind source and grants the non-root backend access through
+  a supplemental host group. Docker's JSON log stream is separately capped at
+  three 10 MiB files. `QMIX_LOG_LEVEL` controls verbosity and `QMIX_LOG_FILE`
+  controls the file for non-Compose runs.
 
 ## 10. Out of scope
 

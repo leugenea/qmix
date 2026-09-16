@@ -2,6 +2,7 @@ name: agent-apps
 
 services:
   backend:
+    image: "qmix:${QMIX_IMAGE_TAG:-local}"
     build:
       context: .
       args:
@@ -11,13 +12,28 @@ services:
         ANDROID_VERSION_CODE: "${ANDROID_VERSION_CODE:?compute build metadata first}"
     ports:
       - "8180:8080"
+    group_add:
+      - "${QMIX_LOG_GID:?run make compose-up}"
     environment:
       QMIX_ADDR: ":8080"
+      QMIX_LOG_LEVEL: "${QMIX_LOG_LEVEL:-warn}"
+      QMIX_LOG_FILE: "/var/log/qmix/qmix.log"
       # Proxy passthrough for environments where YouTube is reachable only
       # via a proxy: yt-dlp and the audio proxy both honor these. Empty by
       # default.
       HTTP_PROXY: "${HTTP_PROXY:-}"
       HTTPS_PROXY: "${HTTPS_PROXY:-}"
       NO_PROXY: "${NO_PROXY:-}"
+    volumes:
+      - type: bind
+        source: ./agent-apps-data/qmix/logs
+        target: /var/log/qmix
+        bind:
+          create_host_path: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: on-failure:3
     mem_limit: 512m
