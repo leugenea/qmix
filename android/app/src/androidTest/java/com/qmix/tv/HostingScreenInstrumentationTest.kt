@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.pressKey
+import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -112,6 +113,68 @@ class HostingScreenInstrumentationTest {
         composeRule.onNodeWithText("Enter room").assertIsFocused()
             .performKeyInput { pressKey(Key.Enter) }
         composeRule.runOnIdle { assertEquals(1, entered) }
+    }
+
+    @Test
+    fun live_room_remote_ok_and_back_route_through_the_handler() {
+        val queued = QueuedTrack("queued-1", "https://example/1", "Queued", "Artist", 65, "fixture")
+        val state = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, listOf(queued)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            ),
+        )
+        var primaryActions = 0
+        var exits = 0
+        val handler = object : LiveRoomHandler {
+            override fun onStartOrNext() {
+                primaryActions++
+                state.value = state.value.copy(commandPending = true)
+            }
+            override fun onInvite() {
+                state.value = state.value.copy(invitationVisible = true)
+            }
+            override fun onBack(): LiveRoomBackResult = if (state.value.invitationVisible) {
+                state.value = state.value.copy(invitationVisible = false)
+                LiveRoomBackResult.HANDLED
+            } else {
+                LiveRoomBackResult.EXIT_ACTIVITY
+            }
+        }
+        composeRule.setContent {
+            HostingScreen(
+                state.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+                liveRoomHandler = handler,
+                onExitLiveRoom = { exits++ },
+            )
+        }
+
+        composeRule.onNodeWithText("Start").assertIsFocused()
+            .performKeyInput { pressKey(Key.Enter) }
+        composeRule.onNodeWithText("Command pending…").assertExists()
+        composeRule.runOnIdle { assertEquals(1, primaryActions) }
+
+        composeRule.runOnIdle { state.value = state.value.copy(commandPending = false) }
+        composeRule.onNodeWithText("Start").performKeyInput {
+            pressKey(Key.DirectionRight)
+            pressKey(Key.Enter)
+        }
+        composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertExists()
+
+        Espresso.pressBack()
+        composeRule.onNodeWithText("Room ABCD").assertExists()
+        composeRule.runOnIdle { assertEquals(0, exits) }
+
+        Espresso.pressBack()
+        composeRule.runOnIdle { assertEquals(1, exits) }
     }
 
     @Test
