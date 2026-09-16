@@ -42,6 +42,24 @@ The suite installs the APK, launches the activity through `LEANBACK_LAUNCHER`,
 checks the initial focus, and sends D-pad OK. CI uses Android TV API 36
 (`android-tv`, x86, `tv_1080p` profile).
 
+The process logger emits Android diagnostics under the stable Logcat tag `QMix`.
+The build-time default is `WARN`; routine state transitions, reconnect scheduling,
+and playback progress remain below that level. To enable debug diagnostics at
+runtime on a connected TV or emulator, set the standard per-tag Android logging
+property, then restart or relaunch the app:
+
+```bash
+adb shell setprop log.tag.QMix DEBUG
+adb logcat -s QMix:D
+```
+
+Restore the default with `adb shell setprop log.tag.QMix WARN`. Records use the
+stable components `app/host-session`, `room-api/creation`,
+`room-sync/sse/reconnect`, and `playback/lifecycle`. They contain only finite
+operation and cause categories: host tokens, authorization/OAuth data, request
+or response bodies, room codes and IDs, exception messages, and URLs or query
+parameters are never emitted.
+
 ## Room synchronization
 
 The application-scoped host session owns one `SequentialRoomRepository` while a

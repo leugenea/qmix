@@ -15,6 +15,31 @@ class Media3PlaybackEngineTest {
     private val media = PlaybackMedia("track-1", "https://qmix.test/current/stream")
 
     @Test
+    fun playback_failure_logs_sanitized_boundary_record() {
+        val sink = RecordingLogSink()
+        val logger = QMixLogger(sink, QMixLogLevel.DEBUG) { null }
+            .component(QMixLogComponent.PLAYBACK_LIFECYCLE)
+        val loggedEngine = Media3PlaybackEngine(backend, logger = logger)
+        loggedEngine.prepare(PlaybackMedia("secret-track-id", "https://example.test/stream?token=do-not-log"))
+
+        backend.emit(PlayerBackend.Event.Failed(BackendFailure.Network("token=do-not-log")))
+
+        assertEquals(
+            listOf(
+                QMixLogRecord(
+                    QMixLogLevel.ERROR,
+                    QMixLogComponent.PLAYBACK_LIFECYCLE,
+                    QMixLogOperation.PLAYBACK_FAILURE,
+                    QMixLogCause.NETWORK,
+                ),
+            ),
+            sink.records,
+        )
+        assertFalse(sink.records.toString().contains("do-not-log"))
+        assertFalse(sink.records.toString().contains("secret-track-id"))
+    }
+
+    @Test
     fun prepare_sets_media_identity_and_starts_buffering() {
         engine.prepare(media)
 

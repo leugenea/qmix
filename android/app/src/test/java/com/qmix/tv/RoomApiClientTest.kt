@@ -3,6 +3,7 @@ package com.qmix.tv
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -93,6 +94,43 @@ class RoomApiClientTest {
         assertEquals("/rooms/AB%20CD/skip", request.path)
         assertEquals("host-secret", request.headers["X-Host-Token"])
         assertEquals(0L, request.bodySize)
+    }
+
+    @Test
+    fun create_failure_logs_sanitized_api_boundary_record() {
+        val sink = RecordingLogSink()
+        val apiLogger = QMixLogger(sink, QMixLogLevel.DEBUG) { null }
+            .component(QMixLogComponent.ROOM_API_CREATION)
+        api = RoomApiClient(OkHttpClient(), server.url("/?token=do-not-log").toString(), apiLogger)
+        server.enqueue(MockResponse().setResponseCode(503).setBody("host_token=do-not-log"))
+
+        assertThrows(RoomApiException::class.java) { api.createRoom() }
+
+        assertEquals(
+            listOf(
+                QMixLogRecord(
+                    QMixLogLevel.ERROR,
+                    QMixLogComponent.ROOM_API_CREATION,
+                    QMixLogOperation.CREATE_ROOM,
+                    QMixLogCause.HTTP_STATUS,
+                ),
+            ),
+            sink.records,
+        )
+        assertFalse(sink.records.toString().contains("do-not-log"))
+    }
+
+    @Test
+    fun create_network_failure_logs_network_cause() {
+        val sink = RecordingLogSink()
+        val apiLogger = QMixLogger(sink, QMixLogLevel.WARN) { null }
+            .component(QMixLogComponent.ROOM_API_CREATION)
+        api = RoomApiClient(OkHttpClient(), server.url("/").toString(), apiLogger)
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+
+        assertThrows(RoomApiException::class.java) { api.createRoom() }
+
+        assertEquals(QMixLogCause.NETWORK, sink.records.single().cause)
     }
 
     @Test

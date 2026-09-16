@@ -48,6 +48,7 @@ data class RoomCredentials(
 class RoomApiClient(
     httpClient: OkHttpClient,
     backendUrl: String,
+    private val logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.ROOM_API_CREATION),
 ) : RoomStateFetcher {
     private val httpClient = httpClient.newBuilder()
         .followRedirects(false)
@@ -61,13 +62,18 @@ class RoomApiClient(
             .url(backend.newBuilder().addPathSegment("rooms").build())
             .post(ByteArray(0).toRequestBody(null))
             .build()
-        return execute(request, 201) { body ->
-            val json = parseObject(body)
-            RoomCredentials(
-                code = json.requiredString("code"),
-                hostToken = json.requiredString("host_token"),
-                relativeGuestUrl = json.requiredString("url"),
-            )
+        return try {
+            execute(request, 201) { body ->
+                val json = parseObject(body)
+                RoomCredentials(
+                    code = json.requiredString("code"),
+                    hostToken = json.requiredString("host_token"),
+                    relativeGuestUrl = json.requiredString("url"),
+                )
+            }
+        } catch (failure: RoomApiException) {
+            logger.error(QMixLogOperation.CREATE_ROOM, failure.logCause)
+            throw failure
         }
     }
 
@@ -170,9 +176,9 @@ class RoomApiClient(
             decode(response.body.string())
         }
     } catch (_: SocketTimeoutException) {
-        throw RoomApiException("The server timed out. Try again.")
+        throw RoomApiException("The server timed out. Try again.", QMixLogCause.NETWORK)
     } catch (_: IOException) {
-        throw RoomApiException("Could not reach the server.")
+        throw RoomApiException("Could not reach the server.", QMixLogCause.NETWORK)
     }
 
     private fun parseObject(body: String): JSONObject = try {
@@ -200,13 +206,16 @@ class RoomApiClient(
     }
 }
 
-class RoomApiException(message: String) : Exception(message) {
+class RoomApiException(
+    message: String,
+    internal val logCause: QMixLogCause = QMixLogCause.UNKNOWN,
+) : Exception(message) {
     companion object {
         fun forStatus(status: Int): RoomApiException = when (status) {
-            403 -> RoomApiException("Host access was denied.")
-            404 -> RoomApiException("The room was not found.")
-            in 500..599 -> RoomApiException("The server is temporarily unavailable.")
-            else -> RoomApiException("The server rejected the request.")
+            403 -> RoomApiException("Host access was denied.", QMixLogCause.HTTP_STATUS)
+            404 -> RoomApiException("The room was not found.", QMixLogCause.HTTP_STATUS)
+            in 500..599 -> RoomApiException("The server is temporarily unavailable.", QMixLogCause.HTTP_STATUS)
+            else -> RoomApiException("The server rejected the request.", QMixLogCause.HTTP_STATUS)
         }
     }
 }

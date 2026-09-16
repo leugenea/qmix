@@ -23,9 +23,13 @@ object PlaybackEngines {
     }
 
     @MainThread
-    internal fun create(backend: PlayerBackend, lifecycleOwner: LifecycleOwner? = null): PlaybackEngine {
+    internal fun create(
+        backend: PlayerBackend,
+        lifecycleOwner: LifecycleOwner? = null,
+        logger: QMixComponentLogger = QMixLogging.process.component(QMixLogComponent.PLAYBACK_LIFECYCLE),
+    ): PlaybackEngine {
         requireMainPlaybackThread()
-        val engine = Media3PlaybackEngine(backend, ::requireMainPlaybackThread)
+        val engine = Media3PlaybackEngine(backend, ::requireMainPlaybackThread, logger)
         lifecycleOwner?.lifecycle?.addObserver(PlaybackLifecycleObserver(engine))
         return engine
     }

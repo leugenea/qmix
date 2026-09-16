@@ -32,6 +32,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "DEFAULT_BACKEND_URL", "\"https://qmix.example\"")
         buildConfigField("String", "DEFAULT_GUEST_ORIGIN", "\"https://qmix.example\"")
+        buildConfigField("String", "LOG_LEVEL", "\"WARN\"")
     }
 
     buildTypes {
