@@ -60,6 +60,8 @@ class SequentialRoomRepository(
     private val scheduler: RoomSyncScheduler,
     dispatcher: Executor,
     private val backoff: ReconnectBackoff = ReconnectBackoff(),
+    private val logger: QMixComponentLogger =
+        QMixComponentLogger.noOp(QMixLogComponent.ROOM_SYNC_SSE_RECONNECT),
 ) : RoomRepository {
     private val dispatcher = SerialExecutor(dispatcher)
     private companion object {
@@ -100,6 +102,7 @@ class SequentialRoomRepository(
         private var stream: Cancelable? = null
         private var connectionGeneration = 0L
         private var connectionAttempt = 0
+        private var sseFailureWarningEmitted = false
 
         @Volatile
         private var retry: Cancelable? = null
@@ -152,6 +155,13 @@ class SequentialRoomRepository(
         private fun connectionEnded(generation: Long, statusCode: Int?) {
             dispatcher.execute {
                 if (!isCurrentConnection(generation)) return@execute
+                val cause = if (statusCode == null) QMixLogCause.NETWORK else QMixLogCause.HTTP_STATUS
+                if (sseFailureWarningEmitted) {
+                    logger.debug(QMixLogOperation.SSE_CONNECTION, cause)
+                } else {
+                    sseFailureWarningEmitted = true
+                    logger.warn(QMixLogOperation.SSE_CONNECTION, cause)
+                }
                 if (statusCode == 404) {
                     publishMissing()
                     terminate()
@@ -163,6 +173,7 @@ class SequentialRoomRepository(
                 publishState()
                 if (retry != null) return@execute
                 val delay = backoff.delayMillis(retryAttempt++)
+                logger.info(QMixLogOperation.RECONNECT)
                 scheduleRetry(delay)
             }
         }

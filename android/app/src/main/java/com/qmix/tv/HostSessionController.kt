@@ -54,6 +54,8 @@ class HostSessionController(
     private val roomRepositoryFactory: ((String) -> RoomRepository)? = null,
     private val primaryActionHandler: () -> Unit = {},
     private val observerFailureHandler: (Throwable) -> Unit = {},
+    private val logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.APP_HOST_SESSION),
+    private val roomApiLogger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.ROOM_API_CREATION),
 ) : LiveRoomHandler {
     private data class Notification(
         val state: HostingState,
@@ -129,7 +131,7 @@ class HostSessionController(
 
         executor.execute {
             try {
-                val created = RoomApiClient(httpClient, settings.backendUrl).createRoom()
+                val created = RoomApiClient(httpClient, settings.backendUrl, roomApiLogger).createRoom()
                 val changed = synchronized(this) {
                     if (generation != createGeneration) {
                         false
@@ -319,6 +321,7 @@ class HostSessionController(
                     observer(notification.state)
                 } catch (failure: Throwable) {
                     try {
+                        logger.error(QMixLogOperation.OBSERVER_NOTIFICATION, QMixLogCause.CALLBACK_FAILURE)
                         observerFailureHandler(failure)
                     } catch (_: Throwable) {
                         // One observer must not block later state delivery or lifecycle cleanup.

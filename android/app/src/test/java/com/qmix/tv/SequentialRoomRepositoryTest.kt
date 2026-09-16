@@ -305,6 +305,74 @@ class SequentialRoomRepositoryTest {
     }
 
     @Test
+    fun failed_sse_connection_logs_boundary_and_reconnect_schedule() {
+        val events = FakeRoomEventStreamFactory()
+        val sink = RecordingLogSink()
+        val logger = QMixLogger(sink, QMixLogLevel.DEBUG) { null }
+            .component(QMixLogComponent.ROOM_SYNC_SSE_RECONNECT)
+        val repository = SequentialRoomRepository(
+            FakeRoomStateFetcher(),
+            events,
+            FakeRoomSyncScheduler(),
+            DirectExecutor,
+            ReconnectBackoff(randomFraction = { 0.0 }),
+            logger,
+        )
+        val subscription = repository.observe("secret-room-code") { }
+
+        events.connections.single().fail(503)
+
+        assertEquals(
+            listOf(
+                QMixLogRecord(
+                    QMixLogLevel.WARN,
+                    QMixLogComponent.ROOM_SYNC_SSE_RECONNECT,
+                    QMixLogOperation.SSE_CONNECTION,
+                    QMixLogCause.HTTP_STATUS,
+                ),
+                QMixLogRecord(
+                    QMixLogLevel.INFO,
+                    QMixLogComponent.ROOM_SYNC_SSE_RECONNECT,
+                    QMixLogOperation.RECONNECT,
+                ),
+            ),
+            sink.records,
+        )
+        assertEquals(false, sink.records.toString().contains("secret-room-code"))
+        subscription.close()
+    }
+
+    @Test
+    fun repeated_short_lived_sse_connections_emit_one_default_warning() {
+        val events = FakeRoomEventStreamFactory()
+        val scheduler = FakeRoomSyncScheduler()
+        val sink = RecordingLogSink()
+        val logger = QMixLogger(sink, QMixLogLevel.WARN) { null }
+            .component(QMixLogComponent.ROOM_SYNC_SSE_RECONNECT)
+        val repository = SequentialRoomRepository(
+            FakeRoomStateFetcher(),
+            events,
+            scheduler,
+            DirectExecutor,
+            ReconnectBackoff(randomFraction = { 0.0 }),
+            logger,
+        )
+        val subscription = repository.observe("ABCD") { }
+
+        repeat(3) { attempt ->
+            events.connections.last().open()
+            events.connections.last().fail(503)
+            if (attempt < 2) scheduler.runDelay(500L)
+        }
+
+        assertEquals(
+            listOf(QMixLogOperation.SSE_CONNECTION),
+            sink.records.map(QMixLogRecord::operation),
+        )
+        subscription.close()
+    }
+
+    @Test
     fun close_invalidates_an_already_fired_retry_timer_callback() {
         val events = FakeRoomEventStreamFactory()
         val scheduler = FakeRoomSyncScheduler()

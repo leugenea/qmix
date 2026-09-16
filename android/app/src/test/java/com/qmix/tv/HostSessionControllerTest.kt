@@ -33,6 +33,29 @@ class HostSessionControllerTest {
     }
 
     @Test
+    fun observer_failure_logs_sanitized_host_session_boundary() {
+        val sink = RecordingLogSink()
+        val logger = QMixLogger(sink, QMixLogLevel.DEBUG) { null }
+            .component(QMixLogComponent.APP_HOST_SESSION)
+        val controller = HostSessionController(OkHttpClient(), logger = logger)
+
+        controller.observe { throw IllegalStateException("host_token=do-not-log") }
+
+        assertEquals(
+            listOf(
+                QMixLogRecord(
+                    QMixLogLevel.ERROR,
+                    QMixLogComponent.APP_HOST_SESSION,
+                    QMixLogOperation.OBSERVER_NOTIFICATION,
+                    QMixLogCause.CALLBACK_FAILURE,
+                ),
+            ),
+            sink.records,
+        )
+        assertFalse(sink.records.toString().contains("do-not-log"))
+    }
+
+    @Test
     fun repeated_create_while_pending_sends_exactly_one_post() {
         server.enqueue(
             MockResponse()

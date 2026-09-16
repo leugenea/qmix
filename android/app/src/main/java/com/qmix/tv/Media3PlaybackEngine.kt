@@ -52,6 +52,7 @@ internal interface PlayerBackend {
 internal class Media3PlaybackEngine(
     private val player: PlayerBackend,
     private val requireApplicationThread: () -> Unit = {},
+    private val logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.PLAYBACK_LIFECYCLE),
 ) : PlaybackEngine {
     private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
     private var generation = 0L
@@ -128,13 +129,16 @@ internal class Media3PlaybackEngine(
             is PlayerBackend.Event.Ready -> publishSnapshot(storedState.copy(status = PlaybackStatus.READY, error = null), event.snapshot)
             is PlayerBackend.Event.StateChanged -> publishSnapshot(storedState, event.snapshot)
             is PlayerBackend.Event.Ended -> publishSnapshot(storedState.copy(status = PlaybackStatus.ENDED), event.snapshot.copy(isPlaying = false))
-            is PlayerBackend.Event.Failed -> publish(
-                storedState.copy(
-                    status = PlaybackStatus.ERROR,
-                    isPlaying = false,
-                    error = event.failure.toPlaybackError(),
-                ),
-            )
+            is PlayerBackend.Event.Failed -> {
+                logger.error(QMixLogOperation.PLAYBACK_FAILURE, event.failure.logCause())
+                publish(
+                    storedState.copy(
+                        status = PlaybackStatus.ERROR,
+                        isPlaying = false,
+                        error = event.failure.toPlaybackError(),
+                    ),
+                )
+            }
         }
     }
 
@@ -153,6 +157,12 @@ internal class Media3PlaybackEngine(
     private fun publish(next: PlaybackState) {
         storedState = next
         listeners.toList().forEach { it(next) }
+    }
+
+    private fun BackendFailure.logCause(): QMixLogCause = when (this) {
+        is BackendFailure.Http, is BackendFailure.Range -> QMixLogCause.HTTP_STATUS
+        is BackendFailure.Network -> QMixLogCause.NETWORK
+        is BackendFailure.Decode, is BackendFailure.Unknown -> QMixLogCause.UNKNOWN
     }
 
     private fun BackendFailure.toPlaybackError() = PlaybackError(
