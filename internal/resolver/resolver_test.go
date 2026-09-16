@@ -162,10 +162,11 @@ func TestResolver_YouTubeChannelFallback(t *testing.T) {
 
 // TestResolver_YouTubeRunnerError maps exec failure to ErrService.
 func TestResolver_YouTubeRunnerError(t *testing.T) {
-	y := &YouTube{Runner: fakeRunner{err: errors.New("exec failed")}}
+	wantErr := errors.New("exec failed")
+	y := &YouTube{Runner: fakeRunner{err: wantErr}}
 	_, err := y.Resolve(context.Background(), "https://youtu.be/abc")
-	if !errors.Is(err, ErrService) {
-		t.Fatalf("err = %v, want ErrService", err)
+	if !errors.Is(err, ErrService) || !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want ErrService and wrapped runner cause", err)
 	}
 }
 

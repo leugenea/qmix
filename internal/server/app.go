@@ -2,7 +2,8 @@ package server
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -12,18 +13,29 @@ import (
 
 // App wires the store, hub and routes into one runnable backend.
 type App struct {
-	Store *Store
-	Hub   *Hub
-	stop  chan struct{}
+	Store  *Store
+	Hub    *Hub
+	logger *slog.Logger
+	stop   chan struct{}
 }
 
 // NewApp creates the app with production defaults and starts the janitor
 // in the background.
 func NewApp() *App {
+	return NewAppWithLogger(discardLogger())
+}
+
+// NewAppWithLogger creates the app with one injected process logger shared by
+// the HTTP, rooms, SSE, resolver, and stream boundaries.
+func NewAppWithLogger(logger *slog.Logger) *App {
+	if logger == nil {
+		logger = discardLogger()
+	}
 	a := &App{
-		Store: NewStore(12*time.Hour, time.Minute, nil),
-		Hub:   NewHub(),
-		stop:  make(chan struct{}),
+		Store:  NewStore(12*time.Hour, time.Minute, nil),
+		Hub:    NewHubWithLogger(logger),
+		logger: logger,
+		stop:   make(chan struct{}),
 	}
 	go a.Store.Janitor(a.stop)
 	return a
@@ -38,7 +50,7 @@ func (a *App) Close() {
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
-	s := NewServer(a.Store, a.Hub)
+	s := NewServerWithLogger(a.Store, a.Hub, a.logger)
 	s.Resolver = resolver.DefaultMuxWithConfig(resolver.ConfigFromEnv())
 	s.StreamBackend = NewStreamBackend()
 	s.Routes(mux)
@@ -75,9 +87,20 @@ func newHTTPServer(addr string, h http.Handler) *http.Server {
 
 // Run wires the backend and serves until the listener fails. It is the
 // production entry point; addr comes from QMIX_ADDR (see cmd/qmix).
-func Run(addr string) error {
-	a := NewApp()
+func Run(addr string, logger *slog.Logger) error {
+	if logger == nil {
+		logger = discardLogger()
+	}
+	a := NewAppWithLogger(logger)
 	defer a.Close()
-	log.Printf("qmix: listening on %s", addr)
-	return newHTTPServer(addr, a.Handler()).ListenAndServe()
+	serverLogger := logger.With("component", "server/http")
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		serverLogger.Error("server stopped", "error_kind", "listen_failed")
+		return err
+	}
+	serverLogger.Info("server listening", "address", listener.Addr().String())
+	err = newHTTPServer(addr, a.Handler()).Serve(listener)
+	serverLogger.Error("server stopped", "error_kind", "serve_failed")
+	return err
 }

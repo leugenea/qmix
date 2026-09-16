@@ -30,7 +30,10 @@ RUN apk add --no-cache yt-dlp=2026.08.19-r0
 # explicitly. A targeted --upgrade, not a full `apk upgrade`, keeps the
 # yt-dlp pin intact.
 RUN apk add --no-cache --upgrade libcrypto3 libssl3
-RUN adduser -D -H qmix
+RUN adduser -D -H -u 10001 qmix \
+    && mkdir -p /var/log/qmix \
+    && chown -R qmix:qmix /var/log/qmix
+ENV QMIX_LOG_FILE=/var/log/qmix/qmix.log
 USER qmix
 COPY --from=build /bin/qmix /usr/local/bin/qmix
 EXPOSE 8080

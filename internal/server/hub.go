@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ type Hub struct {
 	rooms        map[string]*roomHub
 	Heartbeat    time.Duration // keep-alive comment interval; <=0 means the 15s default
 	WriteTimeout time.Duration // per-SSE-write deadline; <=0 means the 15s default
+	logger       *slog.Logger
 }
 
 // Lock order: code that needs both Store.mu and Hub.mu must acquire Store.mu
@@ -46,7 +48,19 @@ type subscriber struct {
 
 // NewHub returns an empty Hub.
 func NewHub() *Hub {
-	return &Hub{rooms: make(map[string]*roomHub), Heartbeat: 15 * time.Second}
+	return NewHubWithLogger(discardLogger())
+}
+
+// NewHubWithLogger returns an SSE hub with stable component attribution.
+func NewHubWithLogger(logger *slog.Logger) *Hub {
+	if logger == nil {
+		logger = discardLogger()
+	}
+	return &Hub{
+		rooms:     make(map[string]*roomHub),
+		Heartbeat: 15 * time.Second,
+		logger:    logger.With("component", "sse"),
+	}
 }
 
 // Subscribe registers a subscriber for a room and returns the channel to read
@@ -132,6 +146,7 @@ func (h *Hub) Publish(roomCode string, name string, data interface{}) {
 // forwards live events. It blocks until ctx is done or the client disconnects.
 func (h *Hub) ServeHTTP(ctx context.Context, w http.ResponseWriter, roomCode string, snapshot func() (int64, interface{})) {
 	if _, ok := w.(http.Flusher); !ok {
+		h.logger.Warn("SSE transport unavailable", "operation", "connect", "error_kind", "flusher_unavailable")
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}

@@ -81,10 +81,11 @@ func TestYtdlpQueryFallbackTitle(t *testing.T) {
 
 // TestYtdlpRunnerError maps exec failure to ErrService.
 func TestYtdlpRunnerError(t *testing.T) {
-	b := &YTDLP{Runner: &fakeRunner{err: errors.New("exec failed")}, CacheTTL: -1}
+	wantErr := errors.New("exec failed")
+	b := &YTDLP{Runner: &fakeRunner{err: wantErr}, CacheTTL: -1}
 	_, err := b.resolveURL(context.Background(), &Track{Title: "x"})
-	if !errors.Is(err, ErrService) {
-		t.Fatalf("err = %v, want ErrService", err)
+	if !errors.Is(err, ErrService) || !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want ErrService and wrapped runner cause", err)
 	}
 }
 

@@ -50,6 +50,8 @@ jobs:
           set -o pipefail
           eval "$(go run ./internal/buildinfo/cmd/version -format=env)"
           export VERSION COMMIT DIRTY ANDROID_VERSION_CODE
+          QMIX_LOG_GID=$(python3 scripts/prepare_compose_logs.py)
+          export QMIX_LOG_GID
           docker compose config --format json | jq -e '.name == "agent-apps"'
       - name: Repository policy and routing tests
         run: make test-workflow-routing test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic
@@ -206,6 +208,59 @@ jobs:
             exit 1
           fi
           docker rm -f qmix-smoke
+      - name: "Smoke: logs reach Docker and survive container recreation"
+        shell: bash
+        run: |
+          set -euo pipefail
+          eval "$(go run ./internal/buildinfo/cmd/version -format=env)"
+          export VERSION COMMIT DIRTY ANDROID_VERSION_CODE QMIX_IMAGE_TAG=ci QMIX_LOG_LEVEL=debug
+          QMIX_LOG_GID=$(python3 scripts/prepare_compose_logs.py)
+          export QMIX_LOG_GID
+          host_uid=$(id -u)
+          trap 'docker compose down --remove-orphans' EXIT
+
+          docker compose up -d --no-build backend
+          ready=""
+          for _ in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:8180/healthz >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            docker compose logs --no-color backend
+            exit 1
+          fi
+          docker compose logs --no-color --no-log-prefix backend > "$RUNNER_TEMP/qmix-docker.log"
+          test -s "$RUNNER_TEMP/qmix-docker.log"
+          while IFS= read -r line; do
+            jq -e . <<<"$line" >/dev/null
+          done < "$RUNNER_TEMP/qmix-docker.log"
+          grep -F '"component":"server/http"' "$RUNNER_TEMP/qmix-docker.log" | grep -F '"level":"INFO"' | grep -F '"msg":"server listening"'
+
+          docker compose exec -T backend cat /var/log/qmix/qmix.log > "$RUNNER_TEMP/qmix-file.log"
+          while IFS= read -r line; do
+            jq -e . <<<"$line" >/dev/null
+          done < "$RUNNER_TEMP/qmix-file.log"
+          grep -F '"component":"server/http"' "$RUNNER_TEMP/qmix-file.log" | grep -F '"msg":"server listening"'
+          log_dir_mode_owner=$(stat -c '%a %u %g' agent-apps-data/qmix/logs)
+          log_file_mode_owner=$(stat -c '%a %u %g' agent-apps-data/qmix/logs/qmix.log)
+          test "$log_dir_mode_owner" = "770 $host_uid $QMIX_LOG_GID"
+          test "$log_file_mode_owner" = "600 10001 10001"
+          test "$(docker compose exec -T backend id -u)" = "10001"
+          before=$(docker compose exec -T backend grep -cF '"msg":"server listening"' /var/log/qmix/qmix.log)
+
+          docker compose rm -s -f backend
+          docker compose up -d --no-build backend
+          ready=""
+          for _ in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:8180/healthz >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            docker compose logs --no-color backend
+            exit 1
+          fi
+          after=$(docker compose exec -T backend grep -cF '"msg":"server listening"' /var/log/qmix/qmix.log)
+          (( after > before ))
       - name: Image size
         run: |
           docker image inspect qmix:ci --format 'image size: {{.Size}} bytes'

@@ -69,14 +69,14 @@ func (y *YouTube) name() string {
 func (y *YouTube) Resolve(ctx context.Context, rawurl string) (*Track, error) {
 	out, err := y.runner().Run(ctx, rawurl)
 	if err != nil {
-		return nil, fmt.Errorf("youtube: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("youtube: %w: %w", ErrService, err)
 	}
 	if len(out) == 0 {
 		return nil, errors.Join(ErrService, errors.New("youtube: empty metadata output"))
 	}
 	var v youTubeJSON
 	if err := json.Unmarshal(out, &v); err != nil {
-		return nil, fmt.Errorf("youtube: %w: %v", ErrService, err)
+		return nil, fmt.Errorf("youtube: %w: %w", ErrService, err)
 	}
 	if v.Title == "" {
 		return nil, errors.Join(ErrService, errors.New("youtube: empty title in metadata"))

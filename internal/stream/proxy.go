@@ -13,6 +13,10 @@ import (
 // the backend.
 var ErrInvalidRange = errors.New("invalid range header")
 
+// ErrClientWrite marks a failure writing streamed bytes to the HTTP client.
+// It lets callers keep ordinary disconnects below the operational WARN level.
+var ErrClientWrite = errors.New("client stream write failed")
+
 // ServeStream streams track's audio to the client through backend, honoring the
 // Range header for seek. It writes the correct status codes:
 //
@@ -25,7 +29,7 @@ var ErrInvalidRange = errors.New("invalid range header")
 // It passes the client's Range header through to the backend so Range handling
 // is delegated to the underlying source, and reproduces the backend's content
 // headers for the client.
-func ServeStream(w http.ResponseWriter, r *http.Request, backend StreamBackend, track *Track) {
+func ServeStream(w http.ResponseWriter, r *http.Request, backend StreamBackend, track *Track) error {
 	rangeHeader := r.Header.Get("Range")
 	if rangeHeader != "" {
 		if err := validateRangeHeader(rangeHeader); err != nil {
@@ -34,14 +38,14 @@ func ServeStream(w http.ResponseWriter, r *http.Request, backend StreamBackend, 
 			w.Header().Set("Accept-Ranges", "bytes")
 			w.Header().Set("Content-Range", "bytes */*")
 			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-			return
+			return ErrInvalidRange
 		}
 	}
 
 	res, err := backend.Stream(r.Context(), track, rangeHeader)
 	if err != nil {
 		writeError(w, errorStatus(err), err.Error())
-		return
+		return err
 	}
 	defer res.Body.Close()
 
@@ -62,7 +66,21 @@ func ServeStream(w http.ResponseWriter, r *http.Request, backend StreamBackend, 
 		w.Header().Set("Content-Length", strconv.FormatInt(res.ContentLength, 10))
 	}
 	w.WriteHeader(status)
-	_, _ = io.Copy(w, res.Body)
+	_, err = io.Copy(clientStreamWriter{Writer: w}, res.Body)
+	return err
+}
+
+type clientStreamWriter struct{ io.Writer }
+
+func (w clientStreamWriter) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return n, errors.Join(ErrClientWrite, err)
+	}
+	return n, nil
 }
 
 // validateRangeHeader reports whether rangeHeader is a syntactically valid

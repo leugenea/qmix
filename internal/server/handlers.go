@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
+	"os/exec"
 	"strings"
 
 	"github.com/leugenea/qmix/internal/resolver"
@@ -16,6 +19,11 @@ import (
 type Server struct {
 	store *Store
 	hub   *Hub
+
+	httpLogger     *slog.Logger
+	storeLogger    *slog.Logger
+	resolverLogger *slog.Logger
+	streamLogger   *slog.Logger
 	// Resolver turns source URLs into track metadata. If nil, tracks are added
 	// with the URL as a stub title (pre-resolver behaviour); NewApp sets the
 	// production resolver.
@@ -28,7 +36,23 @@ type Server struct {
 
 // NewServer returns a Server backed by the given store and hub.
 func NewServer(store *Store, hub *Hub) *Server {
-	return &Server{store: store, hub: hub}
+	return NewServerWithLogger(store, hub, discardLogger())
+}
+
+// NewServerWithLogger returns a Server whose subsystem records share one
+// process logger while retaining stable component attribution.
+func NewServerWithLogger(store *Store, hub *Hub, logger *slog.Logger) *Server {
+	if logger == nil {
+		logger = discardLogger()
+	}
+	return &Server{
+		store:          store,
+		hub:            hub,
+		httpLogger:     logger.With("component", "server/http"),
+		storeLogger:    logger.With("component", "store/rooms"),
+		resolverLogger: logger.With("component", "resolver"),
+		streamLogger:   logger.With("component", "stream"),
+	}
 }
 
 // Routes registers all HTTP routes on mux.
@@ -37,15 +61,15 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /assets/guest.webmanifest", handleGuestManifest)
 	mux.HandleFunc("GET /assets/qmix-192.svg", handleGuestIcon(guestIcon192))
 	mux.HandleFunc("GET /assets/qmix-512.svg", handleGuestIcon(guestIcon512))
-	mux.HandleFunc("POST /rooms", s.handleCreateRoom)
-	mux.HandleFunc("GET /rooms/{code}", s.handleGetRoom)
-	mux.HandleFunc("POST /rooms/{code}/queue", s.handleAddTrack)
-	mux.HandleFunc("GET /r/{code}", s.handleGuestPage)
-	mux.HandleFunc("POST /r/{code}/queue", s.handleGuestAddTrack)
-	mux.HandleFunc("POST /rooms/{code}/skip", s.handleSkip)
-	mux.HandleFunc("PATCH /rooms/{code}/queue", s.handleReorder)
-	mux.HandleFunc("GET /rooms/{code}/events", s.handleEvents)
-	mux.HandleFunc("GET /rooms/{code}/current/stream", s.handleStream)
+	mux.HandleFunc("POST /rooms", s.observeHTTP(s.handleCreateRoom))
+	mux.HandleFunc("GET /rooms/{code}", s.observeHTTP(s.handleGetRoom))
+	mux.HandleFunc("POST /rooms/{code}/queue", s.observeHTTP(s.handleAddTrack))
+	mux.HandleFunc("GET /r/{code}", s.observeHTTP(s.handleGuestPage))
+	mux.HandleFunc("POST /r/{code}/queue", s.observeHTTP(s.handleGuestAddTrack))
+	mux.HandleFunc("POST /rooms/{code}/skip", s.observeHTTP(s.handleSkip))
+	mux.HandleFunc("PATCH /rooms/{code}/queue", s.observeHTTP(s.handleReorder))
+	mux.HandleFunc("GET /rooms/{code}/events", s.observeHTTP(s.handleEvents))
+	mux.HandleFunc("GET /rooms/{code}/current/stream", s.observeHTTP(s.handleStream))
 }
 
 // writeJSON writes v as JSON with the given status code.
@@ -118,6 +142,7 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetRoom(w http.ResponseWriter, r *http.Request) {
 	room := s.store.Get(r.PathValue("code"))
 	if room == nil {
+		s.storeLogger.Debug("room lookup failed", "operation", "get", "error_kind", "not_found")
 		writeError(w, http.StatusNotFound, "room not found")
 		return
 	}
@@ -186,6 +211,7 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 
 	track, err := s.trackFromRequest(r.Context(), req.URL)
 	if err != nil {
+		s.logResolverFailure(err)
 		status, msg := resolveError(err)
 		writeError(w, status, msg)
 		return
@@ -324,6 +350,7 @@ func (s *Server) handleGuestAddTrack(w http.ResponseWriter, r *http.Request) {
 
 	track, err := s.trackFromRequest(r.Context(), req.URL)
 	if err != nil {
+		s.logResolverFailure(err)
 		status, code, msg := guestResolveError(err)
 		writeGuestError(w, status, code, msg)
 		return
@@ -569,7 +596,76 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stream.ServeStream(w, r, s.StreamBackend, track)
+	if err := stream.ServeStream(w, r, s.StreamBackend, track); err != nil {
+		s.logStreamFailure(err)
+	}
+}
+
+func (s *Server) logResolverFailure(err error) {
+	args := []any{"operation", "resolve", "error_kind", resolverErrorKind(err), "cause", safeDiagnosticCause(err)}
+	if errors.Is(err, resolver.ErrInvalid) || errors.Is(err, resolver.ErrUnsupported) || errors.Is(err, resolver.ErrNoAnonymous) || errors.Is(err, context.Canceled) {
+		s.resolverLogger.Debug("track resolution rejected", args...)
+		return
+	}
+	s.resolverLogger.Warn("track resolution failed", args...)
+}
+
+func (s *Server) logStreamFailure(err error) {
+	args := []any{"operation", "serve", "error_kind", streamErrorKind(err), "cause", safeDiagnosticCause(err)}
+	if errors.Is(err, stream.ErrNotFound) || errors.Is(err, stream.ErrInvalidRange) || errors.Is(err, stream.ErrClientWrite) || errors.Is(err, context.Canceled) {
+		s.streamLogger.Debug("audio stream rejected", args...)
+		return
+	}
+	s.streamLogger.Warn("audio stream failed", args...)
+}
+
+func resolverErrorKind(err error) string {
+	switch {
+	case errors.Is(err, resolver.ErrInvalid):
+		return "invalid_url"
+	case errors.Is(err, resolver.ErrUnsupported):
+		return "unsupported_service"
+	case errors.Is(err, resolver.ErrNoAnonymous):
+		return "anonymous_unavailable"
+	default:
+		return "upstream_failure"
+	}
+}
+
+func streamErrorKind(err error) string {
+	switch {
+	case errors.Is(err, stream.ErrClientWrite):
+		return "client_disconnected"
+	case errors.Is(err, stream.ErrNotFound):
+		return "not_found"
+	case errors.Is(err, stream.ErrInvalidRange):
+		return "invalid_range"
+	default:
+		return "upstream_failure"
+	}
+}
+
+func safeDiagnosticCause(err error) string {
+	switch {
+	case errors.Is(err, stream.ErrClientWrite):
+		return "client_write_failed"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return "process_exit"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return "network_timeout"
+		}
+		return "network_error"
+	}
+	return "internal_error"
 }
 
 // newTrackID returns a unique-ish track id.
