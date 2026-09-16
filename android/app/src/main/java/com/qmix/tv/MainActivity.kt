@@ -27,6 +27,8 @@ class MainActivity : ComponentActivity() {
                 onSettingsChanged = controller::updateSettings,
                 onCreate = { controller.createRoom() },
                 onEnterRoom = controller::enterRoom,
+                liveRoomHandler = controller,
+                onExitLiveRoom = ::finish,
             )
         }
     }

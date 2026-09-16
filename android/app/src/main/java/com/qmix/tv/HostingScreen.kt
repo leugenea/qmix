@@ -1,6 +1,7 @@
 package com.qmix.tv
 
 import android.graphics.Bitmap
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,6 +48,8 @@ internal fun HostingScreen(
     onSettingsChanged: (String, String) -> Unit,
     onCreate: () -> Unit,
     onEnterRoom: () -> Unit,
+    liveRoomHandler: LiveRoomHandler = NoOpLiveRoomHandler,
+    onExitLiveRoom: () -> Unit = {},
 ) {
     MaterialTheme {
         when (state) {
@@ -66,7 +69,7 @@ internal fun HostingScreen(
                 onCreate,
             )
             is HostingState.Invitation -> InvitationContent(state.invite, onEnterRoom)
-            is HostingState.LiveRoom -> LiveRoomContent(state)
+            is HostingState.LiveRoom -> LiveRoomContent(state, liveRoomHandler, onExitLiveRoom)
         }
     }
 }
@@ -128,7 +131,11 @@ private fun UrlInput(label: String, value: String, enabled: Boolean, onValueChan
 }
 
 @Composable
-private fun InvitationContent(invite: GuestInvite, onEnterRoom: () -> Unit) {
+private fun InvitationContent(
+    invite: GuestInvite,
+    onAction: () -> Unit,
+    actionText: String = "Enter room",
+) {
     val actionFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { actionFocus.requestFocus() }
     val qr = remember(invite.guestUrl) { QrCodeGenerator.generate(invite.guestUrl, 360) }
@@ -150,20 +157,55 @@ private fun InvitationContent(invite: GuestInvite, onEnterRoom: () -> Unit) {
             Text("Join this room", fontSize = 32.sp)
             Text(invite.code, fontSize = 64.sp, modifier = Modifier.padding(12.dp))
             Text(invite.guestUrl, fontSize = 20.sp, modifier = Modifier.padding(bottom = 24.dp))
-            FocusedButton("Enter room", true, actionFocus, onEnterRoom)
+            FocusedButton(actionText, true, actionFocus, onAction)
         }
     }
 }
 
 @Composable
-private fun LiveRoomContent(state: HostingState.LiveRoom) {
+private fun LiveRoomContent(
+    state: HostingState.LiveRoom,
+    handler: LiveRoomHandler,
+    onExitLiveRoom: () -> Unit,
+) {
+    BackHandler {
+        handleLiveRoomBack(handler, onExitLiveRoom)
+    }
+    if (state.invitationVisible) {
+        InvitationContent(
+            invite = state.invite,
+            onAction = { handleLiveRoomBack(handler, onExitLiveRoom) },
+            actionText = "Back to room",
+        )
+        return
+    }
     val room = (state.synchronization as? RoomSyncState.Active)?.room
+    val primaryFocus = remember { FocusRequester() }
+    val inviteFocus = remember { FocusRequester() }
+    LaunchedEffect(state.isPrimaryActionEnabled) {
+        if (state.isPrimaryActionEnabled) primaryFocus.requestFocus() else inviteFocus.requestFocus()
+    }
     Column(
         Modifier.fillMaxSize().background(Color(0xFF101218)).padding(48.dp),
     ) {
         Text("Room ${state.invite.code}", fontSize = 42.sp)
         synchronizationMessage(state.synchronization)?.let { message ->
             Text(message, color = Color(0xFFFFDDB3), modifier = Modifier.padding(top = 12.dp))
+        }
+        Row(
+            modifier = Modifier.padding(top = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            FocusedButton(
+                text = if (state.primaryAction == LiveRoomPrimaryAction.START) "Start" else "Next",
+                enabled = state.isPrimaryActionEnabled,
+                focusRequester = primaryFocus,
+                onClick = handler::onStartOrNext,
+            )
+            FocusedButton("Invite", true, inviteFocus, handler::onInvite)
+        }
+        if (state.commandPending) {
+            Text("Command pending…", modifier = Modifier.padding(top = 8.dp))
         }
         if (room != null) {
             Text("Now playing", fontSize = 28.sp, modifier = Modifier.padding(top = 24.dp))
@@ -214,6 +256,18 @@ private fun QueueTrackRow(track: QueuedTrack) {
         Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color(0xFFCAC4D0))
         Text(formatDuration(track.durationSeconds), fontSize = 14.sp, color = Color(0xFFCAC4D0))
+    }
+}
+
+private object NoOpLiveRoomHandler : LiveRoomHandler {
+    override fun onStartOrNext() = Unit
+    override fun onInvite() = Unit
+    override fun onBack(): LiveRoomBackResult = LiveRoomBackResult.IGNORED
+}
+
+internal fun handleLiveRoomBack(handler: LiveRoomHandler, onExitLiveRoom: () -> Unit) {
+    if (handler.onBack() == LiveRoomBackResult.EXIT_ACTIVITY) {
+        onExitLiveRoom()
     }
 }
 
