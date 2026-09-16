@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.pressKey
 import androidx.test.espresso.Espresso
@@ -208,6 +209,7 @@ class HostingScreenInstrumentationTest {
         composeRule.onNodeWithText("Current title").assertExists()
         composeRule.onNodeWithTag("queue-track-queued-0").assertTextContains("Duration unknown")
         composeRule.onNodeWithTag("queue-track-queued-1").assertTextContains("1:05")
+        composeRule.onNodeWithTag("queue-list").performScrollToIndex(2)
         composeRule.onNodeWithTag("queue-track-queued-2").assertTextContains("1:01:01")
 
         composeRule.runOnIdle {
