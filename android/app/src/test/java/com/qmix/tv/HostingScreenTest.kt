@@ -16,6 +16,8 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.pressKey
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -27,6 +29,25 @@ import org.robolectric.annotation.Config
 class HostingScreenTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun focus_restoration_is_invalidated_by_newer_directional_input() {
+        val memory = LiveRoomFocusMemory()
+        memory.reconcile(listOf("track-1", "track-2"), primaryEnabled = true)
+        memory.record(LiveRoomFocusTarget.Track("track-2"))
+        val restoration = memory.reconcile(listOf("track-2", "track-1"), primaryEnabled = true)
+
+        assertTrue(memory.isCurrent(restoration))
+        memory.markDirectionalInput()
+        assertFalse(memory.isCurrent(restoration))
+
+        val fallbackMemory = LiveRoomFocusMemory()
+        fallbackMemory.record(LiveRoomFocusTarget.Track("missing"))
+        assertEquals(
+            LiveRoomFocusTarget.Primary,
+            fallbackMemory.reconcile(emptyList(), primaryEnabled = true).target,
+        )
+    }
 
     @Test
     fun setup_supports_keyboard_input_and_primary_action_starts_focused() {
@@ -378,6 +399,268 @@ class HostingScreenTest {
 
         composeRule.runOnIdle { synchronization.value = RoomSyncState.Missing("ABCD") }
         composeRule.onNodeWithText("Room not found.").assertExists()
+    }
+
+    @Test
+    fun live_room_keeps_track_focus_by_id_after_reorder() {
+        val first = QueuedTrack("track-1", "https://example/1", "First", "Artist", 65, "fixture")
+        val second = QueuedTrack("track-2", "https://example/2", "Second", "Artist", 65, "fixture")
+        val presentation = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, listOf(first, second)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            ),
+        )
+        composeRule.setContent {
+            HostingScreen(
+                state = presentation.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Start").performKeyInput {
+            pressKey(Key.DirectionDown)
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.onNodeWithTag("queue-track-track-2").assertIsFocused()
+
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(
+                synchronization = RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, listOf(second, first)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            )
+        }
+
+        composeRule.onNodeWithTag("queue-track-track-2").assertIsFocused()
+    }
+
+    @Test
+    fun live_room_moves_focus_to_the_removed_tracks_former_index() {
+        val first = QueuedTrack("track-1", "https://example/1", "First", "Artist", 65, "fixture")
+        val second = QueuedTrack("track-2", "https://example/2", "Second", "Artist", 65, "fixture")
+        val third = QueuedTrack("track-3", "https://example/3", "Third", "Artist", 65, "fixture")
+        val presentation = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, listOf(first, second, third)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            ),
+        )
+        composeRule.setContent {
+            HostingScreen(
+                state = presentation.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Start").performKeyInput {
+            pressKey(Key.DirectionDown)
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.onNodeWithTag("queue-track-track-2").assertIsFocused()
+
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(
+                synchronization = RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, listOf(first, third)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            )
+        }
+
+        composeRule.onNodeWithTag("queue-track-track-3").assertIsFocused()
+    }
+
+    @Test
+    fun live_room_moves_focus_to_the_previous_track_when_the_last_track_is_removed() {
+        val first = QueuedTrack("track-1", "https://example/1", "First", "Artist", 65, "fixture")
+        val second = QueuedTrack("track-2", "https://example/2", "Second", "Artist", 65, "fixture")
+        val presentation = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, listOf(first, second)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            ),
+        )
+        composeRule.setContent {
+            HostingScreen(
+                state = presentation.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Start").performKeyInput {
+            pressKey(Key.DirectionDown)
+            pressKey(Key.DirectionDown)
+        }
+        composeRule.onNodeWithTag("queue-track-track-2").assertIsFocused()
+
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(
+                synchronization = RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, listOf(first)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            )
+        }
+
+        composeRule.onNodeWithTag("queue-track-track-1").assertIsFocused()
+    }
+
+    @Test
+    fun live_room_empty_queue_falls_back_to_an_enabled_room_action() {
+        val track = QueuedTrack("track-1", "https://example/1", "First", "Artist", 65, "fixture")
+        val presentation = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, listOf(track)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            ),
+        )
+        composeRule.setContent {
+            HostingScreen(
+                state = presentation.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Start").performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("queue-track-track-1").assertIsFocused()
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(
+                synchronization = RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, emptyList()),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            )
+        }
+        composeRule.onNodeWithText("Start").assertIsNotEnabled()
+        composeRule.onNodeWithText("Invite").assertIsFocused()
+    }
+
+    @Test
+    fun live_room_dpad_traversal_reaches_actions_and_scrolls_long_queues() {
+        val queue = (0 until 30).map { index ->
+            QueuedTrack("track-$index", "https://example/$index", "Track $index", "Artist", 65, "fixture")
+        }
+        composeRule.setContent {
+            HostingScreen(
+                state = HostingState.LiveRoom(
+                    GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                    RoomSyncState.Active(
+                        "ABCD",
+                        RoomState("ABCD", null, queue),
+                        Freshness.FRESH,
+                        LiveConnection.CONNECTED,
+                    ),
+                ),
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Start").performKeyInput { pressKey(Key.DirectionRight) }
+        composeRule.onNodeWithText("Invite").assertIsFocused()
+        composeRule.onNodeWithText("Invite").performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("queue-track-track-0").assertIsFocused()
+        composeRule.onNodeWithTag("queue-track-track-0").performKeyInput { pressKey(Key.DirectionUp) }
+        composeRule.onNodeWithText("Start").assertIsFocused()
+
+        composeRule.onNodeWithText("Start").performKeyInput {
+            repeat(20) { pressKey(Key.DirectionDown) }
+        }
+        composeRule.onNodeWithTag("queue-track-track-19").assertIsFocused()
+    }
+
+    @Test
+    fun live_room_repopulated_queue_starts_dpad_traversal_at_the_first_track() {
+        val queue = (0 until 30).map { index ->
+            QueuedTrack("track-$index", "https://example/$index", "Track $index", "Artist", 65, "fixture")
+        }
+        val presentation = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, queue),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            ),
+        )
+        composeRule.setContent {
+            HostingScreen(
+                state = presentation.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithText("Start").performKeyInput {
+            repeat(20) { pressKey(Key.DirectionDown) }
+        }
+        composeRule.onNodeWithTag("queue-track-track-19").assertIsFocused()
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(
+                synchronization = RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, emptyList()),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            )
+        }
+        composeRule.onNodeWithText("Invite").assertIsFocused()
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(
+                synchronization = RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, queue),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            )
+        }
+
+        composeRule.onNodeWithText("Invite").performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("queue-track-track-0").assertIsFocused()
     }
 
     @Test
