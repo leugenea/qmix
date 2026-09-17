@@ -84,8 +84,9 @@ that cover the complete requirement.
 - **StreamBackend plugin** — locates and serves an audio stream for a track,
   including Range/seek support.
 - **TV app** — the host player. The current implementation includes the Android
-  TV scaffold, room creation, a QR invitation, and the Media3 playback engine.
-  A live room view and backend/player coordination remain planned.
+  TV scaffold, room creation, a QR invitation, live room synchronization, queue
+  advancement, and authoritative Media3 playback coordination. Playback controls
+  and assembled-flow verification remain planned.
 - **PWA** — the guest page for submitting supported links and viewing the queue
   and current track, with a dark theme.
 

@@ -1,9 +1,22 @@
 package com.qmix.tv
 
 import android.app.Application
+import android.os.Handler
+import android.os.Looper
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import java.util.concurrent.Executor
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+
+internal fun currentPlaybackStreamUrl(backendUrl: String, roomCode: String): String =
+    backendUrl.toHttpUrl().newBuilder()
+        .addPathSegment("rooms")
+        .addPathSegment(roomCode)
+        .addPathSegment("current")
+        .addPathSegment("stream")
+        .build()
+        .toString()
 
 class QMixApplication : Application() {
     private val logger: QMixLogger
@@ -18,6 +31,11 @@ class QMixApplication : Application() {
             .followRedirects(false)
             .followSslRedirects(false)
             .build()
+        val playbackEngine = PlaybackEngines.create(this)
+        val mainHandler = Handler(Looper.getMainLooper())
+        val playbackDispatcher = Executor { command ->
+            if (Looper.myLooper() === Looper.getMainLooper()) command.run() else mainHandler.post(command)
+        }
         HostSessionController(
             httpClient = client,
             initialBackendUrl = BuildConfig.DEFAULT_BACKEND_URL,
@@ -50,6 +68,23 @@ class QMixApplication : Application() {
                         Thread(command, "qmix-room-command").apply { isDaemon = true }.start()
                     },
                     reconciler = api,
+                    observer = observer,
+                )
+            },
+            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
+                val api = RoomApiClient(
+                    client,
+                    backendUrl,
+                    logger.component(QMixLogComponent.ROOM_API_CREATION),
+                )
+                val streamUrl = currentPlaybackStreamUrl(backendUrl, credentials.code)
+                AuthoritativePlaybackCoordinator(
+                    roomCode = credentials.code,
+                    streamUrl = streamUrl,
+                    playbackEngine = playbackEngine,
+                    reconciler = api,
+                    dispatcher = playbackDispatcher,
+                    advanceAfterEnded = advanceAfterEnded,
                     observer = observer,
                 )
             },

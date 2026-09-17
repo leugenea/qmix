@@ -78,12 +78,18 @@ session cancels the request, event stream, retry, and periodic timers.
 
 `HostSessionController` publishes each current-session repository update as a
 `HostingState.LiveRoom`, carrying the safe guest invitation, synchronization
-state, and command-pending input used by the TV presentation. Room mutations
-are considered reliable only when a non-null room is fresh and the live
-connection is connected. The controller implements the live-room action
-boundary: Start/Next is delegated without implementing playback, Invite is a
-reversible presentation state, and Back closes Invite before ending the host
-session and returning an explicit `EXIT_ACTIVITY` result to the UI.
+state, queue-command pending input, and local playback state used by the TV
+presentation. Start/Next is serialized by `QueueAdvancementCoordinator`. Only a
+fresh, connected authoritative snapshot may select playback media; selection
+identity is `track_id`, so repeated snapshots preserve position, pause,
+completion, and errors. A new selection uses `/rooms/{code}/current/stream` and
+prepares/plays once. Final completion is local, while ENDED with queued work
+requests one coordinated advance. Retry Current performs a token-bound GET and
+re-prepares only when the authoritative current still matches. Stale snapshots,
+reconnecting snapshots, replaced-media callbacks, and stale retry callbacks
+cannot drive playback. Invite remains a reversible presentation state, and Back
+closes Invite before ending the host session and returning an explicit
+`EXIT_ACTIVITY` result to the UI.
 
 ## Coverage
 
