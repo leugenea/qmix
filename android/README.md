@@ -87,9 +87,15 @@ prepares/plays once. Final completion is local, while ENDED with queued work
 requests one coordinated advance. Retry Current performs a token-bound GET and
 re-prepares only when the authoritative current still matches. Stale snapshots,
 reconnecting snapshots, replaced-media callbacks, and stale retry callbacks
-cannot drive playback. Invite remains a reversible presentation state, and Back
-closes Invite before ending the host session and returning an explicit
-`EXIT_ACTIVITY` result to the UI.
+cannot drive playback. The live-room UI presents the server-selected track
+separately from the actual local playback state and provides focused Play/Pause,
+Retry Current, explicit Next, and seek −10/+10 actions. Seek actions appear only
+for a known seekable timeline and clamp through the playback engine. Android
+media Play, Pause, and Play/Pause keys route to the same coordinator without
+intercepting D-pad Left/Right globally. Invite remains a reversible presentation
+state, and Back closes Invite before ending the host session and returning an
+explicit `EXIT_ACTIVITY` result to the UI. Foreground recovery and assembled-flow
+verification are outside #122 and remain owned by #123.
 
 ## Coverage
 

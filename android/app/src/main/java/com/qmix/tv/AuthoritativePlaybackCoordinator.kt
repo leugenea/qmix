@@ -66,7 +66,11 @@ class AuthoritativePlaybackCoordinator(
 
     fun pause() {
         dispatcher.execute {
-            if (closed || currentTrackId == null || endedConsumed) return@execute
+            if (closed || currentTrackId == null || endedConsumed ||
+                state.status !in setOf(LocalPlaybackStatus.BUFFERING, LocalPlaybackStatus.PLAYING)
+            ) {
+                return@execute
+            }
             explicitlyPaused = true
             playbackEngine.pause()
             publish(state.copy(status = LocalPlaybackStatus.PAUSED, isPlaying = false))
@@ -75,10 +79,63 @@ class AuthoritativePlaybackCoordinator(
 
     fun resume() {
         dispatcher.execute {
-            if (closed || currentTrackId == null || !explicitlyPaused || endedConsumed) return@execute
+            if (closed || currentTrackId == null || endedConsumed || !explicitlyPaused ||
+                state.status != LocalPlaybackStatus.PAUSED
+            ) {
+                return@execute
+            }
             explicitlyPaused = false
             playbackEngine.play()
             publish(state.copy(status = LocalPlaybackStatus.BUFFERING, isPlaying = false))
+        }
+    }
+
+    fun togglePlayPause() {
+        dispatcher.execute {
+            if (closed || currentTrackId == null || endedConsumed) return@execute
+            when (state.status) {
+                LocalPlaybackStatus.BUFFERING,
+                LocalPlaybackStatus.PLAYING,
+                -> {
+                    explicitlyPaused = true
+                    playbackEngine.pause()
+                    publish(state.copy(status = LocalPlaybackStatus.PAUSED, isPlaying = false))
+                }
+                LocalPlaybackStatus.PAUSED -> {
+                    explicitlyPaused = false
+                    playbackEngine.play()
+                    publish(state.copy(status = LocalPlaybackStatus.BUFFERING, isPlaying = false))
+                }
+                LocalPlaybackStatus.IDLE,
+                LocalPlaybackStatus.COMPLETED,
+                LocalPlaybackStatus.ERROR,
+                -> Unit
+            }
+        }
+    }
+
+    fun seekBy(offsetMs: Long) {
+        dispatcher.execute {
+            val snapshot = state
+            val duration = snapshot.durationMs
+            if (closed || currentTrackId == null || endedConsumed ||
+                !snapshot.isSeekable || duration == null ||
+                snapshot.status !in setOf(
+                    LocalPlaybackStatus.BUFFERING,
+                    LocalPlaybackStatus.PLAYING,
+                    LocalPlaybackStatus.PAUSED,
+                )
+            ) {
+                return@execute
+            }
+            val position = snapshot.positionMs.coerceIn(0, duration)
+            val target = if (offsetMs >= 0) {
+                if (offsetMs >= duration - position) duration else position + offsetMs
+            } else {
+                val magnitude = if (offsetMs == Long.MIN_VALUE) Long.MAX_VALUE else -offsetMs
+                if (magnitude >= position) 0 else position - magnitude
+            }
+            playbackEngine.seekTo(target)
         }
     }
 

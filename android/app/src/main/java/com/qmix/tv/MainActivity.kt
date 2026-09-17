@@ -1,6 +1,7 @@
 package com.qmix.tv
 
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.DisposableEffect
@@ -33,12 +34,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (::controller.isInitialized && dispatchPlaybackMediaKey(event, controller)) return true
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (::controller.isInitialized && dispatchPlaybackMediaKey(event, controller)) return true
+        return super.onKeyUp(keyCode, event)
+    }
+
     override fun onDestroy() {
         if (::controller.isInitialized && shouldEndHostSession(isFinishing, isChangingConfigurations)) {
             controller.endRoom()
         }
         super.onDestroy()
     }
+}
+
+internal fun dispatchPlaybackMediaKey(event: KeyEvent, handler: LiveRoomHandler): Boolean {
+    val action = when (event.keyCode) {
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> handler::onPlayPause
+        KeyEvent.KEYCODE_MEDIA_PLAY -> handler::onPlay
+        KeyEvent.KEYCODE_MEDIA_PAUSE -> handler::onPause
+        else -> return false
+    }
+    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) action()
+    return true
 }
 
 internal fun shouldEndHostSession(isFinishing: Boolean, isChangingConfigurations: Boolean): Boolean =

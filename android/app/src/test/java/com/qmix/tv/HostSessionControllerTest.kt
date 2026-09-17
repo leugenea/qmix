@@ -34,6 +34,20 @@ class HostSessionControllerTest {
     }
 
     @Test
+    fun playback_callbacks_are_safe_without_an_active_coordinator() {
+        val controller = HostSessionController(OkHttpClient())
+
+        controller.onPlayPause()
+        controller.onPlay()
+        controller.onPause()
+        controller.onSeekBy(-10_000)
+        controller.onSeekBy(10_000)
+        controller.onRetryCurrent()
+
+        assertTrue(controller.state is HostingState.Setup)
+    }
+
+    @Test
     fun observer_failure_logs_sanitized_host_session_boundary() {
         val sink = RecordingLogSink()
         val logger = QMixLogger(sink, QMixLogLevel.DEBUG) { null }
@@ -263,13 +277,30 @@ class HostSessionControllerTest {
         assertEquals(1, engine.playCount)
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
 
-        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 5_000,
+                durationMs = 60_000,
+                isSeekable = true,
+            ),
+        )
         assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
-        controller.pausePlayback()
+        controller.onSeekBy(-10_000)
+        assertEquals(listOf(0L), engine.seeks)
+        controller.onPlayPause()
         assertEquals(1, engine.pauseCount)
         assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
-        controller.resumePlayback()
+        controller.onPlayPause()
         assertEquals(2, engine.playCount)
+        assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
+        controller.pausePlayback()
+        assertEquals(2, engine.pauseCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
+        controller.resumePlayback()
+        assertEquals(3, engine.playCount)
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
 
         engine.emit(
@@ -279,6 +310,14 @@ class HostSessionControllerTest {
                 error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
             ),
         )
+        val failedPlayback = (controller.state as HostingState.LiveRoom).playback
+        controller.onPause()
+        controller.onPlay()
+        controller.onPlayPause()
+        assertEquals(failedPlayback, (controller.state as HostingState.LiveRoom).playback)
+        assertEquals(2, engine.pauseCount)
+        assertEquals(3, engine.playCount)
+        assertEquals(1, engine.prepared.size)
         controller.onStartOrNext()
         assertEquals(2, command.callbacks.size)
         assertEquals(LocalPlaybackStatus.ERROR, (controller.state as HostingState.LiveRoom).playback.status)
@@ -295,12 +334,12 @@ class HostSessionControllerTest {
         controller.retryCurrent()
         reconciler.complete(RoomFetchResult.Success(selected))
         assertEquals(listOf("one", "one"), engine.prepared.map(PlaybackMedia::trackId))
-        assertEquals(3, engine.playCount)
+        assertEquals(4, engine.playCount)
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED))
         assertEquals(2, command.callbacks.size)
 
         controller.endRoom()
-        assertEquals(2, engine.pauseCount)
+        assertEquals(3, engine.pauseCount)
         assertTrue(repository.closed)
         assertTrue(controller.state is HostingState.Setup)
     }
@@ -346,6 +385,7 @@ class HostSessionControllerTest {
         val prepared = mutableListOf<PlaybackMedia>()
         var playCount = 0
         var pauseCount = 0
+        val seeks = mutableListOf<Long>()
         private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
 
         override fun prepare(media: PlaybackMedia) {
@@ -355,7 +395,7 @@ class HostSessionControllerTest {
         }
         override fun play() { playCount++ }
         override fun pause() { pauseCount++ }
-        override fun seekTo(positionMs: Long) = Unit
+        override fun seekTo(positionMs: Long) { seeks += positionMs }
         override fun release() = Unit
         override fun addListener(listener: (PlaybackState) -> Unit) { listeners += listener }
         override fun removeListener(listener: (PlaybackState) -> Unit) { listeners -= listener }

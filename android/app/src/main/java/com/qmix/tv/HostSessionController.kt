@@ -54,6 +54,11 @@ typealias PlaybackCoordinatorFactory = (
 
 interface LiveRoomHandler {
     fun onStartOrNext()
+    fun onPlayPause() = Unit
+    fun onPlay() = Unit
+    fun onPause() = Unit
+    fun onSeekBy(offsetMs: Long) = Unit
+    fun onRetryCurrent() = Unit
     fun onInvite()
     fun onBack(): LiveRoomBackResult
 }
@@ -389,6 +394,18 @@ class HostSessionController(
         return coordinator?.onPlaybackEnded(trackId) == true
     }
 
+    override fun onPlayPause() {
+        synchronized(this) { playbackCoordinator }?.togglePlayPause()
+    }
+
+    override fun onSeekBy(offsetMs: Long) {
+        synchronized(this) { playbackCoordinator }?.seekBy(offsetMs)
+    }
+
+    override fun onPlay() = resumePlayback()
+
+    override fun onPause() = pausePlayback()
+
     fun pausePlayback() {
         synchronized(this) { playbackCoordinator }?.pause()
     }
@@ -396,6 +413,8 @@ class HostSessionController(
     fun resumePlayback() {
         synchronized(this) { playbackCoordinator }?.resume()
     }
+
+    override fun onRetryCurrent() = retryCurrent()
 
     fun retryCurrent() {
         synchronized(this) { playbackCoordinator }?.retryCurrent()

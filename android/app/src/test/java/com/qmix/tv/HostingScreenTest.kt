@@ -50,6 +50,101 @@ class HostingScreenTest {
     }
 
     @Test
+    fun playback_control_focus_identity_is_preserved_and_falls_back_deterministically() {
+        val memory = LiveRoomFocusMemory()
+        val controls = listOf(
+            LiveRoomFocusTarget.PlayPause,
+            LiveRoomFocusTarget.SeekBack,
+            LiveRoomFocusTarget.SeekForward,
+        )
+        memory.reconcile(emptyList(), primaryEnabled = false, playbackTargets = controls)
+        memory.record(LiveRoomFocusTarget.SeekForward)
+
+        assertEquals(
+            LiveRoomFocusTarget.SeekForward,
+            memory.reconcile(listOf("track-1"), primaryEnabled = true, playbackTargets = controls).target,
+        )
+        assertEquals(
+            LiveRoomFocusTarget.PlayPause,
+            memory.reconcile(
+                listOf("track-1"),
+                primaryEnabled = true,
+                playbackTargets = listOf(LiveRoomFocusTarget.PlayPause),
+            ).target,
+        )
+        assertEquals(
+            LiveRoomFocusTarget.Retry,
+            memory.reconcile(
+                listOf("track-1"),
+                primaryEnabled = true,
+                playbackTargets = listOf(LiveRoomFocusTarget.Retry),
+            ).target,
+        )
+    }
+
+    @Test
+    fun playback_control_focus_is_restored_by_identity_when_capabilities_change() {
+        val current = CurrentTrack("current-1", 0, "playing", "Current", "Artist")
+        val presentation = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", current, emptyList()),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+                playback = LocalPlaybackState(
+                    trackId = "current-1",
+                    status = LocalPlaybackStatus.PAUSED,
+                    positionMs = 20_000,
+                    durationMs = 60_000,
+                    isSeekable = true,
+                ),
+            ),
+        )
+        composeRule.setContent {
+            HostingScreen(
+                state = presentation.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("room-invite").performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("playback-play-pause").performKeyInput {
+            pressKey(Key.DirectionRight)
+            pressKey(Key.DirectionRight)
+        }
+        composeRule.onNodeWithTag("playback-seek-forward").assertIsFocused()
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(
+                playback = presentation.value.playback.copy(positionMs = 30_000),
+            )
+        }
+        composeRule.onNodeWithTag("playback-seek-forward").assertIsFocused()
+
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(
+                playback = presentation.value.playback.copy(isSeekable = false),
+            )
+        }
+        composeRule.onNodeWithTag("playback-play-pause").assertIsFocused()
+
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(
+                playback = LocalPlaybackState(
+                    trackId = "current-1",
+                    status = LocalPlaybackStatus.ERROR,
+                    error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
+                ),
+            )
+        }
+        composeRule.onNodeWithTag("playback-retry").assertIsFocused()
+    }
+
+    @Test
     fun setup_supports_keyboard_input_and_primary_action_starts_focused() {
         var backend = "https://old.example"
         var origin = "https://guest.example"
@@ -113,6 +208,261 @@ class HostingScreenTest {
 
         composeRule.onNodeWithText("The server timed out. Try again.").assertExists()
         composeRule.onNodeWithText("Retry").assertIsFocused()
+    }
+
+    @Test
+    fun live_room_play_pause_and_seek_controls_dispatch_only_their_focused_actions() {
+        val current = CurrentTrack("current-1", 12, "playing", "Server title", "Server artist")
+        val playback = LocalPlaybackState(
+            trackId = "current-1",
+            status = LocalPlaybackStatus.PLAYING,
+            isPlaying = true,
+            positionMs = 15_000,
+            durationMs = 60_000,
+            isSeekable = true,
+        )
+        var toggles = 0
+        val seeks = mutableListOf<Long>()
+        val handler = object : LiveRoomHandler {
+            override fun onStartOrNext() = Unit
+            override fun onPlayPause() { toggles++ }
+            override fun onSeekBy(offsetMs: Long) { seeks += offsetMs }
+            override fun onRetryCurrent() = Unit
+            override fun onInvite() = Unit
+            override fun onBack() = LiveRoomBackResult.IGNORED
+        }
+        composeRule.setContent {
+            HostingScreen(
+                state = HostingState.LiveRoom(
+                    GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                    RoomSyncState.Active(
+                        "ABCD",
+                        RoomState("ABCD", current, emptyList()),
+                        Freshness.FRESH,
+                        LiveConnection.CONNECTED,
+                    ),
+                    playback = playback,
+                ),
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+                liveRoomHandler = handler,
+            )
+        }
+
+        composeRule.onNodeWithText("Server-selected track").assertExists()
+        composeRule.onNodeWithText("Server title").assertExists()
+        composeRule.onNodeWithText("Local playback: Playing").assertExists()
+        composeRule.onNodeWithTag("room-invite").performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("playback-play-pause").assertIsFocused().assertTextContains("Pause")
+            .performKeyInput {
+                pressKey(Key.Enter)
+                pressKey(Key.DirectionRight)
+            }
+        composeRule.onNodeWithTag("playback-seek-back").assertIsFocused().performKeyInput {
+            pressKey(Key.Enter)
+            pressKey(Key.DirectionRight)
+        }
+        composeRule.onNodeWithTag("playback-seek-forward").assertIsFocused()
+            .performKeyInput { pressKey(Key.Enter) }
+
+        composeRule.runOnIdle {
+            assertEquals(1, toggles)
+            assertEquals(listOf(-10_000L, 10_000L), seeks)
+        }
+    }
+
+    @Test
+    fun live_room_hides_seek_without_a_seekable_known_timeline() {
+        val state = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState(
+                        "ABCD",
+                        CurrentTrack("current-1", 0, "playing", "Current", "Artist"),
+                        emptyList(),
+                    ),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+                playback = LocalPlaybackState(
+                    trackId = "current-1",
+                    status = LocalPlaybackStatus.PAUSED,
+                    durationMs = null,
+                    isSeekable = true,
+                ),
+            ),
+        )
+        composeRule.setContent {
+            HostingScreen(
+                state = state.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("playback-seek-back").assertDoesNotExist()
+        composeRule.onNodeWithTag("playback-seek-forward").assertDoesNotExist()
+        composeRule.runOnIdle {
+            state.value = state.value.copy(
+                playback = state.value.playback.copy(durationMs = 60_000, isSeekable = false),
+            )
+        }
+        composeRule.onNodeWithTag("playback-seek-back").assertDoesNotExist()
+        composeRule.onNodeWithTag("playback-seek-forward").assertDoesNotExist()
+    }
+
+    @Test
+    fun every_playback_control_routes_up_to_invite_when_next_is_disabled() {
+        composeRule.setContent {
+            HostingScreen(
+                state = playingLiveRoom(queue = emptyList()),
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("room-next").assertIsNotEnabled()
+        composeRule.onNodeWithTag("room-invite").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("playback-play-pause").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionUp) }
+        composeRule.onNodeWithTag("room-invite").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("playback-play-pause").performKeyInput {
+            pressKey(Key.DirectionRight)
+        }
+        composeRule.onNodeWithTag("playback-seek-back").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionUp) }
+        composeRule.onNodeWithTag("room-invite").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("playback-play-pause").performKeyInput {
+            pressKey(Key.DirectionRight)
+            pressKey(Key.DirectionRight)
+        }
+        composeRule.onNodeWithTag("playback-seek-forward").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionUp) }
+        composeRule.onNodeWithTag("room-invite").assertIsFocused()
+    }
+
+    @Test
+    fun playback_control_up_switches_to_invite_when_primary_capability_is_lost() {
+        val queued = QueuedTrack("next-1", "https://example/1", "Next", "Artist", 60, "fixture")
+        val presentation = mutableStateOf(playingLiveRoom(queue = listOf(queued)))
+        composeRule.setContent {
+            HostingScreen(
+                state = presentation.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("room-next").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("playback-play-pause").assertIsFocused()
+        composeRule.runOnIdle {
+            presentation.value = presentation.value.copy(commandPending = true)
+        }
+        composeRule.onNodeWithTag("room-next").assertIsNotEnabled()
+        composeRule.onNodeWithTag("playback-play-pause").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionUp) }
+        composeRule.onNodeWithTag("room-invite").assertIsFocused()
+    }
+
+    @Test
+    fun error_retry_up_returns_to_invite_when_empty_queue_disables_next() {
+        composeRule.setContent {
+            HostingScreen(
+                state = HostingState.LiveRoom(
+                    GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                    RoomSyncState.Active(
+                        "ABCD",
+                        RoomState(
+                            "ABCD",
+                            CurrentTrack("current-1", 0, "playing", "Current", "Artist"),
+                            emptyList(),
+                        ),
+                        Freshness.FRESH,
+                        LiveConnection.CONNECTED,
+                    ),
+                    playback = LocalPlaybackState(
+                        trackId = "current-1",
+                        status = LocalPlaybackStatus.ERROR,
+                        error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
+                    ),
+                ),
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("room-next").assertIsNotEnabled()
+        composeRule.onNodeWithTag("room-invite").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("playback-retry").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionUp) }
+        composeRule.onNodeWithTag("room-invite").assertIsFocused()
+    }
+
+    @Test
+    fun stream_error_renders_and_dispatches_retry_current_and_explicit_next() {
+        val queued = QueuedTrack("next-1", "https://example/1", "Next title", "Artist", 65, "fixture")
+        var retries = 0
+        var nextActions = 0
+        val handler = object : LiveRoomHandler {
+            override fun onStartOrNext() { nextActions++ }
+            override fun onPlayPause() = Unit
+            override fun onSeekBy(offsetMs: Long) = Unit
+            override fun onRetryCurrent() { retries++ }
+            override fun onInvite() = Unit
+            override fun onBack() = LiveRoomBackResult.IGNORED
+        }
+        composeRule.setContent {
+            HostingScreen(
+                state = HostingState.LiveRoom(
+                    GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                    RoomSyncState.Active(
+                        "ABCD",
+                        RoomState(
+                            "ABCD",
+                            CurrentTrack("current-1", 0, "playing", "Current", "Artist"),
+                            listOf(queued),
+                        ),
+                        Freshness.FRESH,
+                        LiveConnection.CONNECTED,
+                    ),
+                    playback = LocalPlaybackState(
+                        trackId = "current-1",
+                        status = LocalPlaybackStatus.ERROR,
+                        error = PlaybackError(PlaybackErrorKind.HTTP, "private upstream", 502),
+                    ),
+                ),
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+                liveRoomHandler = handler,
+            )
+        }
+
+        composeRule.onNodeWithText("Playback error: Stream request failed (HTTP 502).").assertExists()
+        composeRule.onNodeWithTag("room-next").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("playback-retry").assertIsFocused().performKeyInput {
+            pressKey(Key.Enter)
+            pressKey(Key.DirectionUp)
+        }
+        composeRule.onNodeWithTag("room-next").assertIsFocused()
+            .performKeyInput { pressKey(Key.Enter) }
+        composeRule.runOnIdle {
+            assertEquals(1, retries)
+            assertEquals(1, nextActions)
+        }
     }
 
     @Test
@@ -733,4 +1083,26 @@ class HostingScreenTest {
 
         composeRule.runOnIdle { assertEquals(true, entered) }
     }
+
+    private fun playingLiveRoom(queue: List<QueuedTrack>) = HostingState.LiveRoom(
+        GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+        RoomSyncState.Active(
+            "ABCD",
+            RoomState(
+                "ABCD",
+                CurrentTrack("current-1", 0, "playing", "Current", "Artist"),
+                queue,
+            ),
+            Freshness.FRESH,
+            LiveConnection.CONNECTED,
+        ),
+        playback = LocalPlaybackState(
+            trackId = "current-1",
+            status = LocalPlaybackStatus.PLAYING,
+            isPlaying = true,
+            positionMs = 20_000,
+            durationMs = 60_000,
+            isSeekable = true,
+        ),
+    )
 }
