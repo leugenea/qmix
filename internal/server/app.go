@@ -58,10 +58,10 @@ func (a *App) Handler() http.Handler {
 }
 
 // NewStreamBackend returns the production yt-dlp StreamBackend configured from
-// the environment (path to yt-dlp, cache TTL).
+// the environment (path to yt-dlp, cache TTL, search deadline).
 func NewStreamBackend() stream.StreamBackend {
 	cfg := stream.ConfigFromEnv()
-	return &stream.YTDLP{Bin: cfg.YtdlpBin, CacheTTL: cfg.CacheTTL}
+	return &stream.YTDLP{Bin: cfg.YtdlpBin, CacheTTL: cfg.CacheTTL, SearchTimeout: cfg.YTDLPSearchTimeout}
 }
 
 // healthz reports service liveness.

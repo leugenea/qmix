@@ -30,6 +30,16 @@ type blockingResolver struct {
 	release chan struct{}
 }
 
+type deadlineMetadataRunner struct {
+	stopped chan struct{}
+}
+
+func (r deadlineMetadataRunner) Run(ctx context.Context, _ string) ([]byte, error) {
+	<-ctx.Done()
+	close(r.stopped)
+	return nil, ctx.Err()
+}
+
 func (r blockingResolver) Resolve(_ context.Context, _ string) (*resolver.Track, error) {
 	close(r.started)
 	<-r.release
@@ -299,6 +309,32 @@ func TestAddTrackServiceError502(t *testing.T) {
 	rec := addTrack(t, mux, code, "https://open.spotify.com/track/x")
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+}
+
+// TestAddTrackMetadataDeadline verifies a hung yt-dlp metadata lookup is
+// terminated and exposed as a bounded 502 API response (qmix#116).
+func TestAddTrackMetadataDeadline(t *testing.T) {
+	stopped := make(chan struct{})
+	r := resolver.NewMux(resolver.Matcher{
+		Domains: []string{"youtube.com", "youtu.be"},
+		Resolver: &resolver.YouTube{
+			Runner:  deadlineMetadataRunner{stopped: stopped},
+			Timeout: time.Millisecond,
+		},
+	})
+	s, _ := newResolverTestServer(r)
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+
+	rec := addTrack(t, mux, code, "https://youtu.be/abc")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("yt-dlp metadata lookup still active after API response")
 	}
 }
 

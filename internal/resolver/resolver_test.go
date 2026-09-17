@@ -5,8 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // fakeRunner feeds canned yt-dlp JSON to the YouTube resolver.
@@ -17,6 +22,16 @@ type fakeRunner struct {
 
 func (f fakeRunner) Run(_ context.Context, _ string) ([]byte, error) {
 	return f.out, f.err
+}
+
+type blockingYouTubeRunner struct {
+	stopped chan struct{}
+}
+
+func (r blockingYouTubeRunner) Run(ctx context.Context, _ string) ([]byte, error) {
+	<-ctx.Done()
+	close(r.stopped)
+	return nil, ctx.Err()
 }
 
 // TestResolver_SpotifyOEmbed checks the anonymous Spotify path: title is
@@ -170,6 +185,25 @@ func TestResolver_YouTubeRunnerError(t *testing.T) {
 	}
 }
 
+// TestResolver_YouTubeDeadline bounds a runner even when the request context
+// itself has no deadline (qmix#116).
+func TestResolver_YouTubeDeadline(t *testing.T) {
+	stopped := make(chan struct{})
+	y := &YouTube{
+		Runner:  blockingYouTubeRunner{stopped: stopped},
+		Timeout: time.Millisecond,
+	}
+	_, err := y.Resolve(context.Background(), "https://youtu.be/abc")
+	if !errors.Is(err, ErrService) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want ErrService and context.DeadlineExceeded", err)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("runner still active after deadline")
+	}
+}
+
 // TestResolver_YouTubeEmptyOutput covers empty stdout.
 func TestResolver_YouTubeEmptyOutput(t *testing.T) {
 	y := &YouTube{Runner: fakeRunner{}}
@@ -208,6 +242,66 @@ func TestResolver_YouTubeDefaultRunner(t *testing.T) {
 	}
 	if y.name() != "youtube" {
 		t.Fatalf("name = %q, want youtube", y.name())
+	}
+	if y.timeout() != ytdlpMetadataTimeout {
+		t.Fatalf("timeout = %v, want %v", y.timeout(), ytdlpMetadataTimeout)
+	}
+}
+
+// TestResolver_YouTubeExecRunnerKillsTimedOutProcess proves the production
+// CommandContext path waits for a blocked subprocess to be terminated.
+func TestResolver_YouTubeExecRunnerKillsTimedOutProcess(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	bin := filepath.Join(dir, "yt-dlp")
+	script := "#!/bin/sh\necho $$ > " + pidFile + "\nwhile :; do :; done\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := (ytdlpRunner{bin: bin}).Run(ctx, "https://youtu.be/abc")
+		runDone <- err
+	}()
+
+	watchdog := time.NewTimer(5 * time.Second)
+	defer watchdog.Stop()
+	poll := time.NewTicker(time.Millisecond)
+	defer poll.Stop()
+
+	var rawPID []byte
+	for len(strings.TrimSpace(string(rawPID))) == 0 {
+		var err error
+		rawPID, err = os.ReadFile(pidFile)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-runDone:
+			t.Fatalf("subprocess exited before writing its PID: %v", err)
+		case <-watchdog.C:
+			t.Fatal("timed out waiting for subprocess startup")
+		case <-poll.C:
+		}
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(rawPID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err == nil {
+			t.Fatal("expected canceled subprocess error")
+		}
+	case <-watchdog.C:
+		t.Fatal("timed out waiting for canceled subprocess")
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("process %d remains after cancellation: %v", pid, err)
 	}
 }
 

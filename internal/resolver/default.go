@@ -13,7 +13,7 @@ func DefaultMux() *Mux {
 func DefaultMuxWithConfig(cfg Config) *Mux {
 	return NewMux(
 		Matcher{Domains: []string{"open.spotify.com", "spotify.com"}, Resolver: &Spotify{Config: cfg}},
-		Matcher{Domains: []string{"youtube.com", "youtu.be"}, Resolver: &YouTube{}},
+		Matcher{Domains: []string{"youtube.com", "youtu.be"}, Resolver: &YouTube{Timeout: cfg.YTDLPMetadataTimeout}},
 		Matcher{Domains: append(append([]string{}, vkDomains...), yandexDomains...), Resolver: &VKYandex{Config: cfg}},
 	)
 }

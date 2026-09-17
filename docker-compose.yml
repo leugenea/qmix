@@ -18,6 +18,8 @@ services:
       QMIX_ADDR: ":8080"
       QMIX_LOG_LEVEL: "${QMIX_LOG_LEVEL:-warn}"
       QMIX_LOG_FILE: "/var/log/qmix/qmix.log"
+      QMIX_YTDLP_METADATA_TIMEOUT: "${QMIX_YTDLP_METADATA_TIMEOUT:-30s}"
+      QMIX_YTDLP_SEARCH_TIMEOUT: "${QMIX_YTDLP_SEARCH_TIMEOUT:-60s}"
       # Proxy passthrough for environments where YouTube is reachable only
       # via a proxy: yt-dlp and the audio proxy both honor these. Empty by
       # default.

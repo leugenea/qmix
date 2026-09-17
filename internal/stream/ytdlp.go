@@ -22,6 +22,10 @@ const ytdlpBin = "yt-dlp"
 // next request searches YouTube again.
 const ytdlpDefaultCacheTTL = 5 * time.Minute
 
+// ytdlpSearchTimeout bounds a YouTube search independently of the client
+// request lifetime. Search has a larger budget than direct metadata lookup.
+const ytdlpSearchTimeout = 60 * time.Second
+
 // Runner executes yt-dlp and returns its raw stdout. It isolates the stream
 // backend behind an injectable seam so tests feed fixture JSON instead of
 // invoking a real binary (same pattern as the resolver's YouTube runner).
@@ -68,6 +72,8 @@ type YTDLP struct {
 	// CacheTTL is how long a resolved URL is cached. If zero,
 	// ytdlpDefaultCacheTTL is used. A negative value disables the cache.
 	CacheTTL time.Duration
+	// SearchTimeout bounds one yt-dlp search. Zero uses ytdlpSearchTimeout.
+	SearchTimeout time.Duration
 	// cache is the lazily created TTL cache; mu guards its initialization and
 	// injection so concurrent Stream calls are safe under -race.
 	mu    sync.Mutex
@@ -117,6 +123,13 @@ func (b *YTDLP) ttl() time.Duration {
 		return ytdlpDefaultCacheTTL
 	}
 	return b.CacheTTL
+}
+
+func (b *YTDLP) searchTimeout() time.Duration {
+	if b.SearchTimeout <= 0 {
+		return ytdlpSearchTimeout
+	}
+	return b.SearchTimeout
 }
 
 // cache returns the lazily created Cache (disabled when TTL is negative). It is
@@ -184,7 +197,9 @@ func (b *YTDLP) resolveURL(ctx context.Context, t *Track) (string, error) {
 // searchURL runs the YouTube search via the runner and extracts the top audio
 // URL. It maps no-results to ErrNotFound and exec/parse failures to ErrService.
 func (b *YTDLP) searchURL(ctx context.Context, t *Track) (string, error) {
-	out, err := b.runner().Search(ctx, searchQuery(t))
+	searchCtx, cancel := context.WithTimeout(ctx, b.searchTimeout())
+	defer cancel()
+	out, err := b.runner().Search(searchCtx, searchQuery(t))
 	if err != nil {
 		return "", fmt.Errorf("ytdlp: %w: %w", ErrService, err)
 	}
