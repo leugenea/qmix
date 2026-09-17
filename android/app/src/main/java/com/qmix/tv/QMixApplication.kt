@@ -37,6 +37,22 @@ class QMixApplication : Application() {
                     logger = logger.component(QMixLogComponent.ROOM_SYNC_SSE_RECONNECT),
                 )
             },
+            queueCoordinatorFactory = { backendUrl, credentials, observer ->
+                val api = RoomApiClient(
+                    client,
+                    backendUrl,
+                    logger.component(QMixLogComponent.ROOM_API_CREATION),
+                )
+                QueueAdvancementCoordinator(
+                    roomCode = credentials.code,
+                    hostToken = credentials.hostToken,
+                    command = AsyncRoomAdvanceCommand(api) { command ->
+                        Thread(command, "qmix-room-command").apply { isDaemon = true }.start()
+                    },
+                    reconciler = api,
+                    observer = observer,
+                )
+            },
         )
     }
 }

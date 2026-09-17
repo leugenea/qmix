@@ -38,6 +38,12 @@ enum class LiveRoomPrimaryAction { START, NEXT }
 
 enum class LiveRoomBackResult { HANDLED, EXIT_ACTIVITY, IGNORED }
 
+typealias QueueCoordinatorFactory = (
+    backendUrl: String,
+    credentials: RoomCredentials,
+    observer: (QueueAdvancementState) -> Unit,
+) -> QueueAdvancementCoordinator
+
 interface LiveRoomHandler {
     fun onStartOrNext()
     fun onInvite()
@@ -52,6 +58,7 @@ class HostSessionController(
         Thread(command, "qmix-room-request").apply { isDaemon = true }.start()
     },
     private val roomRepositoryFactory: ((String) -> RoomRepository)? = null,
+    private val queueCoordinatorFactory: QueueCoordinatorFactory? = null,
     private val primaryActionHandler: () -> Unit = {},
     private val observerFailureHandler: (Throwable) -> Unit = {},
     private val logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.APP_HOST_SESSION),
@@ -69,6 +76,7 @@ class HostSessionController(
     private var credentials: RoomCredentials? = null
     private var activeBackendUrl: String? = null
     private var roomSubscription: AutoCloseable? = null
+    private var queueCoordinator: QueueAdvancementCoordinator? = null
     private var createGeneration = 0L
     private var syncGeneration = 0L
 
@@ -166,9 +174,12 @@ class HostSessionController(
 
     fun enterRoom() {
         lateinit var invite: GuestInvite
-        var factory: ((String) -> RoomRepository)? = null
+        var repositoryFactory: ((String) -> RoomRepository)? = null
+        var coordinatorFactory: QueueCoordinatorFactory? = null
         var backendUrl: String? = null
+        var sessionCredentials: RoomCredentials? = null
         var previousSubscription: AutoCloseable? = null
+        var previousCoordinator: QueueAdvancementCoordinator? = null
         var generation = 0L
         synchronized(this) {
             val invitation = state as? HostingState.Invitation ?: return
@@ -184,30 +195,78 @@ class HostSessionController(
                     ),
                 ),
             )
-            factory = roomRepositoryFactory
+            repositoryFactory = roomRepositoryFactory
+            coordinatorFactory = queueCoordinatorFactory
             backendUrl = activeBackendUrl
-            if (factory != null && backendUrl != null) {
+            sessionCredentials = credentials
+            if (repositoryFactory != null && backendUrl != null) {
                 previousSubscription = roomSubscription
+                previousCoordinator = queueCoordinator
                 roomSubscription = null
+                queueCoordinator = null
                 generation = ++syncGeneration
             }
         }
         drainNotifications()
         previousSubscription?.close()
+        previousCoordinator?.close()
 
-        val repositoryFactory = factory ?: return
+        val activeRepositoryFactory = repositoryFactory ?: return
         val activeUrl = backendUrl ?: return
-        val subscription = repositoryFactory(activeUrl).observe(invite.code) { syncState ->
+        val activeCredentials = sessionCredentials
+        val createdCoordinator = if (coordinatorFactory != null && activeCredentials != null) {
+            coordinatorFactory.invoke(activeUrl, activeCredentials) { advancement ->
+                val changed = synchronized(this@HostSessionController) {
+                    val current = state as? HostingState.LiveRoom
+                    if (generation != syncGeneration || current?.invite?.code != invite.code ||
+                        current.commandPending == advancement.pending
+                    ) {
+                        false
+                    } else {
+                        publishLocked(current.copy(commandPending = advancement.pending))
+                        true
+                    }
+                }
+                if (changed) drainNotifications()
+            }
+        } else {
+            null
+        }
+        val closeCoordinatorImmediately = synchronized(this) {
+            val current = state as? HostingState.LiveRoom
+            if (generation == syncGeneration && current?.invite?.code == invite.code) {
+                queueCoordinator = createdCoordinator
+                false
+            } else {
+                true
+            }
+        }
+        if (closeCoordinatorImmediately) {
+            createdCoordinator?.close()
+            return
+        }
+
+        val subscription = activeRepositoryFactory(activeUrl).observe(invite.code) { syncState ->
+            var authoritativeRoom: RoomState? = null
+            var activeCoordinator: QueueAdvancementCoordinator? = null
             val changed = synchronized(this@HostSessionController) {
                 val current = state as? HostingState.LiveRoom
                 if (generation != syncGeneration || current?.invite?.code != syncState.roomCode) {
                     false
                 } else {
                     publishLocked(current.copy(synchronization = retainLastKnownRoom(current.synchronization, syncState)))
+                    val active = syncState as? RoomSyncState.Active
+                    if (active?.freshness == Freshness.FRESH && active.room != null) {
+                        authoritativeRoom = active.room
+                        activeCoordinator = queueCoordinator
+                    }
                     true
                 }
             }
-            if (changed) drainNotifications()
+            if (changed) {
+                activeCoordinator?.onAuthoritativeRoom(checkNotNull(authoritativeRoom))
+                drainNotifications()
+            }
         }
         val closeImmediately = synchronized(this) {
             val current = state as? HostingState.LiveRoom
@@ -243,10 +302,24 @@ class HostSessionController(
     }
 
     override fun onStartOrNext() {
+        var coordinator: QueueAdvancementCoordinator? = null
         val enabled = synchronized(this) {
-            (state as? HostingState.LiveRoom)?.isPrimaryActionEnabled == true
+            val allowed = (state as? HostingState.LiveRoom)?.isPrimaryActionEnabled == true
+            if (allowed) coordinator = queueCoordinator
+            allowed
         }
-        if (enabled) primaryActionHandler()
+        if (!enabled) return
+        val activeCoordinator = coordinator
+        if (activeCoordinator != null) {
+            activeCoordinator.requestExplicitAdvance()
+        } else {
+            primaryActionHandler()
+        }
+    }
+
+    fun onPlaybackEnded(trackId: String): Boolean {
+        val coordinator = synchronized(this) { queueCoordinator }
+        return coordinator?.onPlaybackEnded(trackId) == true
     }
 
     override fun onInvite() {
@@ -281,11 +354,14 @@ class HostSessionController(
     }
 
     fun endRoom() {
+        var coordinator: QueueAdvancementCoordinator? = null
         val subscription = synchronized(this) {
             createGeneration++
             syncGeneration++
             val owned = roomSubscription
             roomSubscription = null
+            coordinator = queueCoordinator
+            queueCoordinator = null
             credentials = null
             activeBackendUrl = null
             publishLocked(setupState)
@@ -294,7 +370,11 @@ class HostSessionController(
         try {
             subscription?.close()
         } finally {
-            drainNotifications()
+            try {
+                coordinator?.close()
+            } finally {
+                drainNotifications()
+            }
         }
     }
 
