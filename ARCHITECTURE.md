@@ -233,7 +233,11 @@ served through `stream.ServeStream`.
   image (`apk add yt-dlp`, with the version pinned in `Dockerfile`). Outside the
   container, the binary must be on PATH or specified with `QMIX_YTDLP_BIN`.
   Link-cache behavior is configured through `QMIX_STREAM_CACHE_TTL` (default
-  `5m`; a negative value disables the cache). Proxy variables used to access
+  `5m`; a negative value disables the cache). The metadata resolver and stream
+  search apply separate server-side yt-dlp deadlines (30 seconds and 60 seconds
+  by default), configured with `QMIX_YTDLP_METADATA_TIMEOUT` and
+  `QMIX_YTDLP_SEARCH_TIMEOUT`; invalid or non-positive values retain the
+  defaults. Proxy variables used to access
   YouTube (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) are passed through Compose.
 - CI (GitHub Actions): gofmt + vet, build, `go test -race`, and a coverage gate
   of at least 95%. The `docker` job builds the image, checks yt-dlp inside it,

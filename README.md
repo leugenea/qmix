@@ -48,7 +48,11 @@ How it works:
 **Requirement:** `yt-dlp` must be installed in `PATH` on the backend host (or
 its path must be set through `QMIX_YTDLP_BIN`). The Docker image already
 includes `yt-dlp` at the version pinned in `Dockerfile`. Configure the cache
-with `QMIX_STREAM_CACHE_TTL` (default: `5m`). If YouTube is available only
+with `QMIX_STREAM_CACHE_TTL` (default: `5m`). Metadata extraction and stream
+search subprocesses have independent hard deadlines: 30 seconds and 60 seconds
+respectively. Override them with `QMIX_YTDLP_METADATA_TIMEOUT` and
+`QMIX_YTDLP_SEARCH_TIMEOUT` using Go duration syntax. Invalid or non-positive
+values retain the defaults. If YouTube is available only
 through a proxy, set `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` in the environment;
 compose passes them to the container, where they are used by both `yt-dlp` and
 the audio HTTP proxy.

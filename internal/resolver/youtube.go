@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"time"
 )
 
 // Runner executes an external process and returns its raw stdout. It isolates
@@ -23,6 +24,10 @@ type ytdlpRunner struct {
 
 // ytdlpBin is the yt-dlp executable. The zero-value ytdlpRunner uses it.
 const ytdlpBin = "yt-dlp"
+
+// ytdlpMetadataTimeout bounds metadata extraction independently of the
+// incoming request lifetime. Metadata calls are expected to finish quickly.
+const ytdlpMetadataTimeout = 30 * time.Second
 
 // Run invokes `yt-dlp --skip-download --dump-json`.
 func (r ytdlpRunner) Run(ctx context.Context, url string) ([]byte, error) {
@@ -47,6 +52,8 @@ type YouTube struct {
 	// Runner drives the metadata fetch. If nil, the default yt-dlp exec runner
 	// is used. Tests inject a fake runner returning fixture JSON.
 	Runner Runner
+	// Timeout bounds one metadata lookup. Zero uses ytdlpMetadataTimeout.
+	Timeout time.Duration
 	// Name is the value reported in Track.ResolvedBy. Defaults to "youtube".
 	Name string
 }
@@ -65,9 +72,18 @@ func (y *YouTube) name() string {
 	return "youtube"
 }
 
+func (y *YouTube) timeout() time.Duration {
+	if y.Timeout <= 0 {
+		return ytdlpMetadataTimeout
+	}
+	return y.Timeout
+}
+
 // Resolve fetches metadata for a YouTube url through the runner.
 func (y *YouTube) Resolve(ctx context.Context, rawurl string) (*Track, error) {
-	out, err := y.runner().Run(ctx, rawurl)
+	runCtx, cancel := context.WithTimeout(ctx, y.timeout())
+	defer cancel()
+	out, err := y.runner().Run(runCtx, rawurl)
 	if err != nil {
 		return nil, fmt.Errorf("youtube: %w: %w", ErrService, err)
 	}

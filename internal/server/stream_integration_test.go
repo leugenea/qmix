@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/leugenea/qmix/internal/resolver"
 	"github.com/leugenea/qmix/internal/stream"
@@ -17,6 +18,16 @@ type stubStreamBackend struct {
 	res  *stream.Result
 	err  error
 	last *stream.Track
+}
+
+type deadlineStreamRunner struct {
+	stopped chan struct{}
+}
+
+func (r deadlineStreamRunner) Search(ctx context.Context, _ string) ([]byte, error) {
+	<-ctx.Done()
+	close(r.stopped)
+	return nil, ctx.Err()
 }
 
 func (s *stubStreamBackend) Stream(_ context.Context, t *stream.Track, rangeHeader string) (*stream.Result, error) {
@@ -85,6 +96,31 @@ func TestStreamEndpointFull(t *testing.T) {
 	}
 	if sb.last == nil || sb.last.Title != "Some Song" || sb.last.Artist != "Some Artist" {
 		t.Fatalf("backend track = %+v", sb.last)
+	}
+}
+
+// TestStreamEndpointSearchDeadline verifies a hung yt-dlp search is terminated
+// by the backend deadline and exposed as a bounded 502 API response (qmix#116).
+func TestStreamEndpointSearchDeadline(t *testing.T) {
+	stopped := make(chan struct{})
+	s, _ := newStreamServer(&stream.YTDLP{
+		Runner:        deadlineStreamRunner{stopped: stopped},
+		CacheTTL:      -1,
+		SearchTimeout: time.Millisecond,
+	})
+	mux := newTestMux(s)
+	s.Resolver = stubResolver{meta: trackMeta()}
+	code, token := createRoom(t, mux)
+	startCurrentTrack(t, mux, code, token, "https://open.spotify.com/track/x")
+
+	rec := doReq(t, mux, http.MethodGet, "/rooms/"+code+"/current/stream", "", "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("yt-dlp search still active after API response")
 	}
 }
 

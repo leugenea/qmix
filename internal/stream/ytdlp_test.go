@@ -89,6 +89,20 @@ func TestYtdlpRunnerError(t *testing.T) {
 	}
 }
 
+// TestYtdlpSearchDeadline bounds a blocking search independently of the
+// incoming request context (qmix#116).
+func TestYtdlpSearchDeadline(t *testing.T) {
+	r := &blockingRunner{started: make(chan struct{}), release: make(chan struct{})}
+	b := &YTDLP{Runner: r, CacheTTL: -1, SearchTimeout: time.Millisecond}
+	_, err := b.resolveURL(context.Background(), &Track{Title: "x"})
+	if !errors.Is(err, ErrService) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want ErrService and context.DeadlineExceeded", err)
+	}
+	if calls := r.calls.Load(); calls != 1 {
+		t.Fatalf("runner calls = %d, want 1 terminated search", calls)
+	}
+}
+
 // TestYtdlpEmptyOutput maps an empty runner response to ErrService.
 func TestYtdlpEmptyOutput(t *testing.T) {
 	b := &YTDLP{Runner: &fakeRunner{}, CacheTTL: -1}
@@ -309,6 +323,9 @@ func TestYtdlpConfiguredBin(t *testing.T) {
 	}
 	if b.ttl() != ytdlpDefaultCacheTTL {
 		t.Fatalf("ttl = %v, want %v", b.ttl(), ytdlpDefaultCacheTTL)
+	}
+	if b.searchTimeout() != ytdlpSearchTimeout {
+		t.Fatalf("search timeout = %v, want %v", b.searchTimeout(), ytdlpSearchTimeout)
 	}
 }
 
