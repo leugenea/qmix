@@ -14,6 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -163,6 +164,49 @@ class HostSessionControllerTest {
     }
 
     @Test
+    fun primary_action_uses_the_queue_coordinator_and_publishes_pending_state() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val repository = RecordingRoomRepository()
+        val command = RecordingAdvanceCommand()
+        val reconciler = RecordingReconciler()
+        val controller = HostSessionController(
+            OkHttpClient(),
+            initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+            roomRepositoryFactory = { repository },
+            queueCoordinatorFactory = { _, credentials, observer ->
+                QueueAdvancementCoordinator(
+                    credentials.code,
+                    credentials.hostToken,
+                    command,
+                    reconciler,
+                    observer,
+                )
+            },
+        )
+        controller.createRoom()
+        controller.enterRoom()
+        val room = RoomState(
+            "ABCD",
+            null,
+            listOf(QueuedTrack("track-1", "https://example/1", "Title", "Artist", 60, "fixture")),
+        )
+        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+
+        controller.onStartOrNext()
+
+        assertEquals(1, command.callbacks.size)
+        assertTrue((controller.state as HostingState.LiveRoom).commandPending)
+        command.complete(QueueAdvanceCommandResult.Indeterminate)
+        reconciler.complete(RoomFetchResult.Success(room))
+        assertFalse((controller.state as HostingState.LiveRoom).commandPending)
+    }
+
+    @Test
     fun room_sync_is_application_session_owned_and_canceled_when_session_ends() {
         server.enqueue(
             MockResponse().setResponseCode(201)
@@ -195,6 +239,38 @@ class HostSessionControllerTest {
         assertEquals(HostingState.Setup(server.url("/").toString(), "https://guest.example"), controller.state)
         repository.publish(synchronized.copy(freshness = Freshness.STALE))
         assertEquals(null, controller.roomSyncState)
+    }
+
+    private class RecordingAdvanceCommand : QueueAdvanceCommand {
+        val callbacks = mutableListOf<(QueueAdvanceCommandResult) -> Unit>()
+
+        override fun skip(
+            roomCode: String,
+            hostToken: String,
+            callback: (QueueAdvanceCommandResult) -> Unit,
+        ) {
+            assertEquals("ABCD", roomCode)
+            assertEquals("host-secret", hostToken)
+            callbacks += callback
+        }
+
+        fun complete(result: QueueAdvanceCommandResult) {
+            callbacks.last()(result)
+        }
+    }
+
+    private class RecordingReconciler : RoomStateFetcher {
+        private var callback: ((RoomFetchResult) -> Unit)? = null
+
+        override fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable {
+            assertEquals("ABCD", roomCode)
+            this.callback = callback
+            return Cancelable { }
+        }
+
+        fun complete(result: RoomFetchResult) {
+            callback?.invoke(result)
+        }
     }
 
     private class RecordingRoomRepository : RoomRepository {
