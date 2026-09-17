@@ -6,6 +6,7 @@ import android.os.Looper
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import java.util.concurrent.Executor
+import java.util.concurrent.FutureTask
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
@@ -22,6 +23,12 @@ class QMixApplication : Application() {
     private val logger: QMixLogger
         get() = QMixLogging.process
 
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val playbackEngine by lazy { PlaybackEngines.create(this) }
+    private val playbackDispatcher = Executor { command ->
+        if (Looper.myLooper() === Looper.getMainLooper()) command.run() else mainHandler.post(command)
+    }
+
     val hostSession: HostSessionController by lazy {
         val syncExecutor = ScheduledThreadPoolExecutor(1) { command ->
             Thread(command, "qmix-room-sync").apply { isDaemon = true }
@@ -31,11 +38,6 @@ class QMixApplication : Application() {
             .followRedirects(false)
             .followSslRedirects(false)
             .build()
-        val playbackEngine = PlaybackEngines.create(this)
-        val mainHandler = Handler(Looper.getMainLooper())
-        val playbackDispatcher = Executor { command ->
-            if (Looper.myLooper() === Looper.getMainLooper()) command.run() else mainHandler.post(command)
-        }
         HostSessionController(
             httpClient = client,
             initialBackendUrl = BuildConfig.DEFAULT_BACKEND_URL,
@@ -78,16 +80,25 @@ class QMixApplication : Application() {
                     logger.component(QMixLogComponent.ROOM_API_CREATION),
                 )
                 val streamUrl = currentPlaybackStreamUrl(backendUrl, credentials.code)
-                AuthoritativePlaybackCoordinator(
-                    roomCode = credentials.code,
-                    streamUrl = streamUrl,
-                    playbackEngine = playbackEngine,
-                    reconciler = api,
-                    dispatcher = playbackDispatcher,
-                    advanceAfterEnded = advanceAfterEnded,
-                    observer = observer,
-                )
+                createPlaybackCoordinatorOnMainThread {
+                    AuthoritativePlaybackCoordinator(
+                        roomCode = credentials.code,
+                        streamUrl = streamUrl,
+                        playbackEngine = playbackEngine,
+                        reconciler = api,
+                        dispatcher = playbackDispatcher,
+                        advanceAfterEnded = advanceAfterEnded,
+                        observer = observer,
+                    )
+                }
             },
         )
+    }
+
+    private fun <T> createPlaybackCoordinatorOnMainThread(factory: () -> T): T {
+        if (Looper.myLooper() === Looper.getMainLooper()) return factory()
+        val task = FutureTask(factory)
+        check(mainHandler.post(task)) { "Main playback thread is unavailable" }
+        return task.get()
     }
 }
