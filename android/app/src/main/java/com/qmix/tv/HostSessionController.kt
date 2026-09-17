@@ -13,6 +13,7 @@ sealed interface HostingState {
         val invite: GuestInvite,
         val synchronization: RoomSyncState,
         val commandPending: Boolean = false,
+        val playback: LocalPlaybackState = LocalPlaybackState(),
         val invitationVisible: Boolean = false,
     ) : HostingState {
         val primaryAction: LiveRoomPrimaryAction
@@ -44,6 +45,13 @@ typealias QueueCoordinatorFactory = (
     observer: (QueueAdvancementState) -> Unit,
 ) -> QueueAdvancementCoordinator
 
+typealias PlaybackCoordinatorFactory = (
+    backendUrl: String,
+    credentials: RoomCredentials,
+    observer: (LocalPlaybackState) -> Unit,
+    advanceAfterEnded: (String) -> Boolean,
+) -> AuthoritativePlaybackCoordinator
+
 interface LiveRoomHandler {
     fun onStartOrNext()
     fun onInvite()
@@ -59,6 +67,7 @@ class HostSessionController(
     },
     private val roomRepositoryFactory: ((String) -> RoomRepository)? = null,
     private val queueCoordinatorFactory: QueueCoordinatorFactory? = null,
+    private val playbackCoordinatorFactory: PlaybackCoordinatorFactory? = null,
     private val primaryActionHandler: () -> Unit = {},
     private val observerFailureHandler: (Throwable) -> Unit = {},
     private val logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.APP_HOST_SESSION),
@@ -77,6 +86,7 @@ class HostSessionController(
     private var activeBackendUrl: String? = null
     private var roomSubscription: AutoCloseable? = null
     private var queueCoordinator: QueueAdvancementCoordinator? = null
+    private var playbackCoordinator: AuthoritativePlaybackCoordinator? = null
     private var createGeneration = 0L
     private var syncGeneration = 0L
 
@@ -176,10 +186,12 @@ class HostSessionController(
         lateinit var invite: GuestInvite
         var repositoryFactory: ((String) -> RoomRepository)? = null
         var coordinatorFactory: QueueCoordinatorFactory? = null
+        var localPlaybackFactory: PlaybackCoordinatorFactory? = null
         var backendUrl: String? = null
         var sessionCredentials: RoomCredentials? = null
         var previousSubscription: AutoCloseable? = null
         var previousCoordinator: QueueAdvancementCoordinator? = null
+        var previousPlayback: AuthoritativePlaybackCoordinator? = null
         var generation = 0L
         synchronized(this) {
             val invitation = state as? HostingState.Invitation ?: return
@@ -197,19 +209,23 @@ class HostSessionController(
             )
             repositoryFactory = roomRepositoryFactory
             coordinatorFactory = queueCoordinatorFactory
+            localPlaybackFactory = playbackCoordinatorFactory
             backendUrl = activeBackendUrl
             sessionCredentials = credentials
             if (repositoryFactory != null && backendUrl != null) {
                 previousSubscription = roomSubscription
                 previousCoordinator = queueCoordinator
+                previousPlayback = playbackCoordinator
                 roomSubscription = null
                 queueCoordinator = null
+                playbackCoordinator = null
                 generation = ++syncGeneration
             }
         }
         drainNotifications()
         previousSubscription?.close()
         previousCoordinator?.close()
+        previousPlayback?.close()
 
         val activeRepositoryFactory = repositoryFactory ?: return
         val activeUrl = backendUrl ?: return
@@ -246,15 +262,65 @@ class HostSessionController(
             return
         }
 
+        val createdPlayback = if (localPlaybackFactory != null && activeCredentials != null) {
+            localPlaybackFactory.invoke(
+                activeUrl,
+                activeCredentials,
+                { playback ->
+                    val changed = synchronized(this@HostSessionController) {
+                        val current = state as? HostingState.LiveRoom
+                        if (generation != syncGeneration || current?.invite?.code != invite.code ||
+                            current.playback == playback
+                        ) {
+                            false
+                        } else {
+                            publishLocked(current.copy(playback = playback))
+                            true
+                        }
+                    }
+                    if (changed) drainNotifications()
+                },
+                { trackId ->
+                    val active = synchronized(this@HostSessionController) {
+                        val current = state as? HostingState.LiveRoom
+                        if (generation == syncGeneration && current?.invite?.code == invite.code) {
+                            queueCoordinator
+                        } else {
+                            null
+                        }
+                    }
+                    active?.onPlaybackEnded(trackId) == true
+                },
+            )
+        } else {
+            null
+        }
+        val closePlaybackImmediately = synchronized(this) {
+            val current = state as? HostingState.LiveRoom
+            if (generation == syncGeneration && current?.invite?.code == invite.code) {
+                playbackCoordinator = createdPlayback
+                false
+            } else {
+                true
+            }
+        }
+        if (closePlaybackImmediately) {
+            createdPlayback?.close()
+            createdCoordinator?.close()
+            return
+        }
+
         val subscription = activeRepositoryFactory(activeUrl).observe(invite.code) { syncState ->
             var authoritativeRoom: RoomState? = null
             var activeCoordinator: QueueAdvancementCoordinator? = null
+            var activePlayback: AuthoritativePlaybackCoordinator? = null
             val changed = synchronized(this@HostSessionController) {
                 val current = state as? HostingState.LiveRoom
                 if (generation != syncGeneration || current?.invite?.code != syncState.roomCode) {
                     false
                 } else {
                     publishLocked(current.copy(synchronization = retainLastKnownRoom(current.synchronization, syncState)))
+                    activePlayback = playbackCoordinator
                     val active = syncState as? RoomSyncState.Active
                     if (active?.freshness == Freshness.FRESH && active.room != null) {
                         authoritativeRoom = active.room
@@ -264,6 +330,7 @@ class HostSessionController(
                 }
             }
             if (changed) {
+                activePlayback?.onSynchronization(syncState)
                 activeCoordinator?.onAuthoritativeRoom(checkNotNull(authoritativeRoom))
                 drainNotifications()
             }
@@ -322,6 +389,18 @@ class HostSessionController(
         return coordinator?.onPlaybackEnded(trackId) == true
     }
 
+    fun pausePlayback() {
+        synchronized(this) { playbackCoordinator }?.pause()
+    }
+
+    fun resumePlayback() {
+        synchronized(this) { playbackCoordinator }?.resume()
+    }
+
+    fun retryCurrent() {
+        synchronized(this) { playbackCoordinator }?.retryCurrent()
+    }
+
     override fun onInvite() {
         val changed = synchronized(this) {
             val current = state as? HostingState.LiveRoom ?: return
@@ -355,6 +434,7 @@ class HostSessionController(
 
     fun endRoom() {
         var coordinator: QueueAdvancementCoordinator? = null
+        var localPlayback: AuthoritativePlaybackCoordinator? = null
         val subscription = synchronized(this) {
             createGeneration++
             syncGeneration++
@@ -362,6 +442,8 @@ class HostSessionController(
             roomSubscription = null
             coordinator = queueCoordinator
             queueCoordinator = null
+            localPlayback = playbackCoordinator
+            playbackCoordinator = null
             credentials = null
             activeBackendUrl = null
             publishLocked(setupState)
@@ -373,7 +455,11 @@ class HostSessionController(
             try {
                 coordinator?.close()
             } finally {
-                drainNotifications()
+                try {
+                    localPlayback?.close()
+                } finally {
+                    drainNotifications()
+                }
             }
         }
     }

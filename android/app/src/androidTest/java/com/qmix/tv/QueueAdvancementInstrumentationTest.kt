@@ -183,6 +183,81 @@ class QueueAdvancementInstrumentationTest {
         assertEquals(1, commands.size)
     }
 
+    @Test
+    fun host_controller_propagates_playback_controls_retry_and_ended_advancement() {
+        server.enqueue(
+            MockResponse().setResponseCode(201).setBody(
+                """{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""",
+            ),
+        )
+        val repository = RecordingRepository()
+        val commands = mutableListOf<(QueueAdvanceCommandResult) -> Unit>()
+        val playback = RecordingPlaybackEngine()
+        var retry: ((RoomFetchResult) -> Unit)? = null
+        val selected = RoomState(
+            "ABCD",
+            CurrentTrack("current", 0, "playing", "Current", "Artist"),
+            listOf(QueuedTrack("next", "https://example/next", "Next", "Artist", 60, "fixture")),
+        )
+        val controller = HostSessionController(
+            httpClient = OkHttpClient(),
+            initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+            roomRepositoryFactory = { repository },
+            queueCoordinatorFactory = { _, credentials, observer ->
+                QueueAdvancementCoordinator(
+                    credentials.code,
+                    credentials.hostToken,
+                    QueueAdvanceCommand { _, _, callback -> commands += callback },
+                    RoomStateFetcher { _, _ -> Cancelable { } },
+                    observer,
+                )
+            },
+            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
+                AuthoritativePlaybackCoordinator(
+                    roomCode = credentials.code,
+                    streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
+                    playbackEngine = playback,
+                    reconciler = RoomStateFetcher { _, callback ->
+                        retry = callback
+                        Cancelable { retry = null }
+                    },
+                    dispatcher = Executor { it.run() },
+                    advanceAfterEnded = advanceAfterEnded,
+                    observer = observer,
+                )
+            },
+        )
+
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
+        assertEquals(listOf("current"), playback.prepared.map(PlaybackMedia::trackId))
+        assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
+
+        playback.emit(PlaybackState("current", PlaybackStatus.READY, isPlaying = true))
+        assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
+        controller.pausePlayback()
+        controller.resumePlayback()
+        assertEquals(2, playback.playCount)
+        playback.emit(
+            PlaybackState(
+                "current",
+                PlaybackStatus.ERROR,
+                error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
+            ),
+        )
+        controller.retryCurrent()
+        checkNotNull(retry)(RoomFetchResult.Success(selected))
+        assertEquals(listOf("current", "current"), playback.prepared.map(PlaybackMedia::trackId))
+
+        playback.emit(PlaybackState("current", PlaybackStatus.ENDED))
+        assertEquals(1, commands.size)
+        controller.endRoom()
+        assertEquals(2, playback.pauseCount)
+    }
+
     private class RecordingRepository : RoomRepository {
         private var observer: ((RoomSyncState) -> Unit)? = null
 
@@ -193,6 +268,33 @@ class QueueAdvancementInstrumentationTest {
 
         fun publish(state: RoomSyncState) {
             observer?.invoke(state)
+        }
+    }
+
+    private class RecordingPlaybackEngine : PlaybackEngine {
+        override var state = PlaybackState()
+            private set
+        val prepared = mutableListOf<PlaybackMedia>()
+        var playCount = 0
+        var pauseCount = 0
+        private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
+
+        override fun prepare(media: PlaybackMedia) {
+            prepared += media
+            state = PlaybackState(media.trackId, PlaybackStatus.BUFFERING)
+            listeners.toList().forEach { it(state) }
+        }
+
+        override fun play() { playCount++ }
+        override fun pause() { pauseCount++ }
+        override fun seekTo(positionMs: Long) = Unit
+        override fun release() = Unit
+        override fun addListener(listener: (PlaybackState) -> Unit) { listeners += listener }
+        override fun removeListener(listener: (PlaybackState) -> Unit) { listeners -= listener }
+
+        fun emit(next: PlaybackState) {
+            state = next
+            listeners.toList().forEach { it(next) }
         }
     }
 }

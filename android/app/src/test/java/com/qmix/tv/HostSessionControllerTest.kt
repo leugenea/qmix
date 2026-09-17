@@ -207,6 +207,105 @@ class HostSessionControllerTest {
     }
 
     @Test
+    fun start_command_followed_by_fresh_selection_starts_local_playback_once() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val repository = RecordingRoomRepository()
+        val command = RecordingAdvanceCommand()
+        val reconciler = RecordingReconciler()
+        val engine = HostRecordingPlaybackEngine()
+        val controller = HostSessionController(
+            OkHttpClient(),
+            initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+            roomRepositoryFactory = { repository },
+            queueCoordinatorFactory = { _, credentials, observer ->
+                QueueAdvancementCoordinator(credentials.code, credentials.hostToken, command, reconciler, observer)
+            },
+            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
+                AuthoritativePlaybackCoordinator(
+                    roomCode = credentials.code,
+                    streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
+                    playbackEngine = engine,
+                    reconciler = reconciler,
+                    dispatcher = Executor { it.run() },
+                    advanceAfterEnded = advanceAfterEnded,
+                    observer = observer,
+                )
+            },
+        )
+        controller.createRoom()
+        controller.enterRoom()
+        repository.publish(
+            RoomSyncState.Active(
+                "ABCD",
+                RoomState("ABCD", null, listOf(QueuedTrack("one", "url", "One", "Artist", 60, "fixture"))),
+                Freshness.FRESH,
+                LiveConnection.CONNECTED,
+            ),
+        )
+
+        controller.onStartOrNext()
+        command.complete(QueueAdvanceCommandResult.Success)
+        val selected = RoomState(
+            "ABCD",
+            CurrentTrack("one", 0, "playing", "One", "Artist"),
+            listOf(QueuedTrack("two", "url", "Two", "Artist", 60, "fixture")),
+        )
+        reconciler.complete(RoomFetchResult.Success(selected))
+        repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
+        repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
+
+        assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(1, engine.playCount)
+        assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
+
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
+        controller.pausePlayback()
+        assertEquals(1, engine.pauseCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
+        controller.resumePlayback()
+        assertEquals(2, engine.playCount)
+        assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
+
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.ERROR,
+                error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
+            ),
+        )
+        controller.onStartOrNext()
+        assertEquals(2, command.callbacks.size)
+        assertEquals(LocalPlaybackStatus.ERROR, (controller.state as HostingState.LiveRoom).playback.status)
+
+        val staleReplacement = selected.copy(current = CurrentTrack("two", 0, "playing", "Two", "Artist"))
+        repository.publish(
+            RoomSyncState.Active("ABCD", staleReplacement, Freshness.STALE, LiveConnection.RECONNECTING),
+        )
+        val presentation = controller.state as HostingState.LiveRoom
+        assertEquals(Freshness.STALE, (presentation.synchronization as RoomSyncState.Active).freshness)
+        assertEquals("two", presentation.synchronization.room?.current?.trackId)
+        assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
+
+        controller.retryCurrent()
+        reconciler.complete(RoomFetchResult.Success(selected))
+        assertEquals(listOf("one", "one"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(3, engine.playCount)
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED))
+        assertEquals(2, command.callbacks.size)
+
+        controller.endRoom()
+        assertEquals(2, engine.pauseCount)
+        assertTrue(repository.closed)
+        assertTrue(controller.state is HostingState.Setup)
+    }
+
+    @Test
     fun room_sync_is_application_session_owned_and_canceled_when_session_ends() {
         server.enqueue(
             MockResponse().setResponseCode(201)
@@ -239,6 +338,32 @@ class HostSessionControllerTest {
         assertEquals(HostingState.Setup(server.url("/").toString(), "https://guest.example"), controller.state)
         repository.publish(synchronized.copy(freshness = Freshness.STALE))
         assertEquals(null, controller.roomSyncState)
+    }
+
+    private class HostRecordingPlaybackEngine : PlaybackEngine {
+        override var state = PlaybackState()
+            private set
+        val prepared = mutableListOf<PlaybackMedia>()
+        var playCount = 0
+        var pauseCount = 0
+        private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
+
+        override fun prepare(media: PlaybackMedia) {
+            prepared += media
+            state = PlaybackState(mediaId = media.trackId, status = PlaybackStatus.BUFFERING)
+            listeners.toList().forEach { it(state) }
+        }
+        override fun play() { playCount++ }
+        override fun pause() { pauseCount++ }
+        override fun seekTo(positionMs: Long) = Unit
+        override fun release() = Unit
+        override fun addListener(listener: (PlaybackState) -> Unit) { listeners += listener }
+        override fun removeListener(listener: (PlaybackState) -> Unit) { listeners -= listener }
+
+        fun emit(next: PlaybackState) {
+            state = next
+            listeners.toList().forEach { it(next) }
+        }
     }
 
     private class RecordingAdvanceCommand : QueueAdvanceCommand {
