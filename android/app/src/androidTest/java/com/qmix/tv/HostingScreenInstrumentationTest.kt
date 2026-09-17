@@ -1,22 +1,29 @@
 package com.qmix.tv
 
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.pressKey
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -131,6 +138,7 @@ class HostingScreenInstrumentationTest {
             ),
         )
         var primaryActions = 0
+        var inviteActions = 0
         var exits = 0
         val handler = object : LiveRoomHandler {
             override fun onStartOrNext() {
@@ -138,6 +146,7 @@ class HostingScreenInstrumentationTest {
                 state.value = state.value.copy(commandPending = true)
             }
             override fun onInvite() {
+                inviteActions++
                 state.value = state.value.copy(invitationVisible = true)
             }
             override fun onBack(): LiveRoomBackResult = if (state.value.invitationVisible) {
@@ -159,16 +168,18 @@ class HostingScreenInstrumentationTest {
         }
 
         composeRule.onNodeWithText("Start").assertIsFocused()
-            .performKeyInput { pressKey(Key.Enter) }
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        assertTrue("D-pad center was not accepted", device.pressDPadCenter())
+        device.waitForIdle()
         composeRule.onNodeWithText("Command pending…").assertExists()
         composeRule.runOnIdle { assertEquals(1, primaryActions) }
 
         composeRule.runOnIdle { state.value = state.value.copy(commandPending = false) }
-        composeRule.onNodeWithText("Start").performKeyInput {
-            pressKey(Key.DirectionRight)
-            pressKey(Key.Enter)
-        }
+        composeRule.onNodeWithText("Invite").assertIsFocused()
+        assertTrue("D-pad center was not accepted", device.pressDPadCenter())
+        device.waitForIdle()
         composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertExists()
+        composeRule.runOnIdle { assertEquals(1, inviteActions) }
 
         Espresso.pressBack()
         composeRule.onNodeWithText("Room ABCD").assertExists()
@@ -176,6 +187,94 @@ class HostingScreenInstrumentationTest {
 
         Espresso.pressBack()
         composeRule.runOnIdle { assertEquals(1, exits) }
+    }
+
+    @Test
+    fun live_room_restores_track_focus_and_scrolls_with_dpad_only() {
+        val queue = (0 until 30).map { index ->
+            QueuedTrack("track-$index", "https://example/$index", "Track $index", "Artist", 65, "fixture")
+        }
+        val state = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, queue),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            ),
+        )
+        composeRule.setContent {
+            HostingScreen(
+                state.value,
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.waitForIdle()
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        repeat(20) {
+            assertTrue("D-pad down was not accepted", device.pressDPadDown())
+        }
+        device.waitForIdle()
+        composeRule.onNodeWithTag("queue-track-track-19")
+            .assertIsFocused()
+            .assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            val reordered = listOf(queue[19]) + queue.filterNot { it.id == "track-19" }
+            state.value = state.value.copy(
+                synchronization = RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, reordered),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            )
+        }
+        composeRule.onNodeWithTag("queue-track-track-19")
+            .assertIsFocused()
+            .assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            val withoutFocused = queue.filterNot { it.id == "track-19" }
+            state.value = state.value.copy(
+                synchronization = RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, withoutFocused),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            )
+        }
+        composeRule.onNodeWithTag("queue-track-track-0")
+            .assertIsFocused()
+            .assertIsDisplayed()
+
+        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        val primary = composeRule.onNodeWithText("Start").fetchSemanticsNode().boundsInRoot
+        val invite = composeRule.onNodeWithText("Invite").fetchSemanticsNode().boundsInRoot
+        val queueList = composeRule.onNodeWithTag("queue-list").fetchSemanticsNode().boundsInRoot
+        val focusedRow = composeRule.onNodeWithTag("queue-track-track-0").fetchSemanticsNode().boundsInRoot
+        listOf(primary, invite, queueList, focusedRow).forEach { bounds ->
+            assertTrue("element is clipped on the left", bounds.left >= root.left)
+            assertTrue("element is clipped on the top", bounds.top >= root.top)
+            assertTrue("element is clipped on the right", bounds.right <= root.right)
+            assertTrue("element is clipped on the bottom", bounds.bottom <= root.bottom)
+        }
+        assertTrue("room actions overlap", primary.right <= invite.left)
+        assertTrue("room actions overlap the queue", maxOf(primary.bottom, invite.bottom) <= queueList.top)
+
+        val focusedPixels = composeRule.onNodeWithTag("queue-track-track-0").captureToImage().toPixelMap()
+        val middleY = focusedPixels.height / 2
+        val visibleWhiteBorder = (0 until minOf(12, focusedPixels.width)).any { x ->
+            val color = focusedPixels[x, middleY]
+            color.red > 0.9f && color.green > 0.9f && color.blue > 0.9f && color.alpha > 0.9f
+        }
+        assertTrue("focused queue row has no visible white border", visibleWhiteBorder)
     }
 
     @Test

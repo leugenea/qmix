@@ -5,6 +5,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,7 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
@@ -24,13 +26,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusProperties
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
@@ -157,7 +167,12 @@ private fun InvitationContent(
             Text("Join this room", fontSize = 32.sp)
             Text(invite.code, fontSize = 64.sp, modifier = Modifier.padding(12.dp))
             Text(invite.guestUrl, fontSize = 20.sp, modifier = Modifier.padding(bottom = 24.dp))
-            FocusedButton(actionText, true, actionFocus, onAction)
+            FocusedButton(
+                text = actionText,
+                enabled = true,
+                focusRequester = actionFocus,
+                onClick = onAction,
+            )
         }
     }
 }
@@ -171,6 +186,7 @@ private fun LiveRoomContent(
     BackHandler {
         handleLiveRoomBack(handler, onExitLiveRoom)
     }
+    val focusMemory = remember(state.invite.code) { LiveRoomFocusMemory() }
     if (state.invitationVisible) {
         InvitationContent(
             invite = state.invite,
@@ -182,11 +198,49 @@ private fun LiveRoomContent(
     val room = (state.synchronization as? RoomSyncState.Active)?.room
     val primaryFocus = remember { FocusRequester() }
     val inviteFocus = remember { FocusRequester() }
-    LaunchedEffect(state.isPrimaryActionEnabled) {
-        if (state.isPrimaryActionEnabled) primaryFocus.requestFocus() else inviteFocus.requestFocus()
+    val queueIds = room?.queue.orEmpty().map { track -> track.id }
+    val queueState = rememberLazyListState()
+    val trackFocusRequesters = remember(queueIds) {
+        queueIds.associateWith { FocusRequester() }
+    }
+    val firstTrackFocus = queueIds.firstOrNull()?.let(trackFocusRequesters::get)
+    val restoration = remember(queueIds, state.isPrimaryActionEnabled) {
+        focusMemory.reconcile(queueIds, state.isPrimaryActionEnabled)
+    }
+    LaunchedEffect(queueIds, restoration) {
+        if (queueIds.isEmpty()) {
+            queueState.requestScrollToItem(0)
+        }
+        when (val target = restoration.target) {
+            LiveRoomFocusTarget.Primary -> {
+                if (focusMemory.isCurrent(restoration)) primaryFocus.requestFocus()
+            }
+            LiveRoomFocusTarget.Invite -> {
+                if (focusMemory.isCurrent(restoration)) inviteFocus.requestFocus()
+            }
+            is LiveRoomFocusTarget.Track -> {
+                val index = queueIds.indexOf(target.id)
+                if (index >= 0) {
+                    queueState.scrollToItem(index)
+                    withFrameNanos { }
+                    if (focusMemory.isCurrent(restoration)) {
+                        trackFocusRequesters[target.id]?.requestFocus()
+                    }
+                }
+            }
+        }
     }
     Column(
-        Modifier.fillMaxSize().background(Color(0xFF101218)).padding(48.dp),
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFF101218))
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key.isDirectional()) {
+                    focusMemory.markDirectionalInput()
+                }
+                false
+            }
+            .padding(48.dp),
     ) {
         Text("Room ${state.invite.code}", fontSize = 42.sp)
         synchronizationMessage(state.synchronization)?.let { message ->
@@ -200,9 +254,24 @@ private fun LiveRoomContent(
                 text = if (state.primaryAction == LiveRoomPrimaryAction.START) "Start" else "Next",
                 enabled = state.isPrimaryActionEnabled,
                 focusRequester = primaryFocus,
+                focusProperties = {
+                    right = inviteFocus
+                    down = firstTrackFocus ?: FocusRequester.Cancel
+                },
+                onFocused = { focusMemory.record(LiveRoomFocusTarget.Primary) },
                 onClick = handler::onStartOrNext,
             )
-            FocusedButton("Invite", true, inviteFocus, handler::onInvite)
+            FocusedButton(
+                text = "Invite",
+                enabled = true,
+                focusRequester = inviteFocus,
+                focusProperties = {
+                    left = if (state.isPrimaryActionEnabled) primaryFocus else FocusRequester.Cancel
+                    down = firstTrackFocus ?: FocusRequester.Cancel
+                },
+                onFocused = { focusMemory.record(LiveRoomFocusTarget.Invite) },
+                onClick = handler::onInvite,
+            )
         }
         if (state.commandPending) {
             Text("Command pending…", modifier = Modifier.padding(top = 8.dp))
@@ -232,10 +301,20 @@ private fun LiveRoomContent(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp).testTag("queue-list"),
+                    state = queueState,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(room.queue, key = { track -> track.id }) { track ->
-                        QueueTrackRow(track)
+                    itemsIndexed(room.queue, key = { _, track -> track.id }) { index, track ->
+                        QueueTrackRow(
+                            track = track,
+                            focusRequester = checkNotNull(trackFocusRequesters[track.id]),
+                            upFocusRequester = if (index == 0) {
+                                if (state.isPrimaryActionEnabled) primaryFocus else inviteFocus
+                            } else {
+                                null
+                            },
+                            onFocused = { focusMemory.record(LiveRoomFocusTarget.Track(track.id)) },
+                        )
                     }
                 }
             }
@@ -244,13 +323,33 @@ private fun LiveRoomContent(
 }
 
 @Composable
-private fun QueueTrackRow(track: QueuedTrack) {
+private fun QueueTrackRow(
+    track: QueuedTrack,
+    focusRequester: FocusRequester,
+    upFocusRequester: FocusRequester?,
+    onFocused: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
+            .focusProperties {
+                upFocusRequester?.let { up = it }
+            }
+            .focusRequester(focusRequester)
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocused()
+            }
+            .focusable()
             .semantics(mergeDescendants = true) {}
             .testTag("queue-track-${track.id}")
             .background(Color(0xFF252833), RoundedCornerShape(8.dp))
+            .border(
+                if (focused) 4.dp else 1.dp,
+                if (focused) Color.White else Color.Transparent,
+                RoundedCornerShape(8.dp),
+            )
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -303,6 +402,8 @@ private fun FocusedButton(
     text: String,
     enabled: Boolean,
     focusRequester: FocusRequester,
+    focusProperties: FocusProperties.() -> Unit = {},
+    onFocused: () -> Unit = {},
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -310,12 +411,75 @@ private fun FocusedButton(
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier
+            .focusProperties(focusProperties)
             .focusRequester(focusRequester)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocused()
+            }
             .border(
                 if (focused) 4.dp else 1.dp,
                 if (focused) Color.White else Color.Transparent,
                 RoundedCornerShape(16.dp),
             ),
     ) { Text(text) }
+}
+
+internal sealed interface LiveRoomFocusTarget {
+    data object Primary : LiveRoomFocusTarget
+    data object Invite : LiveRoomFocusTarget
+    data class Track(val id: String) : LiveRoomFocusTarget
+}
+
+internal data class LiveRoomFocusRestoration(
+    val target: LiveRoomFocusTarget,
+    val inputGeneration: Long,
+)
+
+internal class LiveRoomFocusMemory {
+    private var previousQueueIds = emptyList<String>()
+    private var focusedTarget: LiveRoomFocusTarget? = null
+    private var inputGeneration = 0L
+
+    fun record(target: LiveRoomFocusTarget) {
+        focusedTarget = target
+    }
+
+    fun markDirectionalInput() {
+        inputGeneration++
+    }
+
+    fun isCurrent(restoration: LiveRoomFocusRestoration): Boolean =
+        restoration.inputGeneration == inputGeneration
+
+    fun reconcile(queueIds: List<String>, primaryEnabled: Boolean): LiveRoomFocusRestoration {
+        val current = focusedTarget
+        val next = when (current) {
+            null -> if (primaryEnabled) LiveRoomFocusTarget.Primary else LiveRoomFocusTarget.Invite
+            LiveRoomFocusTarget.Primary ->
+                if (primaryEnabled) LiveRoomFocusTarget.Primary else LiveRoomFocusTarget.Invite
+            LiveRoomFocusTarget.Invite -> LiveRoomFocusTarget.Invite
+            is LiveRoomFocusTarget.Track -> when {
+                current.id in queueIds -> current
+                previousQueueIds.indexOf(current.id) in queueIds.indices ->
+                    LiveRoomFocusTarget.Track(queueIds[previousQueueIds.indexOf(current.id)])
+                previousQueueIds.indexOf(current.id) > 0 && queueIds.isNotEmpty() ->
+                    LiveRoomFocusTarget.Track(queueIds[minOf(previousQueueIds.indexOf(current.id) - 1, queueIds.lastIndex)])
+                primaryEnabled -> LiveRoomFocusTarget.Primary
+                else -> LiveRoomFocusTarget.Invite
+            }
+        }
+        previousQueueIds = queueIds
+        focusedTarget = next
+        return LiveRoomFocusRestoration(next, inputGeneration)
+    }
+}
+
+private fun Key.isDirectional(): Boolean = when (this) {
+    Key.DirectionUp,
+    Key.DirectionDown,
+    Key.DirectionLeft,
+    Key.DirectionRight,
+    -> true
+    else -> false
 }
