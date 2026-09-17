@@ -218,8 +218,8 @@ class HostingScreenInstrumentationTest {
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         repeat(20) {
             assertTrue("D-pad down was not accepted", device.pressDPadDown())
+            composeRule.waitForIdle()
         }
-        device.waitForIdle()
         composeRule.onNodeWithTag("queue-track-track-19")
             .assertIsFocused()
             .assertIsDisplayed()
