@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/rand"
+	"io"
 	"sync"
 	"time"
 )
@@ -23,6 +25,8 @@ type Store struct {
 
 	// gen is the room-code generator (configurable for deterministic tests).
 	gen CodeGenerator
+	// tokenRandom provides cryptographic entropy for host tokens.
+	tokenRandom io.Reader
 }
 
 // NewStore returns a Store with the given empty-room TTL and janitor tick.
@@ -38,12 +42,13 @@ func NewStore(ttl, tick time.Duration, gen CodeGenerator) *Store {
 		NonEmptyTTL: defaultNonEmptyRoomTTL,
 		Tick:        tick,
 		gen:         gen,
+		tokenRandom: rand.Reader,
 	}
 }
 
 // CreateRoom allocates a fresh room code (checking for collisions), stores the
 // room and returns it.
-func (s *Store) CreateRoom() *Room {
+func (s *Store) CreateRoom() (*Room, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -54,13 +59,17 @@ func (s *Store) CreateRoom() *Room {
 			break
 		}
 	}
+	token, err := newHostToken(s.tokenRandom)
+	if err != nil {
+		return nil, err
+	}
 	r := &Room{
 		Code:         code,
-		HostToken:    newToken(),
+		HostToken:    token,
 		LastActivity: time.Now(),
 	}
 	s.rooms[code] = r
-	return r
+	return r, nil
 }
 
 // Get returns the room with the given code, or nil.

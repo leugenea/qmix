@@ -130,7 +130,11 @@ func isRequestTooLarge(err error) bool {
 
 // handleCreateRoom creates a room and returns its code, host token and URL.
 func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
-	room := s.store.CreateRoom()
+	room, err := s.store.CreateRoom()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create room")
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"code":       room.Code,
 		"host_token": room.HostToken,
@@ -440,7 +444,7 @@ func (s *Server) validateHostRoomLocked(room *Room, token string) error {
 	if s.store.rooms[room.Code] != room {
 		return errRoomNotFound
 	}
-	if token != room.HostToken {
+	if !hostTokensEqual(token, room.HostToken) {
 		return errInvalidHostToken
 	}
 	return nil
@@ -454,7 +458,7 @@ func (s *Server) handleReorder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "room not found")
 		return
 	}
-	if hostToken(r) != room.HostToken {
+	if !hostTokensEqual(hostToken(r), room.HostToken) {
 		writeError(w, http.StatusForbidden, "invalid host token")
 		return
 	}

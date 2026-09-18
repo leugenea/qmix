@@ -26,6 +26,15 @@ func newTestServer() (*Server, *Store) {
 	return NewServer(store, hub), store
 }
 
+func mustCreateRoom(t *testing.T, store *Store) *Room {
+	t.Helper()
+	room, err := store.CreateRoom()
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+	return room
+}
+
 // seqCodeGen produces codes "aaaaaa", "aaaaab", ... deterministically.
 type seqCodeGen struct {
 	n int
@@ -165,7 +174,7 @@ func TestAddTrack(t *testing.T) {
 
 func TestAppendTrackDoesNotExposeMutationBeforePublication(t *testing.T) {
 	s, store := newTestServer()
-	room := store.CreateRoom()
+	room := mustCreateRoom(t, store)
 	ch, cancel := s.hub.Subscribe(room.Code)
 	defer cancel()
 
@@ -321,7 +330,7 @@ func TestAddTrackRejectsFullQueue(t *testing.T) {
 
 func TestCanAppendTrackRejectsDeletedRoom(t *testing.T) {
 	s, store := newTestServer()
-	room := store.CreateRoom()
+	room := mustCreateRoom(t, store)
 	store.mu.Lock()
 	delete(store.rooms, room.Code)
 	store.mu.Unlock()
@@ -420,7 +429,7 @@ func TestCurrentPayloadIncludesTrackMetadata(t *testing.T) {
 
 func TestSkipRejectsReplacementRoom(t *testing.T) {
 	s, store := newTestServer()
-	oldRoom := store.CreateRoom()
+	oldRoom := mustCreateRoom(t, store)
 	oldRoom.Queue = []Track{{ID: "old"}}
 	replacement := &Room{
 		Code:         oldRoom.Code,
@@ -1053,7 +1062,7 @@ func TestTTLJanitor(t *testing.T) {
 
 func TestSweepRemovesAbandonedNonEmptyRoom(t *testing.T) {
 	store := NewStore(time.Hour, time.Hour, &seqCodeGen{})
-	room := store.CreateRoom()
+	room := mustCreateRoom(t, store)
 	store.mu.Lock()
 	room.Queue = []Track{trackFromURL("https://example.com/song")}
 	room.LastActivity = time.Now().Add(-25 * time.Hour)
@@ -1222,7 +1231,7 @@ func TestRandomCodeGenerator(t *testing.T) {
 
 func TestNewStoreDefaultGen(t *testing.T) {
 	s := NewStore(time.Hour, time.Hour, nil)
-	room := s.CreateRoom()
+	room := mustCreateRoom(t, s)
 	if len(room.Code) != codeLength {
 		t.Fatalf("code = %q, want %d chars", room.Code, codeLength)
 	}

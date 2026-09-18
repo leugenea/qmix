@@ -104,7 +104,7 @@ func TestHTTPObservationPreservesMissingFlusherBehavior(t *testing.T) {
 	store := NewStore(time.Hour, time.Hour, &seqCodeGen{})
 	s := NewServerWithLogger(store, NewHub(), discardLogger())
 	mux := newTestMux(s)
-	room := store.CreateRoom()
+	room := mustCreateRoom(t, store)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
