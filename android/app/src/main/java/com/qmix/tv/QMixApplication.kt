@@ -20,6 +20,14 @@ internal fun currentPlaybackStreamUrl(backendUrl: String, roomCode: String): Str
         .toString()
 
 class QMixApplication : Application() {
+    private data class ActivityHostSessionOverride(
+        val token: Any,
+        val provider: () -> HostSessionController,
+    )
+
+    private val activityHostSessionLock = Any()
+    private var activityHostSessionOverride: ActivityHostSessionOverride? = null
+
     private val logger: QMixLogger
         get() = QMixLogging.process
 
@@ -93,6 +101,30 @@ class QMixApplication : Application() {
                 }
             },
         )
+    }
+
+    internal fun hostSessionForActivity(): HostSessionController {
+        val provider = synchronized(activityHostSessionLock) {
+            activityHostSessionOverride?.provider
+        }
+        return provider?.invoke() ?: hostSession
+    }
+
+    internal fun installActivityHostSessionProvider(
+        provider: () -> HostSessionController,
+    ): AutoCloseable {
+        val token = Any()
+        synchronized(activityHostSessionLock) {
+            check(activityHostSessionOverride == null) { "An activity host-session provider is already installed" }
+            activityHostSessionOverride = ActivityHostSessionOverride(token, provider)
+        }
+        return AutoCloseable {
+            synchronized(activityHostSessionLock) {
+                if (activityHostSessionOverride?.token === token) {
+                    activityHostSessionOverride = null
+                }
+            }
+        }
     }
 
     private fun <T> createPlaybackCoordinatorOnMainThread(factory: () -> T): T {

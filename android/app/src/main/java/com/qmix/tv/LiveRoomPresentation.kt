@@ -18,6 +18,25 @@ internal fun formatDuration(durationSeconds: Int): String {
     }
 }
 
+internal fun localPlaybackStatusLabel(status: LocalPlaybackStatus): String = when (status) {
+    LocalPlaybackStatus.IDLE -> "Idle"
+    LocalPlaybackStatus.BUFFERING -> "Buffering"
+    LocalPlaybackStatus.PLAYING -> "Playing"
+    LocalPlaybackStatus.PAUSED -> "Paused"
+    LocalPlaybackStatus.COMPLETED -> "Completed"
+    LocalPlaybackStatus.ERROR -> "Error"
+}
+
+internal fun localPlaybackErrorMessage(error: PlaybackError): String = when (error.kind) {
+    PlaybackErrorKind.HTTP -> error.httpResponseCode?.let { "Stream request failed (HTTP $it)." }
+        ?: "Stream request failed."
+    PlaybackErrorKind.RANGE -> error.httpResponseCode?.let { "Stream seek failed (HTTP $it)." }
+        ?: "Stream seek failed."
+    PlaybackErrorKind.DECODE -> "Audio format could not be played."
+    PlaybackErrorKind.NETWORK -> "Network connection interrupted."
+    PlaybackErrorKind.UNKNOWN -> "Playback failed unexpectedly."
+}
+
 internal fun synchronizationMessage(synchronization: RoomSyncState): String? = when (synchronization) {
     is RoomSyncState.Missing -> "Room not found."
     is RoomSyncState.Active -> when {

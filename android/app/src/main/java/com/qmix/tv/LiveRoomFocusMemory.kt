@@ -3,6 +3,10 @@ package com.qmix.tv
 internal sealed interface LiveRoomFocusTarget {
     data object Primary : LiveRoomFocusTarget
     data object Invite : LiveRoomFocusTarget
+    data object PlayPause : LiveRoomFocusTarget
+    data object SeekBack : LiveRoomFocusTarget
+    data object SeekForward : LiveRoomFocusTarget
+    data object Retry : LiveRoomFocusTarget
     data class Track(val id: String) : LiveRoomFocusTarget
 }
 
@@ -27,13 +31,27 @@ internal class LiveRoomFocusMemory {
     fun isCurrent(restoration: LiveRoomFocusRestoration): Boolean =
         restoration.inputGeneration == inputGeneration
 
-    fun reconcile(queueIds: List<String>, primaryEnabled: Boolean): LiveRoomFocusRestoration {
+    fun reconcile(
+        queueIds: List<String>,
+        primaryEnabled: Boolean,
+        playbackTargets: List<LiveRoomFocusTarget> = emptyList(),
+    ): LiveRoomFocusRestoration {
         val current = focusedTarget
         val next = when (current) {
             null -> if (primaryEnabled) LiveRoomFocusTarget.Primary else LiveRoomFocusTarget.Invite
             LiveRoomFocusTarget.Primary ->
                 if (primaryEnabled) LiveRoomFocusTarget.Primary else LiveRoomFocusTarget.Invite
             LiveRoomFocusTarget.Invite -> LiveRoomFocusTarget.Invite
+            LiveRoomFocusTarget.PlayPause,
+            LiveRoomFocusTarget.SeekBack,
+            LiveRoomFocusTarget.SeekForward,
+            LiveRoomFocusTarget.Retry,
+            -> when {
+                current in playbackTargets -> current
+                playbackTargets.isNotEmpty() -> playbackTargets.first()
+                primaryEnabled -> LiveRoomFocusTarget.Primary
+                else -> LiveRoomFocusTarget.Invite
+            }
             is LiveRoomFocusTarget.Track -> when {
                 current.id in queueIds -> current
                 previousQueueIds.indexOf(current.id) in queueIds.indices ->

@@ -33,6 +33,37 @@ class LiveRoomPresentationTest {
     }
 
     @Test
+    fun local_playback_labels_cover_every_actual_state_and_sanitize_errors() {
+        assertEquals("Idle", localPlaybackStatusLabel(LocalPlaybackStatus.IDLE))
+        assertEquals("Buffering", localPlaybackStatusLabel(LocalPlaybackStatus.BUFFERING))
+        assertEquals("Playing", localPlaybackStatusLabel(LocalPlaybackStatus.PLAYING))
+        assertEquals("Paused", localPlaybackStatusLabel(LocalPlaybackStatus.PAUSED))
+        assertEquals("Completed", localPlaybackStatusLabel(LocalPlaybackStatus.COMPLETED))
+        assertEquals("Error", localPlaybackStatusLabel(LocalPlaybackStatus.ERROR))
+
+        assertEquals(
+            "Stream request failed (HTTP 502).",
+            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.HTTP, "token=do-not-render", 502)),
+        )
+        assertEquals(
+            "Stream seek failed (HTTP 416).",
+            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.RANGE, "secret URL", 416)),
+        )
+        assertEquals(
+            "Audio format could not be played.",
+            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.DECODE, "decoder internals")),
+        )
+        assertEquals(
+            "Network connection interrupted.",
+            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.NETWORK, "private endpoint")),
+        )
+        assertEquals(
+            "Playback failed unexpectedly.",
+            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.UNKNOWN, "stack details")),
+        )
+    }
+
+    @Test
     fun primary_action_requires_a_fresh_connected_room_with_a_nonempty_queue() {
         val invite = GuestInvite("ABCD", "https://guest.example/r/ABCD")
         val queued = QueuedTrack("track-1", "https://example/1", "Title", "Artist", 0, "fixture")

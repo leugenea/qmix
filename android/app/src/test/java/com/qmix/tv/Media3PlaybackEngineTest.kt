@@ -144,10 +144,11 @@ class Media3PlaybackEngineTest {
     fun seek_uses_cached_timeline_and_clamps_position() {
         engine.prepare(media)
         engine.seekTo(500)
-        backend.emit(PlayerBackend.Event.Ready(snapshot(durationMs = 1_000, isSeekable = true)))
+        backend.emit(PlayerBackend.Event.Ready(snapshot(positionMs = 500, durationMs = 1_000, isSeekable = true)))
+        engine.seekTo(-500)
         engine.seekTo(1_500)
 
-        assertEquals(listOf(1_000L), backend.seeks)
+        assertEquals(listOf(0L, 1_000L), backend.seeks)
     }
 
     @Test

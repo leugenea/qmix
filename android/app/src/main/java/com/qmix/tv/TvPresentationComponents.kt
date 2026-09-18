@@ -14,6 +14,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
@@ -25,6 +26,7 @@ internal fun FocusedButton(
     focusRequester: FocusRequester,
     focusProperties: FocusProperties.() -> Unit = {},
     onFocused: () -> Unit = {},
+    testTag: String? = null,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -38,6 +40,7 @@ internal fun FocusedButton(
                 focused = it.isFocused
                 if (it.isFocused) onFocused()
             }
+            .then(if (testTag == null) Modifier else Modifier.testTag(testTag))
             .border(
                 if (focused) 4.dp else 1.dp,
                 if (focused) Color.White else Color.Transparent,

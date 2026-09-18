@@ -85,8 +85,9 @@ that cover the complete requirement.
   including Range/seek support.
 - **TV app** — the host player. The current implementation includes the Android
   TV scaffold, room creation, a QR invitation, live room synchronization, queue
-  advancement, and authoritative Media3 playback coordination. Playback controls
-  and assembled-flow verification remain planned.
+  advancement, authoritative Media3 playback coordination, and focused local
+  playback controls. Foreground recovery and assembled-flow verification remain
+  planned under #123.
 - **PWA** — the guest page for submitting supported links and viewing the queue
   and current track, with a dark theme.
 

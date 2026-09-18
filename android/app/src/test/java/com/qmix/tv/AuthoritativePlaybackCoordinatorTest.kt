@@ -85,6 +85,62 @@ class AuthoritativePlaybackCoordinatorTest {
     }
 
     @Test
+    fun media_play_pause_commands_preserve_recoverable_error_until_retry_or_next() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        val failure = PlaybackError(PlaybackErrorKind.NETWORK, "offline")
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ERROR, error = failure))
+        val failedState = coordinator.state
+
+        coordinator.pause()
+        coordinator.resume()
+        coordinator.togglePlayPause()
+
+        assertEquals(failedState, coordinator.state)
+        assertEquals(0, engine.pauseCount)
+        assertEquals(1, engine.playCount)
+        assertEquals(1, engine.prepared.size)
+    }
+
+    @Test
+    fun dedicated_media_commands_only_pause_active_playback_and_resume_an_explicit_pause() {
+        coordinator.pause()
+        coordinator.resume()
+        assertEquals(0, engine.pauseCount)
+        assertEquals(0, engine.playCount)
+        assertEquals(LocalPlaybackStatus.IDLE, coordinator.state.status)
+
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        coordinator.resume()
+        assertEquals(1, engine.playCount)
+        assertEquals(LocalPlaybackStatus.BUFFERING, coordinator.state.status)
+
+        coordinator.pause()
+        coordinator.pause()
+        assertEquals(1, engine.pauseCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
+
+        coordinator.resume()
+        coordinator.resume()
+        assertEquals(2, engine.playCount)
+        assertEquals(LocalPlaybackStatus.BUFFERING, coordinator.state.status)
+
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        coordinator.resume()
+        assertEquals(2, engine.playCount)
+        coordinator.pause()
+        assertEquals(2, engine.pauseCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
+
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED))
+        coordinator.pause()
+        coordinator.resume()
+        coordinator.togglePlayPause()
+        assertEquals(2, engine.pauseCount)
+        assertEquals(2, engine.playCount)
+        assertEquals(LocalPlaybackStatus.COMPLETED, coordinator.state.status)
+    }
+
+    @Test
     fun stale_and_reconnecting_snapshots_never_replace_or_autoplay() {
         coordinator.onSynchronization(fresh(room(currentId = "one")))
 
@@ -138,6 +194,71 @@ class AuthoritativePlaybackCoordinatorTest {
 
         assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
         assertEquals(2, engine.playCount)
+    }
+
+    @Test
+    fun play_pause_toggle_follows_the_actual_local_state() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+
+        coordinator.togglePlayPause()
+        assertEquals(1, engine.pauseCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
+
+        coordinator.togglePlayPause()
+        assertEquals(2, engine.playCount)
+        assertEquals(LocalPlaybackStatus.BUFFERING, coordinator.state.status)
+
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        coordinator.togglePlayPause()
+        assertEquals(2, engine.pauseCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
+    }
+
+    @Test
+    fun relative_seek_uses_the_current_timeline_and_clamps_to_both_bounds() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 5_000,
+                durationMs = 12_000,
+                isSeekable = true,
+            ),
+        )
+
+        coordinator.seekBy(-10_000)
+        coordinator.seekBy(10_000)
+
+        assertEquals(listOf(0L, 12_000L), engine.seeks)
+    }
+
+    @Test
+    fun relative_seek_is_ignored_without_a_seekable_known_timeline() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                positionMs = 5_000,
+                durationMs = null,
+                isSeekable = true,
+            ),
+        )
+        coordinator.seekBy(10_000)
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                positionMs = 5_000,
+                durationMs = 12_000,
+                isSeekable = false,
+            ),
+        )
+        coordinator.seekBy(-10_000)
+
+        assertTrue(engine.seeks.isEmpty())
     }
 
     @Test
@@ -280,6 +401,7 @@ class AuthoritativePlaybackCoordinatorTest {
         val prepared = mutableListOf<PlaybackMedia>()
         var playCount = 0
         var pauseCount = 0
+        val seeks = mutableListOf<Long>()
         private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
         val hasListeners: Boolean get() = listeners.isNotEmpty()
 
@@ -290,7 +412,7 @@ class AuthoritativePlaybackCoordinatorTest {
 
         override fun play() { playCount++ }
         override fun pause() { pauseCount++ }
-        override fun seekTo(positionMs: Long) = Unit
+        override fun seekTo(positionMs: Long) { seeks += positionMs }
         override fun release() = Unit
         override fun addListener(listener: (PlaybackState) -> Unit) { listeners += listener }
         override fun removeListener(listener: (PlaybackState) -> Unit) { listeners -= listener }

@@ -60,14 +60,45 @@ internal fun LiveRoomScreen(
     val room = (state.synchronization as? RoomSyncState.Active)?.room
     val primaryFocus = remember { FocusRequester() }
     val inviteFocus = remember { FocusRequester() }
+    val playPauseFocus = remember { FocusRequester() }
+    val seekBackFocus = remember { FocusRequester() }
+    val seekForwardFocus = remember { FocusRequester() }
+    val retryFocus = remember { FocusRequester() }
+    val showPlayPause = state.playback.trackId != null && state.playback.status in setOf(
+        LocalPlaybackStatus.BUFFERING,
+        LocalPlaybackStatus.PLAYING,
+        LocalPlaybackStatus.PAUSED,
+    )
+    val showRetry = state.playback.trackId != null && state.playback.status == LocalPlaybackStatus.ERROR
+    val showSeek = showPlayPause && state.playback.isSeekable && state.playback.durationMs != null
+    val playbackTargets = buildList {
+        if (showPlayPause) add(LiveRoomFocusTarget.PlayPause)
+        if (showSeek) {
+            add(LiveRoomFocusTarget.SeekBack)
+            add(LiveRoomFocusTarget.SeekForward)
+        }
+        if (showRetry) add(LiveRoomFocusTarget.Retry)
+    }
+    val firstPlaybackFocus = when {
+        showPlayPause -> playPauseFocus
+        showRetry -> retryFocus
+        else -> null
+    }
+    val lastPlaybackFocus = when {
+        showSeek -> seekForwardFocus
+        showPlayPause -> playPauseFocus
+        showRetry -> retryFocus
+        else -> null
+    }
     val queueIds = room?.queue.orEmpty().map { track -> track.id }
     val queueState = rememberLazyListState()
     val trackFocusRequesters = remember(queueIds) {
         queueIds.associateWith { FocusRequester() }
     }
     val firstTrackFocus = queueIds.firstOrNull()?.let(trackFocusRequesters::get)
-    val restoration = remember(queueIds, state.isPrimaryActionEnabled) {
-        focusMemory.reconcile(queueIds, state.isPrimaryActionEnabled)
+    val playbackUpFocus = if (state.isPrimaryActionEnabled) primaryFocus else inviteFocus
+    val restoration = remember(queueIds, state.isPrimaryActionEnabled, playbackTargets) {
+        focusMemory.reconcile(queueIds, state.isPrimaryActionEnabled, playbackTargets)
     }
     LaunchedEffect(queueIds, restoration) {
         if (queueIds.isEmpty()) {
@@ -79,6 +110,18 @@ internal fun LiveRoomScreen(
             }
             LiveRoomFocusTarget.Invite -> {
                 if (focusMemory.isCurrent(restoration)) inviteFocus.requestFocus()
+            }
+            LiveRoomFocusTarget.PlayPause -> {
+                if (focusMemory.isCurrent(restoration)) playPauseFocus.requestFocus()
+            }
+            LiveRoomFocusTarget.SeekBack -> {
+                if (focusMemory.isCurrent(restoration)) seekBackFocus.requestFocus()
+            }
+            LiveRoomFocusTarget.SeekForward -> {
+                if (focusMemory.isCurrent(restoration)) seekForwardFocus.requestFocus()
+            }
+            LiveRoomFocusTarget.Retry -> {
+                if (focusMemory.isCurrent(restoration)) retryFocus.requestFocus()
             }
             is LiveRoomFocusTarget.Track -> {
                 val index = queueIds.indexOf(target.id)
@@ -104,7 +147,13 @@ internal fun LiveRoomScreen(
             }
             .padding(48.dp),
     ) {
-        Text("Room ${state.invite.code}", fontSize = 42.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            Text("Room ${state.invite.code}", fontSize = 42.sp)
+            Text(
+                "Local playback: ${localPlaybackStatusLabel(state.playback.status)}",
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        }
         synchronizationMessage(state.synchronization)?.let { message ->
             Text(message, color = Color(0xFFFFDDB3), modifier = Modifier.padding(top = 12.dp))
         }
@@ -118,9 +167,10 @@ internal fun LiveRoomScreen(
                 focusRequester = primaryFocus,
                 focusProperties = {
                     right = inviteFocus
-                    down = firstTrackFocus ?: FocusRequester.Cancel
+                    down = firstPlaybackFocus ?: firstTrackFocus ?: FocusRequester.Cancel
                 },
                 onFocused = { focusMemory.record(LiveRoomFocusTarget.Primary) },
+                testTag = if (state.primaryAction == LiveRoomPrimaryAction.START) "room-start" else "room-next",
                 onClick = handler::onStartOrNext,
             )
             FocusedButton(
@@ -129,17 +179,90 @@ internal fun LiveRoomScreen(
                 focusRequester = inviteFocus,
                 focusProperties = {
                     left = if (state.isPrimaryActionEnabled) primaryFocus else FocusRequester.Cancel
-                    down = firstTrackFocus ?: FocusRequester.Cancel
+                    down = firstPlaybackFocus ?: firstTrackFocus ?: FocusRequester.Cancel
                 },
                 onFocused = { focusMemory.record(LiveRoomFocusTarget.Invite) },
+                testTag = "room-invite",
                 onClick = handler::onInvite,
             )
         }
         if (state.commandPending) {
             Text("Command pending…", modifier = Modifier.padding(top = 8.dp))
         }
+        state.playback.error?.let { error ->
+            Text(
+                "Playback error: ${localPlaybackErrorMessage(error)}",
+                color = Color(0xFFFFDDB3),
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        if (showPlayPause || showRetry) {
+            Row(
+                modifier = Modifier.padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (showPlayPause) {
+                    FocusedButton(
+                        text = if (state.playback.status == LocalPlaybackStatus.PAUSED) "Play" else "Pause",
+                        enabled = true,
+                        focusRequester = playPauseFocus,
+                        focusProperties = {
+                            up = playbackUpFocus
+                            if (showSeek) right = seekBackFocus
+                            down = firstTrackFocus ?: FocusRequester.Cancel
+                        },
+                        onFocused = { focusMemory.record(LiveRoomFocusTarget.PlayPause) },
+                        testTag = "playback-play-pause",
+                        onClick = handler::onPlayPause,
+                    )
+                    if (showSeek) {
+                        FocusedButton(
+                            text = "−10 seconds",
+                            enabled = true,
+                            focusRequester = seekBackFocus,
+                            focusProperties = {
+                                left = playPauseFocus
+                                right = seekForwardFocus
+                                up = playbackUpFocus
+                                down = firstTrackFocus ?: FocusRequester.Cancel
+                            },
+                            onFocused = { focusMemory.record(LiveRoomFocusTarget.SeekBack) },
+                            testTag = "playback-seek-back",
+                            onClick = { handler.onSeekBy(-10_000) },
+                        )
+                        FocusedButton(
+                            text = "+10 seconds",
+                            enabled = true,
+                            focusRequester = seekForwardFocus,
+                            focusProperties = {
+                                left = seekBackFocus
+                                up = playbackUpFocus
+                                down = firstTrackFocus ?: FocusRequester.Cancel
+                            },
+                            onFocused = { focusMemory.record(LiveRoomFocusTarget.SeekForward) },
+                            testTag = "playback-seek-forward",
+                            onClick = { handler.onSeekBy(10_000) },
+                        )
+                    }
+                }
+                if (showRetry) {
+                    FocusedButton(
+                        text = "Retry Current",
+                        enabled = true,
+                        focusRequester = retryFocus,
+                        focusProperties = {
+                            up = playbackUpFocus
+                            down = firstTrackFocus ?: FocusRequester.Cancel
+                        },
+                        onFocused = { focusMemory.record(LiveRoomFocusTarget.Retry) },
+                        testTag = "playback-retry",
+                        onClick = handler::onRetryCurrent,
+                    )
+                }
+            }
+        }
         if (room != null) {
-            Text("Now playing", fontSize = 28.sp, modifier = Modifier.padding(top = 24.dp))
+            Text("Server-selected track", fontSize = 28.sp, modifier = Modifier.padding(top = 24.dp))
             if (room.current == null) {
                 Text("No track playing", modifier = Modifier.padding(top = 8.dp))
             } else {
@@ -171,7 +294,7 @@ internal fun LiveRoomScreen(
                             track = track,
                             focusRequester = checkNotNull(trackFocusRequesters[track.id]),
                             upFocusRequester = if (index == 0) {
-                                if (state.isPrimaryActionEnabled) primaryFocus else inviteFocus
+                                lastPlaybackFocus ?: if (state.isPrimaryActionEnabled) primaryFocus else inviteFocus
                             } else {
                                 null
                             },

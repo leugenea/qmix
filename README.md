@@ -23,7 +23,7 @@ Completed:
 
 In progress / next:
 
-- **M4** — the single-module Kotlin/Compose for TV scaffold, Media3 playback engine, room creation/QR flow, live room synchronization, queue advancement, and authoritative local playback coordination are implemented via #71, #72, #73, #101, #124, and #121. Playback controls and assembled-flow verification remain to be completed (see [`android/README.md`](android/README.md)).
+- **M4** — the single-module Kotlin/Compose for TV scaffold, Media3 playback engine, room creation/QR flow, live room synchronization, queue advancement, authoritative local playback coordination, and focused local playback controls are implemented via #71, #72, #73, #101, #124, #121, and #122. Foreground recovery and assembled-flow verification remain owned by #123 (see [`android/README.md`](android/README.md)).
 - **M6** — Definition of Done (E2E + v0.1.0).
 - Automatic Yandex token refresh through `QMIX_YM_REFRESH_TOKEN` (`goym` does not provide built-in refresh support, so this is a separate task).
 
@@ -387,5 +387,5 @@ database extraction is undocumented and not recommended.
 ## Stack
 
 - Backend: Go, REST + SSE, in-memory state
-- TV host: Kotlin + Compose for TV + Media3; scaffold, room creation/QR, live synchronization, queue advancement, and authoritative local playback coordination are implemented; playback controls and assembled-flow verification remain in progress
+- TV host: Kotlin + Compose for TV + Media3; scaffold, room creation/QR, live synchronization, queue advancement, authoritative local playback coordination, and focused local playback controls are implemented; foreground recovery and assembled-flow verification remain owned by #123
 - Guests: login-free PWA (completed in #55)
