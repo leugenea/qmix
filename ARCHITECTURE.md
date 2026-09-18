@@ -135,7 +135,11 @@ through `StreamBackend` and caches the URL with a TTL
 - `PATCH /rooms/{code}/queue` — reorder the queue with `{"order": [trackID, ...]}` (host only; exact permutation of IDs)
 - `POST /rooms/{code}/skip` — advance to the next track (host only)
 - `GET /rooms/{code}/current/stream` — stream the current track with Range/seek support: 200 / 206 / 416; 404 when there is no current track
-- `GET /healthz` — liveness check
+- `GET /healthz` — unconditional liveness: `200 {"status":"ok"}`
+- `GET /readyz` — current yt-dlp readiness: `200 {"status":"ready"}` only
+  while the configured/default executable is resolvable and executable;
+  otherwise `503 {"status":"unavailable"}`. The check never executes yt-dlp or
+  accesses the network.
 
 Host operations (skip and reorder) require the `X-Host-Token` header issued
 when the room is created.
@@ -236,6 +240,29 @@ served through `stream.ServeStream`.
 
 ## 9. Deployment
 
+- `cmd/qmix` reads all runtime `QMIX_*` variables once into one typed
+  `internal/config.Config` before constructing the logger and application. That
+  aggregate owns address, logging, optional resolver credentials, the shared
+  yt-dlp executable and deadlines, stream cache TTL, and current room lifetime
+  settings. The composition root constructs the resolver, stream backend,
+  handlers, and readiness check once; `App.Handler()` has no environment reads,
+  executable resolution, or dependency construction.
+- Runtime variables are `QMIX_ADDR`, `QMIX_LOG_LEVEL`, `QMIX_LOG_FILE`,
+  `QMIX_VK_TOKEN`, `QMIX_YM_TOKEN`, `QMIX_SPOTIFY_CLIENT_ID`,
+  `QMIX_SPOTIFY_CLIENT_SECRET`, `QMIX_YTDLP_BIN`,
+  `QMIX_STREAM_CACHE_TTL`, `QMIX_YTDLP_METADATA_TIMEOUT`, and
+  `QMIX_YTDLP_SEARCH_TIMEOUT`. Defaults are respectively `:8080`, `warn`,
+  `qmix.log`, empty credentials, `yt-dlp`, `5m`, `30s`, and `60s`. Build and
+  Compose orchestration variables are outside this runtime contract.
+- Missing or blank runtime values use their defaults. Explicit malformed
+  levels/durations fail startup with one secret-safe JSON record. It retains
+  `error_kind: invalid_configuration` and adds only the predeclared
+  `config_variable` and correction `guidance`; supplied values and wrapped error
+  details are never emitted. Other startup categories remain detail-free.
+  Metadata and search timeouts must be positive. Cache TTL must be positive or
+  negative (negative disables caching); explicit zero is invalid. Startup also
+  fails safely when yt-dlp is missing or non-executable. `/readyz` rechecks the
+  executable without invoking it, while `/healthz` remains unconditional.
 - One service: **docker-compose** with one `backend` container.
 - The container is built from `Dockerfile` (multi-stage build, static Go binary).
 - Port `8080`, configured through the `QMIX_ADDR` environment variable.
@@ -247,8 +274,8 @@ served through `stream.ServeStream`.
   `5m`; a negative value disables the cache). The metadata resolver and stream
   search apply separate server-side yt-dlp deadlines (30 seconds and 60 seconds
   by default), configured with `QMIX_YTDLP_METADATA_TIMEOUT` and
-  `QMIX_YTDLP_SEARCH_TIMEOUT`; invalid or non-positive values retain the
-  defaults. Proxy variables used to access
+  `QMIX_YTDLP_SEARCH_TIMEOUT`; invalid or non-positive explicit values fail
+  startup. Proxy variables used to access
   YouTube (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) are passed through Compose.
 - CI (GitHub Actions): gofmt + vet, build, `go test -race`, and a coverage gate
   of at least 95%. The `docker` job builds the image, checks yt-dlp inside it,

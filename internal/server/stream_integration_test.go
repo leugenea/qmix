@@ -228,7 +228,10 @@ func TestStreamEndpointRange(t *testing.T) {
 // will fail upstream but must reach it — i.e. not fall through as a routing
 // 404 for a missing handler/backend).
 func TestAppWiresStreamBackend(t *testing.T) {
-	app := NewApp()
+	app, err := NewApp(testConfig(t), nil, Dependencies{CheckExecutable: func(string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer app.Close()
 	h := app.Handler()
 	ts := httptest.NewServer(h)

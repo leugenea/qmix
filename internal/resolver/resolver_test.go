@@ -552,7 +552,7 @@ func TestResolver_MuxRoutingCaseInsensitive(t *testing.T) {
 // TestResolver_DefaultMux wires all production resolvers without network access
 // in this test (dispatch only; upstream calls are exercised elsewhere).
 func TestResolver_DefaultMux(t *testing.T) {
-	m := DefaultMux()
+	m := DefaultMuxWithConfig(Config{})
 	if m == nil {
 		t.Fatal("DefaultMux returned nil")
 	}

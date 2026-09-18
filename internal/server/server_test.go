@@ -1177,7 +1177,10 @@ func TestConcurrentMutationsAndSSE(t *testing.T) {
 }
 
 func TestHealthzAndRoomFlowViaApp(t *testing.T) {
-	app := NewApp()
+	app, err := NewApp(testConfig(t), nil, Dependencies{CheckExecutable: func(string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer app.Close()
 
 	ts := httptest.NewServer(app.Handler())

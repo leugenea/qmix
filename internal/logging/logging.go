@@ -8,20 +8,15 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"syscall"
 )
 
 const (
-	defaultLogFile       = "qmix.log"
 	maxPersistentLogSize = 10 << 20
 )
 
 var (
-	// ErrInvalidLevel reports an unsupported logging threshold without echoing
-	// the environment value, which may itself contain secret material.
-	ErrInvalidLevel = errors.New("invalid QMIX_LOG_LEVEL: use debug, info, warn, or error")
 	// ErrPersistentOpen reports a startup-blocking sink failure without exposing
 	// the configured path or an underlying PathError.
 	ErrPersistentOpen    = errors.New("persistent log file unavailable")
@@ -32,30 +27,6 @@ var (
 type Config struct {
 	Level slog.Level
 	File  string
-}
-
-// ConfigFromEnv reads QMIX_LOG_LEVEL and QMIX_LOG_FILE. The effective default
-// level is WARN and the default persistent file is qmix.log.
-func ConfigFromEnv() (Config, error) {
-	cfg := Config{Level: slog.LevelWarn, File: defaultLogFile}
-	if path := strings.TrimSpace(os.Getenv("QMIX_LOG_FILE")); path != "" {
-		cfg.File = path
-	}
-	if value := strings.TrimSpace(os.Getenv("QMIX_LOG_LEVEL")); value != "" {
-		switch strings.ToLower(value) {
-		case "debug":
-			cfg.Level = slog.LevelDebug
-		case "info":
-			cfg.Level = slog.LevelInfo
-		case "warn", "warning":
-			cfg.Level = slog.LevelWarn
-		case "error":
-			cfg.Level = slog.LevelError
-		default:
-			return Config{}, ErrInvalidLevel
-		}
-	}
-	return cfg, nil
 }
 
 // Open creates one JSON logger that fans every accepted record out to console

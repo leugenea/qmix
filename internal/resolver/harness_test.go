@@ -55,7 +55,7 @@ func TestSpotifyOEmbedLive(t *testing.T) {
 // configured (CI job `integration` provides them); otherwise it is skipped.
 func TestSpotifyAPILive(t *testing.T) {
 	skipIfNoToken(t, "QMIX_SPOTIFY_CLIENT_ID", "QMIX_SPOTIFY_CLIENT_SECRET")
-	s := &Spotify{Config: ConfigFromEnv()}
+	s := &Spotify{Config: liveResolverConfig()}
 	tr, err := s.Resolve(context.Background(), "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC")
 	if err != nil {
 		t.Fatalf("live api resolve: %v", err)
@@ -77,7 +77,7 @@ func TestSpotifyAPILive(t *testing.T) {
 // skipped so CI stays green without the secret.
 func TestVKAPILive(t *testing.T) {
 	skipIfNoToken(t, "QMIX_VK_TOKEN")
-	v := &VKYandex{Config: ConfigFromEnv()}
+	v := &VKYandex{Config: liveResolverConfig()}
 	// Public audio link from issue qmix#9 (not a secret).
 	tr, err := v.Resolve(context.Background(), "https://vk.ru/audio1132822_456240773_bb5b9b9640eed9638f")
 	if err != nil {
@@ -104,7 +104,7 @@ func TestVKAPILive(t *testing.T) {
 // the secret.
 func TestYMAPILive(t *testing.T) {
 	skipIfNoToken(t, "QMIX_YM_TOKEN")
-	v := &VKYandex{Config: ConfigFromEnv()}
+	v := &VKYandex{Config: liveResolverConfig()}
 	// Public share link from issue qmix#10 (not a secret): query parameters
 	// from the share button must be ignored by the parser.
 	tr, err := v.Resolve(context.Background(), "https://music.yandex.ru/album/14599266/track/609676?utm_medium=copy_link&ref_id=3469c57a-0a9c-44ba-abeb-8293f2bb2fa7")
@@ -122,5 +122,14 @@ func TestYMAPILive(t *testing.T) {
 	}
 	if tr.ResolvedBy != "yandex" {
 		t.Fatalf("live yandex resolve resolvedBy = %q, want yandex", tr.ResolvedBy)
+	}
+}
+
+func liveResolverConfig() Config {
+	return Config{
+		VKToken:             os.Getenv("QMIX_VK_TOKEN"),
+		YMToken:             os.Getenv("QMIX_YM_TOKEN"),
+		SpotifyClientID:     os.Getenv("QMIX_SPOTIFY_CLIENT_ID"),
+		SpotifyClientSecret: os.Getenv("QMIX_SPOTIFY_CLIENT_SECRET"),
 	}
 }
