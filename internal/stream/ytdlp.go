@@ -43,7 +43,7 @@ type ytdlpRunner struct {
 // ytsearch query. The --dump-json document includes the direct audio URL.
 func (r ytdlpRunner) Search(ctx context.Context, input string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, r.bin,
-		"--skip-download", "--dump-json", "--no-warnings",
+		"--skip-download", "--dump-json", "--no-warnings", "--no-playlist",
 		"-f", "bestaudio",
 		input,
 	)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -33,13 +34,17 @@ func skipIfNoLiveStream(t *testing.T) {
 }
 
 func TestLiveYtdlpBinUsesConfiguredPath(t *testing.T) {
-	t.Setenv("QMIX_YTDLP_BIN", "/bin/false")
+	want := filepath.Join(t.TempDir(), "yt-dlp")
+	if err := os.WriteFile(want, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("QMIX_YTDLP_BIN", want)
 	bin, err := liveYtdlpBin()
 	if err != nil {
 		t.Fatalf("configured live yt-dlp: %v", err)
 	}
-	if bin != "/bin/false" {
-		t.Fatalf("bin = %q, want /bin/false", bin)
+	if bin != want {
+		t.Fatalf("bin = %q, want %q", bin, want)
 	}
 }
 

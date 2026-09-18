@@ -72,6 +72,36 @@ func TestYtdlpYouTubeSourceUsesOriginalURL(t *testing.T) {
 	}
 }
 
+// TestYtdlpWatchURLExecUsesSingleVideoMode proves the stream exec runner keeps
+// the selected watch URL intact and prevents playlist traversal (qmix#129).
+func TestYtdlpWatchURLExecUsesSingleVideoMode(t *testing.T) {
+	const source = "https://www.youtube.com/watch?v=selected-video&list=playlist-id"
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	bin := filepath.Join(dir, "yt-dlp")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" > %q\nprintf '%%s\\n' '{\"url\":\"https://media.example/selected.webm\"}'\n", argsFile)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := &YTDLP{Bin: bin, CacheTTL: -1}
+	gotURL, err := backend.resolveURL(context.Background(), &Track{URL: source, ResolvedBy: "youtube"})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if gotURL != "https://media.example/selected.webm" {
+		t.Fatalf("url = %q, want selected video stream", gotURL)
+	}
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "--skip-download\n--dump-json\n--no-warnings\n--no-playlist\n-f\nbestaudio\n" + source + "\n"
+	if string(got) != want {
+		t.Fatalf("yt-dlp args = %q, want %q", got, want)
+	}
+}
+
 // TestYtdlpResolveURL verifies non-YouTube sources keep the metadata-search
 // fallback and that the resolved audio URL comes straight from the fixture.
 func TestYtdlpResolveURL(t *testing.T) {
