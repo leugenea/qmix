@@ -43,7 +43,7 @@ func (g *RandomCodeGenerator) Generate() string {
 	return sb.String()
 }
 
-// newToken returns a random opaque token used as the host token.
+// newToken returns a random opaque token used as a track ID.
 func newToken() string {
 	const tokenAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	var sb strings.Builder
