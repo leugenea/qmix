@@ -27,9 +27,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leugenea/qmix/internal/config"
 	"github.com/leugenea/qmix/internal/resolver"
 	"github.com/leugenea/qmix/internal/stream"
 )
+
+func integNewApp(t *testing.T, deps Dependencies) *App {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	app, err := NewApp(cfg, nil, deps)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	return app
+}
 
 // integServe serves h on an ephemeral real 127.0.0.1 socket and returns its
 // base URL. Integration scenarios must run over a real listener (net.Listen +
@@ -146,7 +160,7 @@ func integSkip(t *testing.T, base, code, token string) integResp {
 }
 
 // fakeYtdlp writes a fake yt-dlp executable and wires both consumers to the
-// absolute path in QMIX_YTDLP_BIN when App.Handler is built. Metadata requests
+// absolute path in QMIX_YTDLP_BIN when the App is built. Metadata requests
 // get canned track JSON; stream requests get the mock upstream URL and append
 // their exact final yt-dlp input to the returned capture file.
 func fakeYtdlp(t *testing.T, upstreamURL string) (bin, capture string) {
@@ -209,7 +223,7 @@ func mockAudioUpstream(t *testing.T) (string, []byte) {
 
 // Scenario 1: GET /healthz answers 200 on the full App handler.
 func TestIntegrationHealthz(t *testing.T) {
-	app := NewApp()
+	app := integNewApp(t, Dependencies{CheckExecutable: func(string) bool { return true }})
 	t.Cleanup(app.Close)
 	base := integServe(t, app.Handler())
 
@@ -228,7 +242,7 @@ func TestIntegrationHealthz(t *testing.T) {
 // track → skip (host token enforced) → reorder.
 func TestIntegrationRoomLifecycle(t *testing.T) {
 	_, _ = fakeYtdlp(t, "http://127.0.0.1:1/never-called")
-	app := NewApp()
+	app := integNewApp(t, Dependencies{})
 	t.Cleanup(app.Close)
 	base := integServe(t, app.Handler())
 
@@ -311,7 +325,7 @@ func TestIntegrationRoomLifecycle(t *testing.T) {
 // on reconnect.
 func TestIntegrationSSE(t *testing.T) {
 	_, _ = fakeYtdlp(t, "http://127.0.0.1:1/never-called")
-	app := NewApp()
+	app := integNewApp(t, Dependencies{})
 	t.Cleanup(app.Close)
 	base := integServe(t, app.Handler())
 	code, token := integCreateRoom(t, base)
@@ -460,15 +474,15 @@ func TestIntegrationResolverMockUnknownLink(t *testing.T) {
 }
 
 // Scenario 5: streaming through a fake yt-dlp binary. The stream backend is
-// configured via QMIX_YTDLP_BIN (read from the environment when App.Handler is
-// built) and streams from a local mock upstream with Range support.
+// configured via QMIX_YTDLP_BIN when the App is built and streams from a local
+// mock upstream with Range support.
 func TestIntegrationStreamFakeYtdlp(t *testing.T) {
 	upstream, audio := mockAudioUpstream(t)
 	bin, capture := fakeYtdlp(t, upstream+"/audio")
 
-	app := NewApp()
+	app := integNewApp(t, Dependencies{})
 	t.Cleanup(app.Close)
-	base := integServe(t, app.Handler()) // Handler reads QMIX_YTDLP_BIN here.
+	base := integServe(t, app.Handler()) // Handler uses dependencies frozen at app construction.
 	code, token := integCreateRoom(t, base)
 
 	tr := integAddTrack(t, base, code, "https://www.youtube.com/watch?v=fake1")
@@ -561,12 +575,17 @@ func TestIntegrationStreamFakeYtdlp(t *testing.T) {
 // survives that window but expires on the longer non-empty TTL.
 func TestIntegrationRoomTTL(t *testing.T) {
 	_, _ = fakeYtdlp(t, "http://127.0.0.1:1/never-called")
-	app := &App{
-		Store: NewStore(80*time.Millisecond, 25*time.Millisecond, nil),
-		Hub:   NewHub(),
-		stop:  make(chan struct{}),
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	app.Store.NonEmptyTTL = 240 * time.Millisecond
+	cfg.Rooms.EmptyTTL = 80 * time.Millisecond
+	cfg.Rooms.NonEmptyTTL = 240 * time.Millisecond
+	cfg.Rooms.JanitorInterval = 25 * time.Millisecond
+	app, err := NewApp(cfg, nil, Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	base := integServe(t, app.Handler())
 
 	code, _ := integCreateRoom(t, base)
@@ -581,7 +600,6 @@ func TestIntegrationRoomTTL(t *testing.T) {
 	app.Store.mu.Lock()
 	app.Store.rooms[code].LastActivity = time.Now().Add(-2 * app.Store.TTL)
 	app.Store.mu.Unlock()
-	go app.Store.Janitor(app.stop)
 	t.Cleanup(app.Close)
 
 	// Poll until the empty room is swept: GET by code → 404.

@@ -59,8 +59,9 @@ version pinned in `Dockerfile`. Configure the cache
 with `QMIX_STREAM_CACHE_TTL` (default: `5m`). Metadata extraction and stream
 search subprocesses have independent hard deadlines: 30 seconds and 60 seconds
 respectively. Override them with `QMIX_YTDLP_METADATA_TIMEOUT` and
-`QMIX_YTDLP_SEARCH_TIMEOUT` using Go duration syntax. Invalid or non-positive
-values retain the defaults. If YouTube is available only
+`QMIX_YTDLP_SEARCH_TIMEOUT` using Go duration syntax. Explicit malformed, zero,
+or negative timeout values stop startup; a negative stream cache TTL disables
+caching, while an explicit zero cache TTL is invalid. If YouTube is available only
 through a proxy, set `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` in the environment;
 compose passes them to the container, where they are used by both `yt-dlp` and
 the audio HTTP proxy.
@@ -114,11 +115,51 @@ artifact. Link each release-blocking run from its acceptance issue.
 ```bash
 make run
 curl localhost:8080/healthz
+curl localhost:8080/readyz
 
 # or with Docker (external port 8180)
 make compose-up
 curl localhost:8180/healthz
+curl localhost:8180/readyz
 ```
+
+## Startup configuration
+
+The backend reads the runtime environment exactly once before constructing the
+application. One typed configuration is then passed to logging, the resolver,
+the stream backend, room storage, and the HTTP server; `App.Handler()` only
+returns the already-built handler. Build metadata and Compose-only variables
+such as `VERSION`, `COMMIT`, `QMIX_IMAGE_TAG`, and `QMIX_LOG_GID` are not runtime
+application configuration.
+
+| Variable | Default | Contract |
+|---|---|---|
+| `QMIX_ADDR` | `:8080` | HTTP listen address |
+| `QMIX_LOG_LEVEL` | `warn` | `debug`, `info`, `warn`/`warning`, or `error` |
+| `QMIX_LOG_FILE` | `qmix.log` | Persistent JSON log file |
+| `QMIX_VK_TOKEN` | empty | Optional VK credential |
+| `QMIX_YM_TOKEN` | empty | Optional Yandex Music credential |
+| `QMIX_SPOTIFY_CLIENT_ID` | empty | Optional Spotify client ID |
+| `QMIX_SPOTIFY_CLIENT_SECRET` | empty | Optional Spotify client secret |
+| `QMIX_YTDLP_BIN` | `yt-dlp` | Required executable name or path, shared by metadata and streaming |
+| `QMIX_STREAM_CACHE_TTL` | `5m` | Positive Go duration; a negative duration disables caching; zero is invalid |
+| `QMIX_YTDLP_METADATA_TIMEOUT` | `30s` | Positive Go duration |
+| `QMIX_YTDLP_SEARCH_TIMEOUT` | `60s` | Positive Go duration |
+
+Missing or blank values use the listed defaults. An explicitly supplied invalid
+log level or duration stops startup with one JSON record whose
+`error_kind` is `invalid_configuration`; `config_variable` names the setting and
+`guidance` gives a safe correction without including the supplied value.
+Other startup failure categories do not include these detail fields. Startup
+also stops if the configured/default `yt-dlp` cannot be resolved as an
+executable; the check does not invoke it or access the network.
+
+`GET /healthz` is unconditional liveness and always returns `200` with
+`{"status":"ok"}` while the process can serve HTTP. `GET /readyz` rechecks the
+required executable on every request and returns `200` with
+`{"status":"ready"}` only while it remains resolvable and executable; otherwise
+it returns stable `503` JSON `{"status":"unavailable"}`. Readiness never runs
+`yt-dlp` and never performs network access.
 
 ## Backend logs
 

@@ -85,10 +85,13 @@ func TestHTTPRecordsFixedRouteWithoutSecretBearingPathOrQuery(t *testing.T) {
 	}
 }
 
-func TestNewAppWithLoggerWiresProductionHandlerComponents(t *testing.T) {
+func TestNewAppWiresProductionHandlerComponents(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	app := NewAppWithLogger(logger)
+	app, err := NewApp(testConfig(t), logger, Dependencies{CheckExecutable: func(string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer app.Close()
 
 	rec := httptest.NewRecorder()
@@ -122,7 +125,9 @@ func TestRunLogsServerLifecycleFailure(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	secret := "token=SENTINEL_DO_NOT_LOG"
-	err := Run("127.0.0.1:"+secret, logger)
+	cfg := testConfig(t)
+	cfg.Address = "127.0.0.1:" + secret
+	err := run(cfg, logger, Dependencies{CheckExecutable: func(string) bool { return true }})
 	if err == nil {
 		t.Fatal("Run returned nil for invalid listen address")
 	}
@@ -133,7 +138,9 @@ func TestRunLogsServerLifecycleFailure(t *testing.T) {
 }
 
 func TestRunAcceptsNilLogger(t *testing.T) {
-	if err := Run("127.0.0.1:99999", nil); err == nil {
+	cfg := testConfig(t)
+	cfg.Address = "127.0.0.1:99999"
+	if err := run(cfg, nil, Dependencies{CheckExecutable: func(string) bool { return true }}); err == nil {
 		t.Fatal("Run returned nil for invalid listen address")
 	}
 }
@@ -239,7 +246,10 @@ func TestResponseStatusWriterIgnoresRepeatedWriteHeader(t *testing.T) {
 }
 
 func TestNilLoggerConstructorsUseSafeFallback(t *testing.T) {
-	app := NewAppWithLogger(nil)
+	app, err := NewApp(testConfig(t), nil, Dependencies{CheckExecutable: func(string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	app.Close()
 
 	store := NewStore(time.Hour, time.Hour, &seqCodeGen{})

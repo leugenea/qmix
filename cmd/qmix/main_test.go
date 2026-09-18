@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,7 +12,9 @@ import (
 	"testing"
 
 	"github.com/leugenea/qmix/internal/buildinfo"
+	"github.com/leugenea/qmix/internal/config"
 	"github.com/leugenea/qmix/internal/logging"
+	"github.com/leugenea/qmix/internal/server"
 )
 
 func TestExecuteDispatchesVersionOrServer(t *testing.T) {
@@ -48,27 +52,16 @@ func TestExecuteDispatchesVersionOrServer(t *testing.T) {
 	}
 }
 
-func TestListenAddrDefault(t *testing.T) {
-	t.Setenv("QMIX_ADDR", "")
-	if got := listenAddr(); got != ":8080" {
-		t.Fatalf("addr = %q, want :8080", got)
-	}
-}
-
-func TestListenAddrFromEnv(t *testing.T) {
-	t.Setenv("QMIX_ADDR", ":9000")
-	if got := listenAddr(); got != ":9000" {
-		t.Fatalf("addr = %q, want :9000", got)
-	}
-}
-
 func TestStartServerConfiguresSharedConsoleAndFileLogger(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "backend.log")
 	t.Setenv("QMIX_LOG_LEVEL", "warn")
 	t.Setenv("QMIX_LOG_FILE", path)
 	var console bytes.Buffer
 
-	err := startServer(&console, func(logger *slog.Logger) error {
+	err := startServer(&console, func(cfg config.Config, logger *slog.Logger) error {
+		if cfg.Address != ":8080" {
+			t.Fatalf("address = %q, want :8080", cfg.Address)
+		}
 		logger.Warn("test record", "component", "server/http")
 		return nil
 	})
@@ -89,7 +82,7 @@ func TestStartServerConfiguresSharedConsoleAndFileLogger(t *testing.T) {
 func TestStartServerRejectsInvalidLevelBeforeServing(t *testing.T) {
 	t.Setenv("QMIX_LOG_LEVEL", "verbose")
 	served := false
-	err := startServer(&bytes.Buffer{}, func(*slog.Logger) error {
+	err := startServer(&bytes.Buffer{}, func(config.Config, *slog.Logger) error {
 		served = true
 		return nil
 	})
@@ -98,12 +91,118 @@ func TestStartServerRejectsInvalidLevelBeforeServing(t *testing.T) {
 	}
 }
 
-func TestWriteStartupErrorEmitsOneEscapedJSONRecord(t *testing.T) {
-	var output bytes.Buffer
+func TestStartServerRejectsInvalidDurationBeforeServing(t *testing.T) {
 	secret := "token=SENTINEL_DO_NOT_LOG"
-	writeStartupError(&output, errors.New("open failed: "+secret+"\nforged record"))
-	if strings.Count(strings.TrimSpace(output.String()), "\n") != 0 || !strings.Contains(output.String(), `"error_kind":"startup_failed"`) || strings.Contains(output.String(), secret) || strings.Contains(output.String(), "open failed") {
-		t.Fatalf("startup error was not a secret-safe JSON record: %q", output.String())
+	t.Setenv("QMIX_YTDLP_SEARCH_TIMEOUT", secret)
+	served := false
+	err := startServer(&bytes.Buffer{}, func(config.Config, *slog.Logger) error {
+		served = true
+		return nil
+	})
+	if err == nil || !errors.Is(err, config.ErrInvalid) || served || strings.Contains(err.Error(), secret) {
+		t.Fatalf("error=%v served=%t", err, served)
+	}
+}
+
+func TestWriteStartupErrorKeepsNonConfigFailuresDetailFree(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err       error
+		kind      string
+		forbidden []string
+	}{
+		"plain invalid sentinel": {
+			err:       fmt.Errorf("credential=SECRET\nforged record: %w", config.ErrInvalid),
+			kind:      "invalid_configuration",
+			forbidden: []string{"credential=SECRET", "forged record"},
+		},
+		"persistent log": {
+			err:       fmt.Errorf("log path /secret/qmix.log: disk full: %w", logging.ErrPersistentOpen),
+			kind:      "persistent_log_open_failed",
+			forbidden: []string{"/secret/qmix.log", "disk full"},
+		},
+		"yt-dlp unavailable": {
+			err:       fmt.Errorf("executable /secret/bin/yt-dlp: permission denied: %w", server.ErrYTDLPUnavailable),
+			kind:      "ytdlp_unavailable",
+			forbidden: []string{"/secret/bin/yt-dlp", "permission denied"},
+		},
+		"unexpected": {
+			err:       errors.New("listen 10.0.0.8:8080: arbitrary failure"),
+			kind:      "startup_failed",
+			forbidden: []string{"10.0.0.8:8080", "arbitrary failure"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output bytes.Buffer
+			writeStartupError(&output, tc.err)
+			if strings.Count(output.String(), "\n") != 1 || !strings.HasSuffix(output.String(), "\n") {
+				t.Fatalf("startup error was not one JSON record: %q", output.String())
+			}
+			for _, forbidden := range tc.forbidden {
+				if strings.Contains(output.String(), forbidden) {
+					t.Fatalf("startup record leaked %q: %q", forbidden, output.String())
+				}
+			}
+			var record map[string]string
+			if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+				t.Fatal(err)
+			}
+			if len(record) != 4 || record["error_kind"] != tc.kind {
+				t.Fatalf("startup record = %#v", record)
+			}
+		})
+	}
+}
+
+func TestWriteStartupErrorReportsOnlySafeInvalidConfigDetails(t *testing.T) {
+	secret := "token=SENTINEL_DO_NOT_LOG\nforged record"
+	tests := []struct {
+		name     string
+		variable string
+		value    string
+		guidance string
+	}{
+		{name: "invalid log level", variable: "QMIX_LOG_LEVEL", value: secret, guidance: "use debug, info, warn, or error"},
+		{name: "malformed duration", variable: "QMIX_YTDLP_METADATA_TIMEOUT", value: secret, guidance: "use Go duration syntax"},
+		{name: "zero timeout", variable: "QMIX_YTDLP_SEARCH_TIMEOUT", value: "0s", guidance: "must be greater than zero"},
+		{name: "negative timeout", variable: "QMIX_YTDLP_SEARCH_TIMEOUT", value: "-1s", guidance: "must be greater than zero"},
+		{name: "zero cache TTL", variable: "QMIX_STREAM_CACHE_TTL", value: "0s", guidance: "must be non-zero; negative disables caching"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, parseErr := config.Parse(func(name string) (string, bool) {
+				if name == tc.variable {
+					return tc.value, true
+				}
+				return "", false
+			})
+			if parseErr == nil || !errors.Is(parseErr, config.ErrInvalid) {
+				t.Fatalf("parse error = %v, want ErrInvalid", parseErr)
+			}
+
+			wrappedDetail := "arbitrary wrapped detail\nforged wrapper record"
+			var output bytes.Buffer
+			writeStartupError(&output, fmt.Errorf("%s: %w", wrappedDetail, parseErr))
+
+			if strings.Count(output.String(), "\n") != 1 || !strings.HasSuffix(output.String(), "\n") {
+				t.Fatalf("startup output is not one JSON record: %q", output.String())
+			}
+			var record map[string]string
+			if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+				t.Fatalf("decode startup record: %v; output=%q", err, output.String())
+			}
+			if record["error_kind"] != "invalid_configuration" || record["config_variable"] != tc.variable || record["guidance"] != tc.guidance {
+				t.Fatalf("startup record = %#v", record)
+			}
+			if len(record) != 6 {
+				t.Fatalf("startup record has unexpected fields: %#v", record)
+			}
+			for _, forbidden := range []string{tc.value, secret, wrappedDetail, "forged record", "forged wrapper record"} {
+				if forbidden != "" && strings.Contains(output.String(), forbidden) {
+					t.Fatalf("startup record leaked %q: %q", forbidden, output.String())
+				}
+			}
+		})
 	}
 }
 
@@ -112,8 +211,9 @@ func TestStartupErrorKindUsesStableCategories(t *testing.T) {
 		err  error
 		want string
 	}{
-		"level":   {err: logging.ErrInvalidLevel, want: "invalid_log_level"},
+		"config":  {err: config.ErrInvalid, want: "invalid_configuration"},
 		"file":    {err: logging.ErrPersistentOpen, want: "persistent_log_open_failed"},
+		"yt-dlp":  {err: server.ErrYTDLPUnavailable, want: "ytdlp_unavailable"},
 		"generic": {err: errors.New("secret detail"), want: "startup_failed"},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -13,51 +13,6 @@ import (
 	"testing"
 )
 
-func TestConfigFromEnvDefaultsToWarnAndQMixLog(t *testing.T) {
-	t.Setenv("QMIX_LOG_LEVEL", "")
-	t.Setenv("QMIX_LOG_FILE", "")
-
-	cfg, err := ConfigFromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Level != slog.LevelWarn {
-		t.Fatalf("level = %v, want WARN", cfg.Level)
-	}
-	if cfg.File != "qmix.log" {
-		t.Fatalf("file = %q, want qmix.log", cfg.File)
-	}
-}
-
-func TestConfigFromEnvParsesDocumentedLevels(t *testing.T) {
-	for input, want := range map[string]slog.Level{
-		"debug": slog.LevelDebug,
-		"INFO":  slog.LevelInfo,
-		"warn":  slog.LevelWarn,
-		"error": slog.LevelError,
-	} {
-		t.Run(input, func(t *testing.T) {
-			t.Setenv("QMIX_LOG_LEVEL", input)
-			t.Setenv("QMIX_LOG_FILE", "/safe/qmix.log")
-			cfg, err := ConfigFromEnv()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cfg.Level != want || cfg.File != "/safe/qmix.log" {
-				t.Fatalf("config = %+v, want level=%v file=/safe/qmix.log", cfg, want)
-			}
-		})
-	}
-}
-
-func TestConfigFromEnvRejectsInvalidLevel(t *testing.T) {
-	secret := "token=SENTINEL_DO_NOT_LOG"
-	t.Setenv("QMIX_LOG_LEVEL", secret)
-	if _, err := ConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "QMIX_LOG_LEVEL") || strings.Contains(err.Error(), secret) {
-		t.Fatalf("error = %v, want clear QMIX_LOG_LEVEL error", err)
-	}
-}
-
 func TestOpenWritesWarnToConsoleAndPersistentFile(t *testing.T) {
 	var console bytes.Buffer
 	path := filepath.Join(t.TempDir(), "qmix.log")

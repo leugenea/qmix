@@ -144,7 +144,7 @@ func skipIfNoStreamAcceptance(t *testing.T) string {
 	if os.Getenv("QMIX_STREAM_ACCEPTANCE") != "1" {
 		t.Skip("stream acceptance skipped: QMIX_STREAM_ACCEPTANCE not set to 1")
 	}
-	bin := stream.ConfigFromEnv().YtdlpBin
+	bin := os.Getenv("QMIX_YTDLP_BIN")
 	if bin == "" {
 		bin = "yt-dlp"
 	}

@@ -11,7 +11,7 @@ import (
 // liveYtdlpBin resolves the configured executable before the live gate decides
 // whether to run. An explicit QMIX_YTDLP_BIN path takes precedence over PATH.
 func liveYtdlpBin() (string, error) {
-	bin := ConfigFromEnv().YtdlpBin
+	bin := os.Getenv("QMIX_YTDLP_BIN")
 	if bin == "" {
 		bin = ytdlpBin
 	}
