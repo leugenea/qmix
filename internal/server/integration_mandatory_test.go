@@ -145,10 +145,9 @@ func integSkip(t *testing.T, base, code, token string) integResp {
 	return integDo(t, http.MethodPost, base+"/rooms/"+code+"/skip", "", token)
 }
 
-// fakeYtdlp writes a fake yt-dlp executable and wires both consumers to it:
-// the resolver finds "yt-dlp" on PATH, the stream backend reads QMIX_YTDLP_BIN
-// from the environment (when App.Handler is built). Metadata requests get
-// canned track JSON; stream requests get the mock upstream URL and append
+// fakeYtdlp writes a fake yt-dlp executable and wires both consumers to the
+// absolute path in QMIX_YTDLP_BIN when App.Handler is built. Metadata requests
+// get canned track JSON; stream requests get the mock upstream URL and append
 // their exact final yt-dlp input to the returned capture file.
 func fakeYtdlp(t *testing.T, upstreamURL string) (bin, capture string) {
 	t.Helper()
@@ -172,7 +171,6 @@ func fakeYtdlp(t *testing.T, upstreamURL string) (bin, capture string) {
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake yt-dlp: %v", err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("QMIX_YTDLP_BIN", bin)
 	return bin, capture
 }

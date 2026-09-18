@@ -37,10 +37,13 @@ becomes current and the player retrieves its stream from
 How it works:
 
 1. Tracks resolved by the YouTube resolver are passed to `yt-dlp` using their
-   original submitted URL, so streaming selects that exact video. Tracks from
+   original submitted URL, so streaming selects that exact video. Both metadata
+   and stream lookups use `--no-playlist`: a watch URL containing `v` and `list`
+   selects only the `v` video, while a playlist-only YouTube URL without a video
+   ID is rejected as unsupported (`422`) before `yt-dlp` starts. Tracks from
    Spotify, VK, Yandex Music, and other non-YouTube resolvers keep the metadata
    search path (`Artist - Title`) via
-   `yt-dlp --skip-download --dump-json -f bestaudio "ytsearch:..."`.
+   `yt-dlp --skip-download --dump-json --no-playlist -f bestaudio "ytsearch:..."`.
 2. The direct audio URL is cached for approximately 5 minutes. Direct YouTube
    entries are keyed by source URL; metadata-search entries are keyed by artist
    and title.
@@ -50,8 +53,9 @@ How it works:
    `Content-Range`, and `Accept-Ranges` headers are forwarded to the client.
 
 **Requirement:** `yt-dlp` must be installed in `PATH` on the backend host (or
-its path must be set through `QMIX_YTDLP_BIN`). The Docker image already
-includes `yt-dlp` at the version pinned in `Dockerfile`. Configure the cache
+its path must be set through `QMIX_YTDLP_BIN`, which configures both metadata
+resolution and streaming). The Docker image already includes `yt-dlp` at the
+version pinned in `Dockerfile`. Configure the cache
 with `QMIX_STREAM_CACHE_TTL` (default: `5m`). Metadata extraction and stream
 search subprocesses have independent hard deadlines: 30 seconds and 60 seconds
 respectively. Override them with `QMIX_YTDLP_METADATA_TIMEOUT` and

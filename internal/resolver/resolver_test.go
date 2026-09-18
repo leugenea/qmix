@@ -24,6 +24,15 @@ func (f fakeRunner) Run(_ context.Context, _ string) ([]byte, error) {
 	return f.out, f.err
 }
 
+type countingYouTubeRunner struct {
+	calls int
+}
+
+func (r *countingYouTubeRunner) Run(context.Context, string) ([]byte, error) {
+	r.calls++
+	return []byte(ytFixture), nil
+}
+
 type blockingYouTubeRunner struct {
 	stopped chan struct{}
 }
@@ -148,6 +157,99 @@ func TestResolver_YouTube(t *testing.T) {
 	}
 }
 
+// TestResolver_YouTubeWatchURLExecUsesSingleVideoMode proves the production
+// runner keeps a selected watch URL intact and prevents playlist traversal
+// (qmix#129).
+func TestResolver_YouTubeWatchURLExecUsesSingleVideoMode(t *testing.T) {
+	const source = "https://www.youtube.com/watch?v=selected-video&list=playlist-id"
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	t.Setenv("QMIX_TEST_ARGS_FILE", argsFile)
+	bin := filepath.Join(dir, "yt-dlp")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$QMIX_TEST_ARGS_FILE\"\nprintf '%s\\n' '{\"title\":\"Selected Video\",\"uploader\":\"Selected Channel\",\"duration\":123}'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	y := &YouTube{Runner: ytdlpRunner{bin: bin}}
+	track, err := y.Resolve(context.Background(), source)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if track.Title != "Selected Video" || track.Source != source {
+		t.Fatalf("track = %+v, want selected video with original source", track)
+	}
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "--skip-download\n--dump-json\n--no-warnings\n--no-playlist\n" + source + "\n"
+	if string(got) != want {
+		t.Fatalf("yt-dlp args = %q, want %q", got, want)
+	}
+}
+
+// TestResolver_YouTubePlaylistClassification proves playlist-only submissions
+// fail as unsupported before yt-dlp starts while URLs with a video ID continue
+// to resolve exactly one selected video (qmix#129).
+func TestResolver_YouTubePlaylistClassification(t *testing.T) {
+	tests := []struct {
+		name            string
+		source          string
+		wantUnsupported bool
+	}{
+		{name: "playlist page", source: "https://www.youtube.com/playlist?list=playlist-id", wantUnsupported: true},
+		{name: "watch without video", source: "https://www.youtube.com/watch?list=playlist-id", wantUnsupported: true},
+		{name: "watch with blank video", source: "https://www.youtube.com/watch?v=&list=playlist-id", wantUnsupported: true},
+		{name: "music watch without video", source: "https://music.youtube.com/watch?list=playlist-id", wantUnsupported: true},
+		{name: "shorts without video", source: "https://www.youtube.com/shorts/?list=playlist-id", wantUnsupported: true},
+		{name: "live without video", source: "https://www.youtube.com/live/?list=playlist-id", wantUnsupported: true},
+		{name: "embed without video", source: "https://www.youtube.com/embed/?list=playlist-id", wantUnsupported: true},
+		{name: "v path without video", source: "https://www.youtube.com/v/?list=playlist-id", wantUnsupported: true},
+		{name: "canonical embedded playlist", source: "https://www.youtube.com/embed/videoseries?list=playlist-id", wantUnsupported: true},
+		{name: "short URL without video", source: "https://youtu.be/?list=playlist-id", wantUnsupported: true},
+		{name: "duplicate list blank first", source: "https://www.youtube.com/playlist?list=&list=playlist-id", wantUnsupported: true},
+		{name: "duplicate list whitespace first", source: "https://www.youtube.com/playlist?list=%20%09&list=playlist-id", wantUnsupported: true},
+		{name: "malformed list then valid list", source: "https://www.youtube.com/playlist?list=%zz&list=playlist-id", wantUnsupported: true},
+		{name: "malformed unrelated query", source: "https://www.youtube.com/playlist?bad=%zz&list=playlist-id", wantUnsupported: true},
+		{name: "watch video and playlist", source: "https://www.youtube.com/watch?v=video-id&list=playlist-id"},
+		{name: "duplicate video blank first", source: "https://www.youtube.com/watch?v=&v=video-id&list=playlist-id"},
+		{name: "music watch video", source: "https://music.youtube.com/watch?v=video-id&list=playlist-id"},
+		{name: "short URL video", source: "https://youtu.be/video-id?list=playlist-id"},
+		{name: "shorts video", source: "https://www.youtube.com/shorts/video-id?list=playlist-id"},
+		{name: "live video", source: "https://www.youtube.com/live/video-id?list=playlist-id"},
+		{name: "embed video", source: "https://www.youtube.com/embed/video-id?list=playlist-id"},
+		{name: "v path video", source: "https://www.youtube.com/v/video-id?list=playlist-id"},
+		{name: "empty list", source: "https://www.youtube.com/watch?list="},
+		{name: "whitespace list", source: "https://www.youtube.com/watch?list=%20%09"},
+		{name: "malformed list only", source: "https://www.youtube.com/watch?list=%zz"},
+		{name: "no playlist", source: "https://www.youtube.com/watch?v=video-id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &countingYouTubeRunner{}
+			y := &YouTube{Runner: runner}
+			_, err := y.Resolve(context.Background(), tt.source)
+			if tt.wantUnsupported {
+				if !errors.Is(err, ErrUnsupported) {
+					t.Fatalf("error = %v, want ErrUnsupported", err)
+				}
+				if runner.calls != 0 {
+					t.Fatalf("runner calls = %d, want 0", runner.calls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+			if runner.calls != 1 {
+				t.Fatalf("runner calls = %d, want 1", runner.calls)
+			}
+		})
+	}
+}
+
 // TestResolver_YouTubePrefersEmbeddedSongMetadata verifies artist/track win
 // over uploader when present.
 func TestResolver_YouTubePrefersEmbeddedSongMetadata(t *testing.T) {
@@ -253,8 +355,9 @@ func TestResolver_YouTubeDefaultRunner(t *testing.T) {
 func TestResolver_YouTubeExecRunnerKillsTimedOutProcess(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "pid")
+	t.Setenv("QMIX_TEST_PID_FILE", pidFile)
 	bin := filepath.Join(dir, "yt-dlp")
-	script := "#!/bin/sh\necho $$ > " + pidFile + "\nwhile :; do :; done\n"
+	script := "#!/bin/sh\necho $$ > \"$QMIX_TEST_PID_FILE\"\nwhile :; do :; done\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

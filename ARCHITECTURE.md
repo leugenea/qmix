@@ -162,7 +162,10 @@ metadata is unavailable. YouTube uses `yt-dlp --dump-json` behind an
 injectable runner interface. Resolver selection is based on the link's domain.
 Links without an anonymous resolution path (such as non-public VK or Yandex
 Music metadata) and unknown domains return 422 with a human-readable error;
-service failures return 502. The resolver neither uses user accounts nor
+service failures return 502. YouTube metadata extraction uses `--no-playlist`:
+a watch URL containing both `v` and `list` resolves only the selected `v` video,
+while a playlist-only URL without a video ID returns the unsupported-service
+422 before a subprocess starts. The resolver neither uses user accounts nor
 fabricates metadata.
 
 Spotify also supports an authorized path. When
@@ -202,9 +205,11 @@ type Result struct {
 The MVP implementation uses **yt-dlp**. Source selection is explicit: a track
 whose resolver identity is `youtube` is looked up using its original source URL,
 while Spotify, VK, Yandex Music, and any other resolver identity use the
-metadata search `artist - title` (`yt-dlp --skip-download --dump-json -f
-bestaudio "ytsearch:..."`). An arbitrary URL is never treated as directly
-streamable without the YouTube resolver identity. The resolved direct audio URL
+metadata search `artist - title` (`yt-dlp --skip-download --dump-json
+--no-playlist -f bestaudio "ytsearch:..."`). An arbitrary URL is never treated
+as directly streamable without the YouTube resolver identity. All stream
+lookups use `--no-playlist`, so a direct watch URL cannot expand its `list`
+parameter. The resolved direct audio URL
 is cached for about five minutes (thread-safe TTL cache with race-free
 concurrent misses); direct-path entries are keyed by source URL and search-path
 entries by artist/title. The external yt-dlp invocation is behind an injectable
@@ -236,8 +241,9 @@ served through `stream.ServeStream`.
 - Port `8080`, configured through the `QMIX_ADDR` environment variable.
 - Streaming requires **yt-dlp** for audio lookup. It is included in the Docker
   image (`apk add yt-dlp`, with the version pinned in `Dockerfile`). Outside the
-  container, the binary must be on PATH or specified with `QMIX_YTDLP_BIN`.
-  Link-cache behavior is configured through `QMIX_STREAM_CACHE_TTL` (default
+  container, the binary must be on PATH or specified with `QMIX_YTDLP_BIN` for
+  both metadata resolution and streaming. Link-cache behavior is configured
+  through `QMIX_STREAM_CACHE_TTL` (default
   `5m`; a negative value disables the cache). The metadata resolver and stream
   search apply separate server-side yt-dlp deadlines (30 seconds and 60 seconds
   by default), configured with `QMIX_YTDLP_METADATA_TIMEOUT` and

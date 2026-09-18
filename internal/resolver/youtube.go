@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -29,9 +31,9 @@ const ytdlpBin = "yt-dlp"
 // incoming request lifetime. Metadata calls are expected to finish quickly.
 const ytdlpMetadataTimeout = 30 * time.Second
 
-// Run invokes `yt-dlp --skip-download --dump-json`.
+// Run invokes `yt-dlp --skip-download --dump-json --no-playlist`.
 func (r ytdlpRunner) Run(ctx context.Context, url string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, r.bin, "--skip-download", "--dump-json", "--no-warnings", url)
+	cmd := exec.CommandContext(ctx, r.bin, "--skip-download", "--dump-json", "--no-warnings", "--no-playlist", url)
 	return cmd.Output()
 }
 
@@ -52,6 +54,8 @@ type YouTube struct {
 	// Runner drives the metadata fetch. If nil, the default yt-dlp exec runner
 	// is used. Tests inject a fake runner returning fixture JSON.
 	Runner Runner
+	// Bin overrides the yt-dlp executable path for the default runner.
+	Bin string
 	// Timeout bounds one metadata lookup. Zero uses ytdlpMetadataTimeout.
 	Timeout time.Duration
 	// Name is the value reported in Track.ResolvedBy. Defaults to "youtube".
@@ -62,7 +66,11 @@ func (y *YouTube) runner() Runner {
 	if y.Runner != nil {
 		return y.Runner
 	}
-	return ytdlpRunner{bin: ytdlpBin}
+	bin := y.Bin
+	if bin == "" {
+		bin = ytdlpBin
+	}
+	return ytdlpRunner{bin: bin}
 }
 
 func (y *YouTube) name() string {
@@ -79,8 +87,57 @@ func (y *YouTube) timeout() time.Duration {
 	return y.Timeout
 }
 
+func hasNonBlankQueryValue(u *url.URL, key string) bool {
+	for _, value := range u.Query()[key] {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasYouTubeVideoID(u *url.URL) bool {
+	if hasNonBlankQueryValue(u, "v") {
+		return true
+	}
+
+	path := strings.Trim(u.Path, "/")
+	if strings.EqualFold(u.Hostname(), "youtu.be") {
+		id, _, _ := strings.Cut(path, "/")
+		return strings.TrimSpace(id) != ""
+	}
+
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	id := strings.TrimSpace(parts[1])
+	if id == "" {
+		return false
+	}
+	switch parts[0] {
+	case "embed":
+		return !strings.EqualFold(id, "videoseries")
+	case "live", "shorts", "v":
+		return true
+	default:
+		return false
+	}
+}
+
+func playlistOnlyYouTubeURL(rawurl string) bool {
+	u, err := url.Parse(rawurl)
+	if err != nil || !hasNonBlankQueryValue(u, "list") {
+		return false
+	}
+	return !hasYouTubeVideoID(u)
+}
+
 // Resolve fetches metadata for a YouTube url through the runner.
 func (y *YouTube) Resolve(ctx context.Context, rawurl string) (*Track, error) {
+	if playlistOnlyYouTubeURL(rawurl) {
+		return nil, errors.Join(ErrUnsupported, errors.New("youtube: playlist URLs require a video ID"))
+	}
 	runCtx, cancel := context.WithTimeout(ctx, y.timeout())
 	defer cancel()
 	out, err := y.runner().Run(runCtx, rawurl)

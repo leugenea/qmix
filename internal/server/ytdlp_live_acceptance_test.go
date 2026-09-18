@@ -63,7 +63,7 @@ func (r *acceptanceYTDLPRunner) Search(ctx context.Context, input string) ([]byt
 	r.mu.Unlock()
 
 	cmd := exec.CommandContext(ctx, r.bin,
-		"--skip-download", "--dump-json", "--no-warnings",
+		"--skip-download", "--dump-json", "--no-warnings", "--no-playlist",
 		"-f", "bestaudio", input,
 	)
 	out, err := cmd.Output()
