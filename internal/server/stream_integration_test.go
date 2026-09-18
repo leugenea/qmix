@@ -99,6 +99,29 @@ func TestStreamEndpointFull(t *testing.T) {
 	}
 }
 
+// TestStreamEndpointPreservesYouTubeSourceIdentity guards qmix#128: advancing
+// the queue must retain the resolver's source URL and identity for streaming.
+func TestStreamEndpointPreservesYouTubeSourceIdentity(t *testing.T) {
+	const source = "https://www.youtube.com/watch?v=exact-video-id"
+	sb := &stubStreamBackend{res: streamBodyResult("audio-data")}
+	s, _ := newStreamServer(sb)
+	s.Resolver = stubResolver{meta: &resolver.Track{
+		Title: "Colliding Song", Artist: "Colliding Artist",
+		Source: source, ResolvedBy: "youtube",
+	}}
+	mux := newTestMux(s)
+	code, token := createRoom(t, mux)
+	startCurrentTrack(t, mux, code, token, source)
+
+	rec := doReq(t, mux, http.MethodGet, "/rooms/"+code+"/current/stream", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if sb.last == nil || sb.last.URL != source || sb.last.ResolvedBy != "youtube" {
+		t.Fatalf("backend track = %+v, want URL %q resolved by youtube", sb.last, source)
+	}
+}
+
 // TestStreamEndpointSearchDeadline verifies a hung yt-dlp search is terminated
 // by the backend deadline and exposed as a bounded 502 API response (qmix#116).
 func TestStreamEndpointSearchDeadline(t *testing.T) {

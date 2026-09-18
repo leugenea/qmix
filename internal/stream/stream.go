@@ -1,6 +1,6 @@
 // Package stream finds and serves the audio stream for a tracked song. A
-// StreamBackend maps track metadata (title, artist) to a direct audio source
-// (the first backend is yt-dlp, searching YouTube); the proxy handler serves
+// StreamBackend maps an explicitly supported source URL or track metadata to a
+// direct audio source (the first backend is yt-dlp); the proxy handler serves
 // that source to clients with HTTP Range/seek support.
 //
 // The audio itself always flows through a single StreamBackend, regardless of
@@ -21,13 +21,16 @@ var ErrNotFound = errors.New("no audio source found")
 // source (exec, HTTP, transport). The HTTP layer maps it to a 502.
 var ErrService = errors.New("stream service error")
 
-// Track is the subset of track metadata a StreamBackend needs to locate audio.
+// Track is the subset of source identity and metadata a StreamBackend needs to
+// locate audio.
 // The server adapts its own Track into this value before calling the backend,
 // keeping the stream package decoupled from the server.
 type Track struct {
-	ID     string
-	Title  string
-	Artist string
+	ID         string
+	URL        string
+	Title      string
+	Artist     string
+	ResolvedBy string
 }
 
 // Result is the outcome of Stream: an open audio stream plus the metadata the

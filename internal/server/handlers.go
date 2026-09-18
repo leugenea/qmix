@@ -422,11 +422,13 @@ func (s *Server) skipRoom(room *Room, token string) (map[string]interface{}, err
 	next := room.Queue[0]
 	room.Queue = room.Queue[1:]
 	room.Current = &Current{
-		TrackID: next.ID,
-		PosSec:  0,
-		State:   "playing",
-		Title:   next.Title,
-		Artist:  next.Artist,
+		TrackID:    next.ID,
+		PosSec:     0,
+		State:      "playing",
+		URL:        next.URL,
+		Title:      next.Title,
+		Artist:     next.Artist,
+		ResolvedBy: next.ResolvedBy,
 	}
 	s.store.touch(room)
 	cur := *room.Current
@@ -592,7 +594,13 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	cur := room.Current
 	var track *stream.Track
 	if cur != nil {
-		track = &stream.Track{ID: cur.TrackID, Title: cur.Title, Artist: cur.Artist}
+		track = &stream.Track{
+			ID:         cur.TrackID,
+			URL:        cur.URL,
+			Title:      cur.Title,
+			Artist:     cur.Artist,
+			ResolvedBy: cur.ResolvedBy,
+		}
 	}
 	s.store.mu.Unlock()
 	if track == nil || strings.TrimSpace(track.Title) == "" {
