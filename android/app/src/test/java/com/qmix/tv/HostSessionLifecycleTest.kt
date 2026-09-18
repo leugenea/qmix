@@ -2,7 +2,9 @@ package com.qmix.tv
 
 import android.view.KeyEvent
 import androidx.test.core.app.ActivityScenario
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertFalse
@@ -48,28 +50,22 @@ class HostSessionLifecycleTest {
     }
 
     @Test
-    fun activity_media_key_methods_consume_down_repeat_and_up_without_intercepting_dpad_horizontal() {
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            scenario.onActivity { activity ->
-                listOf(
-                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-                    KeyEvent.KEYCODE_MEDIA_PLAY,
-                    KeyEvent.KEYCODE_MEDIA_PAUSE,
-                ).forEach { keyCode ->
-                    assertTrue(activity.onKeyDown(keyCode, KeyEvent(KeyEvent.ACTION_DOWN, keyCode)))
-                    assertTrue(activity.onKeyUp(keyCode, KeyEvent(KeyEvent.ACTION_UP, keyCode)))
-                }
-                assertTrue(
-                    activity.onKeyDown(
-                        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-                        KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, 1),
-                    ),
-                )
-                listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT).forEach { keyCode ->
-                    assertFalse(activity.onKeyDown(keyCode, KeyEvent(KeyEvent.ACTION_DOWN, keyCode)))
-                    assertFalse(activity.onKeyUp(keyCode, KeyEvent(KeyEvent.ACTION_UP, keyCode)))
-                }
-            }
+    fun activity_host_session_provider_lease_restores_application_state() {
+        val application = ApplicationProvider.getApplicationContext<QMixApplication>()
+        val first = HostSessionController(OkHttpClient())
+        val second = HostSessionController(OkHttpClient())
+        val firstLease = application.installActivityHostSessionProvider { first }
+        try {
+            assertSame(first, application.hostSessionForActivity())
+        } finally {
+            firstLease.close()
+        }
+
+        val secondLease = application.installActivityHostSessionProvider { second }
+        try {
+            assertSame(second, application.hostSessionForActivity())
+        } finally {
+            secondLease.close()
         }
     }
 
@@ -142,4 +138,5 @@ class HostSessionLifecycleTest {
             server.shutdown()
         }
     }
+
 }

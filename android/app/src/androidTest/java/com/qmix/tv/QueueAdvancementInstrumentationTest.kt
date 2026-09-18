@@ -194,6 +194,7 @@ class QueueAdvancementInstrumentationTest {
         val commands = mutableListOf<(QueueAdvanceCommandResult) -> Unit>()
         val playback = RecordingPlaybackEngine()
         var retry: ((RoomFetchResult) -> Unit)? = null
+        val retryRequests = mutableListOf<String>()
         val selected = RoomState(
             "ABCD",
             CurrentTrack("current", 0, "playing", "Current", "Artist"),
@@ -219,7 +220,8 @@ class QueueAdvancementInstrumentationTest {
                     roomCode = credentials.code,
                     streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                     playbackEngine = playback,
-                    reconciler = RoomStateFetcher { _, callback ->
+                    reconciler = RoomStateFetcher { roomCode, callback ->
+                        retryRequests += roomCode
                         retry = callback
                         Cancelable { retry = null }
                     },
@@ -236,10 +238,46 @@ class QueueAdvancementInstrumentationTest {
         assertEquals(listOf("current"), playback.prepared.map(PlaybackMedia::trackId))
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
 
-        playback.emit(PlaybackState("current", PlaybackStatus.READY, isPlaying = true))
+        playback.emit(
+            PlaybackState(
+                "current",
+                PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 20_000,
+                durationMs = 60_000,
+                isSeekable = true,
+            ),
+        )
         assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
-        controller.pausePlayback()
-        controller.resumePlayback()
+        controller.onSeekBy(Long.MIN_VALUE)
+        controller.onSeekBy(Long.MAX_VALUE)
+        assertEquals(listOf(0L, 60_000L), playback.seeks)
+        playback.emit(
+            PlaybackState(
+                "current",
+                PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 20_000,
+                durationMs = null,
+                isSeekable = true,
+            ),
+        )
+        controller.onSeekBy(10_000)
+        playback.emit(
+            PlaybackState(
+                "current",
+                PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 20_000,
+                durationMs = 60_000,
+                isSeekable = false,
+            ),
+        )
+        controller.onSeekBy(10_000)
+        assertEquals(listOf(0L, 60_000L), playback.seeks)
+        controller.onPlayPause()
+        assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
+        controller.onPlayPause()
         assertEquals(2, playback.playCount)
         playback.emit(
             PlaybackState(
@@ -248,7 +286,8 @@ class QueueAdvancementInstrumentationTest {
                 error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
             ),
         )
-        controller.retryCurrent()
+        controller.onRetryCurrent()
+        assertEquals(listOf("ABCD"), retryRequests)
         checkNotNull(retry)(RoomFetchResult.Success(selected))
         assertEquals(listOf("current", "current"), playback.prepared.map(PlaybackMedia::trackId))
 
@@ -275,6 +314,7 @@ class QueueAdvancementInstrumentationTest {
         override var state = PlaybackState()
             private set
         val prepared = mutableListOf<PlaybackMedia>()
+        val seeks = mutableListOf<Long>()
         var playCount = 0
         var pauseCount = 0
         private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
@@ -287,7 +327,7 @@ class QueueAdvancementInstrumentationTest {
 
         override fun play() { playCount++ }
         override fun pause() { pauseCount++ }
-        override fun seekTo(positionMs: Long) = Unit
+        override fun seekTo(positionMs: Long) { seeks += positionMs }
         override fun release() = Unit
         override fun addListener(listener: (PlaybackState) -> Unit) { listeners += listener }
         override fun removeListener(listener: (PlaybackState) -> Unit) { listeners -= listener }

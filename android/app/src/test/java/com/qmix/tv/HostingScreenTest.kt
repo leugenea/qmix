@@ -2,10 +2,12 @@ package com.qmix.tv
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -463,6 +465,44 @@ class HostingScreenTest {
             assertEquals(1, retries)
             assertEquals(1, nextActions)
         }
+    }
+
+    @Test
+    fun raw_playback_error_detail_is_absent_from_merged_and_unmerged_semantics() {
+        val rawUpstreamDetail = "QMIX_RAW_UPSTREAM_DETAIL_MUST_NEVER_RENDER_8f13c2"
+        composeRule.setContent {
+            HostingScreen(
+                state = HostingState.LiveRoom(
+                    GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                    RoomSyncState.Active(
+                        "ABCD",
+                        RoomState(
+                            "ABCD",
+                            CurrentTrack("current-1", 0, "playing", "Current", "Artist"),
+                            emptyList(),
+                        ),
+                        Freshness.FRESH,
+                        LiveConnection.CONNECTED,
+                    ),
+                    playback = LocalPlaybackState(
+                        trackId = "current-1",
+                        status = LocalPlaybackStatus.ERROR,
+                        error = PlaybackError(PlaybackErrorKind.HTTP, rawUpstreamDetail, 502),
+                    ),
+                ),
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+            )
+        }
+
+        composeRule.onNodeWithText(
+            "Playback error: Stream request failed (HTTP 502).",
+            substring = true,
+        ).assertExists()
+        val leakedDetail = hasText(rawUpstreamDetail, substring = true)
+        composeRule.onAllNodes(leakedDetail).assertCountEquals(0)
+        composeRule.onAllNodes(leakedDetail, useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test

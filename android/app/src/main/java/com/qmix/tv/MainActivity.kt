@@ -14,7 +14,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        controller = (application as QMixApplication).hostSession
+        controller = (application as QMixApplication).hostSessionForActivity()
         var uiState by mutableStateOf(controller.state)
         setContent {
             DisposableEffect(controller) {

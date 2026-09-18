@@ -288,8 +288,19 @@ class HostSessionControllerTest {
             ),
         )
         assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
-        controller.onSeekBy(-10_000)
-        assertEquals(listOf(0L), engine.seeks)
+        controller.onSeekBy(Long.MIN_VALUE)
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 55_000,
+                durationMs = 60_000,
+                isSeekable = true,
+            ),
+        )
+        controller.onSeekBy(Long.MAX_VALUE)
+        assertEquals(listOf(0L, 60_000L), engine.seeks)
         controller.onPlayPause()
         assertEquals(1, engine.pauseCount)
         assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
@@ -331,7 +342,8 @@ class HostSessionControllerTest {
         assertEquals("two", presentation.synchronization.room?.current?.trackId)
         assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
 
-        controller.retryCurrent()
+        controller.onRetryCurrent()
+        assertEquals(listOf("ABCD", "ABCD"), reconciler.calls)
         reconciler.complete(RoomFetchResult.Success(selected))
         assertEquals(listOf("one", "one"), engine.prepared.map(PlaybackMedia::trackId))
         assertEquals(4, engine.playCount)
@@ -426,9 +438,11 @@ class HostSessionControllerTest {
 
     private class RecordingReconciler : RoomStateFetcher {
         private var callback: ((RoomFetchResult) -> Unit)? = null
+        val calls = mutableListOf<String>()
 
         override fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable {
             assertEquals("ABCD", roomCode)
+            calls += roomCode
             this.callback = callback
             return Cancelable { }
         }
