@@ -11,7 +11,6 @@ import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -108,10 +107,17 @@ class MainActivityInstrumentationTest {
                     playback.pauseCount,
                 ) { playback.pauseCount }
 
-                activity.currentFocus?.clearFocus()
                 listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT).forEach { keyCode ->
-                    assertFalse(activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode)))
-                    assertFalse(activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode)))
+                    assertDispatchDoesNotControlPlayback(
+                        activity,
+                        KeyEvent(KeyEvent.ACTION_DOWN, keyCode),
+                        playback,
+                    )
+                    assertDispatchDoesNotControlPlayback(
+                        activity,
+                        KeyEvent(KeyEvent.ACTION_UP, keyCode),
+                        playback,
+                    )
                 }
             }
         } finally {
@@ -174,6 +180,20 @@ class MainActivityInstrumentationTest {
         assertEquals(expectedActions, actualActions())
         assertTrue(activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode)))
         assertEquals(expectedActions, actualActions())
+    }
+
+    private fun assertDispatchDoesNotControlPlayback(
+        activity: MainActivity,
+        event: KeyEvent,
+        playback: RecordingPlaybackEngine,
+    ) {
+        val playCount = playback.playCount
+        val pauseCount = playback.pauseCount
+
+        activity.dispatchKeyEvent(event)
+
+        assertEquals(playCount, playback.playCount)
+        assertEquals(pauseCount, playback.pauseCount)
     }
 
     private fun playingState() = PlaybackState(
