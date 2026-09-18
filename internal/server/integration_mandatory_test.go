@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/leugenea/qmix/internal/resolver"
+	"github.com/leugenea/qmix/internal/stream"
 )
 
 // integServe serves h on an ephemeral real 127.0.0.1 socket and returns its
@@ -147,25 +148,33 @@ func integSkip(t *testing.T, base, code, token string) integResp {
 // fakeYtdlp writes a fake yt-dlp executable and wires both consumers to it:
 // the resolver finds "yt-dlp" on PATH, the stream backend reads QMIX_YTDLP_BIN
 // from the environment (when App.Handler is built). Metadata requests get
-// canned track JSON; ytsearch:* requests (stream backend) get the mock
-// upstream URL.
-func fakeYtdlp(t *testing.T, upstreamURL string) {
+// canned track JSON; stream requests get the mock upstream URL and append
+// their exact final yt-dlp input to the returned capture file.
+func fakeYtdlp(t *testing.T, upstreamURL string) (bin, capture string) {
 	t.Helper()
 	dir := t.TempDir()
+	capture = filepath.Join(dir, "stream-inputs")
 	script := "#!/bin/sh\n" +
 		"# fake yt-dlp for integration tests (qmix#17)\n" +
+		"stream=false\n" +
+		"input=''\n" +
 		"for a in \"$@\"; do\n" +
-		"  case \"$a\" in\n" +
-		"    ytsearch:*) echo '{\"url\":\"" + upstreamURL + "\"}'; exit 0 ;;\n" +
-		"  esac\n" +
+		"  input=\"$a\"\n" +
+		"  [ \"$a\" = '-f' ] && stream=true\n" +
 		"done\n" +
+		"if [ \"$stream\" = true ]; then\n" +
+		"  printf '%s\\n' \"$input\" >> \"" + capture + "\"\n" +
+		"  echo '{\"url\":\"" + upstreamURL + "\"}'\n" +
+		"  exit 0\n" +
+		"fi\n" +
 		"echo '{\"title\":\"Fake Song\",\"artist\":\"Fake Artist\",\"duration\":123}'\n"
-	bin := filepath.Join(dir, "yt-dlp")
+	bin = filepath.Join(dir, "yt-dlp")
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake yt-dlp: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("QMIX_YTDLP_BIN", bin)
+	return bin, capture
 }
 
 // mockAudioUpstream serves a fixed audio payload with single-byte-range
@@ -220,7 +229,7 @@ func TestIntegrationHealthz(t *testing.T) {
 // Scenario 2: room lifecycle over the full App: create → get by code → add
 // track → skip (host token enforced) → reorder.
 func TestIntegrationRoomLifecycle(t *testing.T) {
-	fakeYtdlp(t, "http://127.0.0.1:1/never-called")
+	_, _ = fakeYtdlp(t, "http://127.0.0.1:1/never-called")
 	app := NewApp()
 	t.Cleanup(app.Close)
 	base := integServe(t, app.Handler())
@@ -303,7 +312,7 @@ func TestIntegrationRoomLifecycle(t *testing.T) {
 // on mutations (queue_updated / track_changed / player_state), snapshot again
 // on reconnect.
 func TestIntegrationSSE(t *testing.T) {
-	fakeYtdlp(t, "http://127.0.0.1:1/never-called")
+	_, _ = fakeYtdlp(t, "http://127.0.0.1:1/never-called")
 	app := NewApp()
 	t.Cleanup(app.Close)
 	base := integServe(t, app.Handler())
@@ -457,7 +466,7 @@ func TestIntegrationResolverMockUnknownLink(t *testing.T) {
 // built) and streams from a local mock upstream with Range support.
 func TestIntegrationStreamFakeYtdlp(t *testing.T) {
 	upstream, audio := mockAudioUpstream(t)
-	fakeYtdlp(t, upstream+"/audio")
+	bin, capture := fakeYtdlp(t, upstream+"/audio")
 
 	app := NewApp()
 	t.Cleanup(app.Close)
@@ -512,12 +521,48 @@ func TestIntegrationStreamFakeYtdlp(t *testing.T) {
 	if string(b) != string(audio[:100]) {
 		t.Fatalf("partial body len = %d, want 100", len(b))
 	}
+
+	inputs, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read yt-dlp inputs: %v", err)
+	}
+	const youtubeURL = "https://www.youtube.com/watch?v=fake1"
+	if got := strings.Fields(string(inputs)); len(got) != 1 || got[0] != youtubeURL {
+		t.Fatalf("YouTube stream inputs = %q, want exact submitted URL %q", got, youtubeURL)
+	}
+
+	// A non-YouTube resolver identity remains on the metadata-search path.
+	searchServer := NewServer(NewStore(time.Hour, time.Hour, &seqCodeGen{}), NewHub())
+	searchServer.Resolver = stubResolver{meta: &resolver.Track{
+		Title: "Fake Song", Artist: "Fake Artist",
+		Source: "https://open.spotify.com/track/collision", ResolvedBy: "spotify",
+	}}
+	searchServer.StreamBackend = &stream.YTDLP{Bin: bin, CacheTTL: -1}
+	searchMux := http.NewServeMux()
+	searchServer.Routes(searchMux)
+	searchBase := integServe(t, searchMux)
+	searchCode, searchToken := integCreateRoom(t, searchBase)
+	integAddTrack(t, searchBase, searchCode, "https://open.spotify.com/track/collision")
+	if r := integSkip(t, searchBase, searchCode, searchToken); r.status != http.StatusOK {
+		t.Fatalf("search-path skip status = %d; body=%s", r.status, r.body)
+	}
+	if r := integDo(t, http.MethodGet, searchBase+"/rooms/"+searchCode+"/current/stream", "", ""); r.status != http.StatusOK {
+		t.Fatalf("search-path stream status = %d; body=%s", r.status, r.body)
+	}
+	inputs, err = os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read yt-dlp inputs: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(inputs)), "\n")
+	if len(lines) != 2 || lines[0] != youtubeURL || lines[1] != "ytsearch:Fake Artist - Fake Song" {
+		t.Fatalf("stream inputs = %q, want direct URL then metadata search", lines)
+	}
 }
 
 // Scenario 6: an idle empty room expires on the short TTL; a room with a queue
 // survives that window but expires on the longer non-empty TTL.
 func TestIntegrationRoomTTL(t *testing.T) {
-	fakeYtdlp(t, "http://127.0.0.1:1/never-called")
+	_, _ = fakeYtdlp(t, "http://127.0.0.1:1/never-called")
 	app := &App{
 		Store: NewStore(80*time.Millisecond, 25*time.Millisecond, nil),
 		Hub:   NewHub(),

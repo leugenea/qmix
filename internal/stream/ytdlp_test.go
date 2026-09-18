@@ -49,19 +49,58 @@ func (r *blockingRunner) Search(ctx context.Context, _ string) ([]byte, error) {
 
 const searchFixture = `{"title":"Some Song","artist":"Some Artist","url":"https://media.example/audio.webm"}`
 
-// TestYtdlpResolveURL verifies a resolved URL comes straight from the fixture.
-func TestYtdlpResolveURL(t *testing.T) {
+// TestYtdlpYouTubeSourceUsesOriginalURL guards qmix#128: a resolved YouTube
+// source must be passed back to yt-dlp unchanged, not replaced by a metadata
+// search that could select a different video.
+func TestYtdlpYouTubeSourceUsesOriginalURL(t *testing.T) {
+	const source = "https://www.youtube.com/watch?v=exact-video-id"
 	r := &fakeRunner{out: []byte(searchFixture)}
 	b := &YTDLP{Runner: r, CacheTTL: -1}
-	url, err := b.resolveURL(context.Background(), &Track{ID: "1", Title: "Some Song", Artist: "Some Artist"})
+
+	_, err := b.resolveURL(context.Background(), &Track{
+		ID:         "1",
+		URL:        source,
+		Title:      "Colliding Song",
+		Artist:     "Colliding Artist",
+		ResolvedBy: "youtube",
+	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if url != "https://media.example/audio.webm" {
-		t.Fatalf("url = %q", url)
+	if len(r.got) != 1 || r.got[0] != source {
+		t.Fatalf("yt-dlp input = %q, want original source %q", r.got, source)
 	}
-	if len(r.got) != 1 || r.got[0] != "Some Artist - Some Song" {
-		t.Fatalf("query = %q, want %q", r.got, "Some Artist - Some Song")
+}
+
+// TestYtdlpResolveURL verifies non-YouTube sources keep the metadata-search
+// fallback and that the resolved audio URL comes straight from the fixture.
+func TestYtdlpResolveURL(t *testing.T) {
+	for _, tc := range []struct {
+		resolvedBy string
+		url        string
+	}{
+		{resolvedBy: "spotify", url: "https://open.spotify.com/track/x"},
+		{resolvedBy: "vk", url: "https://vk.com/audio1_2"},
+		{resolvedBy: "yandex", url: "https://music.yandex.ru/track/3"},
+		{resolvedBy: "vkyandex", url: "https://music.yandex.ru/track/4"},
+	} {
+		t.Run(tc.resolvedBy, func(t *testing.T) {
+			r := &fakeRunner{out: []byte(searchFixture)}
+			b := &YTDLP{Runner: r, CacheTTL: -1}
+			url, err := b.resolveURL(context.Background(), &Track{
+				ID: "1", URL: tc.url,
+				Title: "Some Song", Artist: "Some Artist", ResolvedBy: tc.resolvedBy,
+			})
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if url != "https://media.example/audio.webm" {
+				t.Fatalf("url = %q", url)
+			}
+			if len(r.got) != 1 || r.got[0] != "ytsearch:Some Artist - Some Song" {
+				t.Fatalf("input = %q, want %q", r.got, "ytsearch:Some Artist - Some Song")
+			}
+		})
 	}
 }
 
@@ -74,8 +113,8 @@ func TestYtdlpQueryFallbackTitle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(r.got) != 1 || r.got[0] != "Instrumental" {
-		t.Fatalf("query = %q, want Instrumental", r.got)
+	if len(r.got) != 1 || r.got[0] != "ytsearch:Instrumental" {
+		t.Fatalf("input = %q, want ytsearch:Instrumental", r.got)
 	}
 }
 
@@ -140,6 +179,32 @@ func TestYtdlpFirstLineOnly(t *testing.T) {
 	}
 	if url != "https://m.example/1" {
 		t.Fatalf("url = %q, want first result url", url)
+	}
+}
+
+// TestYtdlpDirectCacheKeyUsesSourceURL guards qmix#128: metadata collisions
+// must not share a direct-path entry, while metadata changes for the same
+// source URL must continue to reuse it.
+func TestYtdlpDirectCacheKeyUsesSourceURL(t *testing.T) {
+	const (
+		first  = "https://www.youtube.com/watch?v=first-id"
+		second = "https://www.youtube.com/watch?v=second-id"
+	)
+	r := &fakeRunner{out: []byte(searchFixture)}
+	b := &YTDLP{Runner: r, CacheTTL: time.Minute}
+
+	tracks := []*Track{
+		{URL: first, Title: "Collision", Artist: "Artist", ResolvedBy: "youtube"},
+		{URL: second, Title: "Collision", Artist: "Artist", ResolvedBy: "youtube"},
+		{URL: first, Title: "Changed metadata", Artist: "Other", ResolvedBy: "youtube"},
+	}
+	for _, track := range tracks {
+		if _, err := b.resolveURL(context.Background(), track); err != nil {
+			t.Fatalf("resolve %q: %v", track.URL, err)
+		}
+	}
+	if len(r.got) != 2 || r.got[0] != first || r.got[1] != second {
+		t.Fatalf("yt-dlp inputs = %q, want [%q %q]", r.got, first, second)
 	}
 }
 
@@ -358,7 +423,7 @@ func TestYtdlpRunnerSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := ytdlpRunner{bin: bin}
-	out, err := r.Search(context.Background(), "Artist - Song")
+	out, err := r.Search(context.Background(), "ytsearch:Artist - Song")
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -407,10 +472,11 @@ func TestYtdlpStreamDerivesContentRange(t *testing.T) {
 // rather than a panic or type confusion.
 func TestYtdlpCachedNonString(t *testing.T) {
 	c := NewCache(time.Minute)
-	c.entries["\x00x"] = &entry{value: 42, expiry: time.Now().Add(time.Minute)}
+	track := &Track{ID: "1", Title: "x"}
+	c.entries[cacheKey(track)] = &entry{value: 42, expiry: time.Now().Add(time.Minute)}
 	b := &YTDLP{Runner: &fakeRunner{out: []byte(searchFixture)}, CacheTTL: time.Minute}
 	b.SetCache(c)
-	_, err := b.resolveURL(context.Background(), &Track{ID: "1", Title: "x"})
+	_, err := b.resolveURL(context.Background(), track)
 	if !errors.Is(err, ErrService) {
 		t.Fatalf("err = %v, want ErrService", err)
 	}

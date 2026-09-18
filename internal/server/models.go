@@ -26,11 +26,14 @@ type Track struct {
 // Current is the currently playing track. In M1 PosSec is always 0 and State
 // is either "idle" or "playing". Title/Artist keep the audio metadata of the
 // playing track on the room so the stream endpoint and public room view can
-// expose its metadata.
+// expose its metadata. URL and ResolvedBy are retained for internal stream
+// source selection and are not exposed through the current-track API.
 type Current struct {
-	TrackID string
-	PosSec  int
-	State   string
-	Title   string
-	Artist  string
+	TrackID    string
+	PosSec     int
+	State      string
+	URL        string
+	Title      string
+	Artist     string
+	ResolvedBy string
 }

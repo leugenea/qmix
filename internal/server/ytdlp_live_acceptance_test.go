@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +40,15 @@ type acceptanceSelection struct {
 	Duration float64 `json:"duration"`
 }
 
+func streamAcceptanceFixtureTrack() *resolver.Track {
+	return &resolver.Track{
+		Title:       streamAcceptanceFixtureURL,
+		DurationSec: 4059,
+		Source:      streamAcceptanceFixtureURL,
+		ResolvedBy:  "youtube",
+	}
+}
+
 type acceptanceYTDLPRunner struct {
 	bin string
 
@@ -46,14 +57,14 @@ type acceptanceYTDLPRunner struct {
 	selection acceptanceSelection
 }
 
-func (r *acceptanceYTDLPRunner) Search(ctx context.Context, query string) ([]byte, error) {
+func (r *acceptanceYTDLPRunner) Search(ctx context.Context, input string) ([]byte, error) {
 	r.mu.Lock()
 	r.searches++
 	r.mu.Unlock()
 
 	cmd := exec.CommandContext(ctx, r.bin,
 		"--skip-download", "--dump-json", "--no-warnings",
-		"-f", "bestaudio", "ytsearch:"+query,
+		"-f", "bestaudio", input,
 	)
 	out, err := cmd.Output()
 	if err != nil {
@@ -79,6 +90,53 @@ func (r *acceptanceYTDLPRunner) snapshot() (int, acceptanceSelection) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.searches, r.selection
+}
+
+func TestStreamAcceptanceFixtureUsesYouTubeResolver(t *testing.T) {
+	fixture := streamAcceptanceFixtureTrack()
+	if fixture.Source != streamAcceptanceFixtureURL || fixture.ResolvedBy != "youtube" {
+		t.Fatalf("acceptance fixture source = %q resolved by %q, want %q resolved by youtube", fixture.Source, fixture.ResolvedBy, streamAcceptanceFixtureURL)
+	}
+}
+
+func TestAcceptanceYTDLPRunnerPassesCompleteInputUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	capture := filepath.Join(dir, "inputs")
+	bin := filepath.Join(dir, "yt-dlp")
+	script := fmt.Sprintf(`#!/bin/sh
+for input do :; done
+printf '%%s\n' "$input" >> %q
+printf '{"id":"%s","title":"fixture","duration":%d}'
+`, capture, streamAcceptanceFixtureID, streamAcceptanceMinDuration)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake yt-dlp: %v", err)
+	}
+
+	runner := &acceptanceYTDLPRunner{bin: bin}
+	inputs := []string{
+		streamAcceptanceFixtureURL,
+		"ytsearch:Fixture Artist - Fixture Title",
+	}
+	for _, input := range inputs {
+		if _, err := runner.Search(context.Background(), input); err != nil {
+			t.Fatalf("search %q: %v", input, err)
+		}
+	}
+
+	gotInputs, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read captured inputs: %v", err)
+	}
+	if got, want := strings.Split(strings.TrimSpace(string(gotInputs)), "\n"), inputs; !slices.Equal(got, want) {
+		t.Fatalf("yt-dlp inputs = %q, want %q", got, want)
+	}
+	searches, selection := runner.snapshot()
+	if searches != len(inputs) {
+		t.Fatalf("yt-dlp searches = %d, want %d", searches, len(inputs))
+	}
+	if selection.ID != streamAcceptanceFixtureID || selection.Duration != streamAcceptanceMinDuration {
+		t.Fatalf("selection = %+v, want fixture id %q and duration %ds", selection, streamAcceptanceFixtureID, streamAcceptanceMinDuration)
+	}
 }
 
 func skipIfNoStreamAcceptance(t *testing.T) string {
@@ -286,12 +344,7 @@ func TestStreamProxyAcceptanceLive(t *testing.T) {
 		Runner:   runner,
 		CacheTTL: 5 * time.Minute,
 	})
-	s.Resolver = stubResolver{meta: &resolver.Track{
-		Title:       streamAcceptanceFixtureURL,
-		DurationSec: 4059,
-		Source:      streamAcceptanceFixtureURL,
-		ResolvedBy:  "acceptance-fixture",
-	}}
+	s.Resolver = stubResolver{meta: streamAcceptanceFixtureTrack()}
 	mux := newTestMux(s)
 	code, token := createRoom(t, mux)
 	startCurrentTrack(t, mux, code, token, streamAcceptanceFixtureURL)

@@ -29,17 +29,21 @@ In progress / next:
 
 ## Streaming
 
-Audio for the current track is served by **StreamBackend**, which searches
-YouTube through `yt-dlp` by default. When the host presses *skip*, the track
+Audio for the current track is served by **StreamBackend**, using `yt-dlp`.
+When the host presses *skip*, the track
 becomes current and the player retrieves its stream from
 `GET /rooms/{code}/current/stream`.
 
 How it works:
 
-1. The backend searches YouTube using the track metadata (`Artist - Title`) and
+1. Tracks resolved by the YouTube resolver are passed to `yt-dlp` using their
+   original submitted URL, so streaming selects that exact video. Tracks from
+   Spotify, VK, Yandex Music, and other non-YouTube resolvers keep the metadata
+   search path (`Artist - Title`) via
    `yt-dlp --skip-download --dump-json -f bestaudio "ytsearch:..."`.
-2. The direct audio URL is cached for approximately 5 minutes, so repeated
-   requests for the same track do not trigger another search.
+2. The direct audio URL is cached for approximately 5 minutes. Direct YouTube
+   entries are keyed by source URL; metadata-search entries are keyed by artist
+   and title.
 3. The endpoint streams audio with **HTTP Range/seek** support: a full stream
    returns `200`, a satisfiable range returns `206 Partial Content`, and an
    invalid range returns `416`. The `Content-Type`, `Content-Length`,
@@ -67,7 +71,8 @@ real socket with the full `App.Handler()`, without network access or secrets:
 - SSE: snapshot on connection, mutation events, and snapshot on reconnection;
 - adding a track through a mock resolver (unknown link -> 422);
 - streaming through a fake `yt-dlp` (configured with `QMIX_YTDLP_BIN`) and a
-  local mock upstream with Range support: 200/206;
+  local mock upstream with Range support: exact YouTube URL selection,
+  non-YouTube metadata-search fallback, and 200/206 responses;
 - TTL: an empty room expires on the shorter TTL, while a recently active room
   with a queue survives that interval; abandoned non-empty rooms expire after
   24 hours.

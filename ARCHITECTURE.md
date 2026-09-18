@@ -199,13 +199,16 @@ type Result struct {
     AcceptRanges  string        // "bytes" if the upstream supports Range
 }
 ```
-The MVP implementation uses **yt-dlp**. It searches YouTube using the metadata
-`artist - title` (`yt-dlp --skip-download --dump-json -f bestaudio
-"ytsearch:..."`), obtains a direct audio URL, and streams it. The resolved URL
+The MVP implementation uses **yt-dlp**. Source selection is explicit: a track
+whose resolver identity is `youtube` is looked up using its original source URL,
+while Spotify, VK, Yandex Music, and any other resolver identity use the
+metadata search `artist - title` (`yt-dlp --skip-download --dump-json -f
+bestaudio "ytsearch:..."`). An arbitrary URL is never treated as directly
+streamable without the YouTube resolver identity. The resolved direct audio URL
 is cached for about five minutes (thread-safe TTL cache with race-free
-concurrent misses) so repeated requests for the same track do not repeat the
-search. The external yt-dlp invocation is behind an injectable `Runner` (as in
-M2), and audio HTTP requests use an injected `http.Client`.
+concurrent misses); direct-path entries are keyed by source URL and search-path
+entries by artist/title. The external yt-dlp invocation is behind an injectable
+`Runner` (as in M2), and audio HTTP requests use an injected `http.Client`.
 
 The HTTP proxy (`GET /rooms/{code}/current/stream`) forwards the client's Range
 header upstream and reproduces the upstream status and headers: a complete

@@ -30,8 +30,8 @@ const ytdlpSearchTimeout = 60 * time.Second
 // backend behind an injectable seam so tests feed fixture JSON instead of
 // invoking a real binary (same pattern as the resolver's YouTube runner).
 type Runner interface {
-	// Search returns yt-dlp's --dump-json output for a YouTube search query.
-	Search(ctx context.Context, query string) ([]byte, error)
+	// Search returns yt-dlp's --dump-json output for an input URL or search.
+	Search(ctx context.Context, input string) ([]byte, error)
 }
 
 // ytdlpRunner shells out to yt-dlp requesting best audio only (no download).
@@ -39,13 +39,13 @@ type ytdlpRunner struct {
 	bin string
 }
 
-// Search runs `yt-dlp --skip-download --dump-json -f bestaudio "ytsearch:q"`.
-// The --dump-json document for the top result includes the direct audio URL.
-func (r ytdlpRunner) Search(ctx context.Context, query string) ([]byte, error) {
+// Search runs yt-dlp for input, which is either an original YouTube URL or a
+// ytsearch query. The --dump-json document includes the direct audio URL.
+func (r ytdlpRunner) Search(ctx context.Context, input string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, r.bin,
 		"--skip-download", "--dump-json", "--no-warnings",
 		"-f", "bestaudio",
-		"ytsearch:"+query,
+		input,
 	)
 	return cmd.Output()
 }
@@ -56,9 +56,10 @@ type searchResult struct {
 	URL string `json:"url"`
 }
 
-// YTDLP locates and streams audio by searching YouTube via yt-dlp. Resolved
-// direct audio URLs are cached for ~5 minutes so repeated streams of the same
-// track avoid re-searching. The HTTP fetch itself is done by the Client.
+// YTDLP locates and streams audio via yt-dlp. YouTube-resolved tracks use their
+// source URL; other tracks search by metadata. Resolved direct audio URLs are
+// cached for ~5 minutes so repeated streams avoid another lookup. The HTTP
+// fetch itself is done by the Client.
 type YTDLP struct {
 	// Runner drives the YouTube search. If nil, the default yt-dlp exec runner
 	// is used. Tests inject a fake runner returning fixture JSON.
@@ -156,8 +157,14 @@ func (b *YTDLP) SetCache(c *Cache) *Cache {
 	return prev
 }
 
-// cacheKey builds a stable key for a track so the same song reuses its URL.
-func cacheKey(t *Track) string { return t.Artist + "\x00" + t.Title }
+// cacheKey builds a stable key for the selected yt-dlp input. Direct YouTube
+// paths use the source URL, preventing metadata collisions from sharing audio.
+func cacheKey(t *Track) string {
+	if source, ok := directSource(t); ok {
+		return "source\x00" + source
+	}
+	return "search\x00" + t.Artist + "\x00" + t.Title
+}
 
 // searchQuery is the YouTube search string for a track: "Artist - Title".
 func searchQuery(t *Track) string {
@@ -165,6 +172,19 @@ func searchQuery(t *Track) string {
 		return strings.TrimSpace(t.Artist) + " - " + strings.TrimSpace(t.Title)
 	}
 	return strings.TrimSpace(t.Title)
+}
+
+// ytdlpInput preserves an original URL only when the resolver explicitly
+// identifies it as YouTube. Other sources continue to use metadata search.
+func ytdlpInput(t *Track) string {
+	if source, ok := directSource(t); ok {
+		return source
+	}
+	return "ytsearch:" + searchQuery(t)
+}
+
+func directSource(t *Track) (string, bool) {
+	return t.URL, t.ResolvedBy == "youtube" && strings.TrimSpace(t.URL) != ""
 }
 
 // resolveURL finds the direct audio URL for track, honoring the URL cache.
@@ -199,7 +219,7 @@ func (b *YTDLP) resolveURL(ctx context.Context, t *Track) (string, error) {
 func (b *YTDLP) searchURL(ctx context.Context, t *Track) (string, error) {
 	searchCtx, cancel := context.WithTimeout(ctx, b.searchTimeout())
 	defer cancel()
-	out, err := b.runner().Search(searchCtx, searchQuery(t))
+	out, err := b.runner().Search(searchCtx, ytdlpInput(t))
 	if err != nil {
 		return "", fmt.Errorf("ytdlp: %w: %w", ErrService, err)
 	}
