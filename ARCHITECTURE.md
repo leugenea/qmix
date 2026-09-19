@@ -127,14 +127,17 @@ through `StreamBackend` and caches the URL with a TTL
 - `POST /rooms` — create a room → `{code, host_token, url}` (`url` = `/r/{code}`)
 - `GET /rooms/{code}` — get public room state (`code`, `current`, and `queue`; no `host_token`)
 - `POST /rooms/{code}/queue` — append a track with `{url}`; the request body is
-  limited to 4 KiB and each room holds at most 100 queued tracks
+  limited to 4 KiB and each room holds at most 100 queued tracks. When the
+  shared yt-dlp capacity queue is full, resolution is rejected with `503` plus
+  `Retry-After` (qmix#130)
 - `GET /r/{code}` — get the guest room page (no login)
 - `POST /r/{code}/queue` — append a track from the guest page; the response
   includes a machine-readable status for the UI, including `queue_full` and
-  `request_too_large`
+  `request_too_large`; capacity overload is `503` with the `overloaded` code
+  plus `Retry-After` (qmix#130)
 - `PATCH /rooms/{code}/queue` — reorder the queue with `{"order": [trackID, ...]}` (host only; exact permutation of IDs)
 - `POST /rooms/{code}/skip` — advance to the next track (host only)
-- `GET /rooms/{code}/current/stream` — stream the current track with Range/seek support: 200 / 206 / 416; 404 when there is no current track
+- `GET /rooms/{code}/current/stream` — stream the current track with Range/seek support: 200 / 206 / 416; 404 when there is no current track; 503 plus `Retry-After` when the shared yt-dlp capacity queue is full (qmix#130)
 - `GET /healthz` — unconditional liveness: `200 {"status":"ok"}`
 - `GET /readyz` — current yt-dlp readiness: `200 {"status":"ready"}` only
   while the configured/default executable is resolvable and executable;
@@ -227,6 +230,28 @@ invalid or unsatisfiable range returns 416. `Content-Type`, `Content-Length`,
 404; search or network failure: 502) are not converted to 500. Responses are
 served through `stream.ServeStream`.
 
+**yt-dlp capacity limiter** (qmix#130). One shared `internal/ytdlpcap.Limiter`
+bounds how many yt-dlp subprocesses run at once, because the Compose service is
+capped at 512 MiB and a single yt-dlp process can spike to roughly 100–200 MiB
+RSS. The composition root constructs exactly one limiter in `NewApp` and
+injects the same instance into both launch sites: the resolver's YouTube
+metadata call and the stream backend's search call. A slot is acquired before
+the subprocess starts and released the moment it returns, on every path
+including error and cancellation, so a canceled request (including a canceled
+shared singleflight load) never leaks capacity. Callers that find no free slot
+wait in a bounded FIFO queue; waiting is context-aware, so a canceled request
+leaves the queue promptly. No room/store mutex is held while waiting — capacity
+waits happen before the store lock, in the HTTP handler path. Once the queue is
+also full, further lookups fail fast with the typed
+`ytdlpcap.ErrOverloaded`, which the HTTP layer maps to **503** with a
+`Retry-After` header on the host add-track, guest add-track and stream
+endpoints (stable JSON error bodies; the guest code is `overloaded`). The
+audio HTTP fetch after a resolved URL is not a subprocess and is never gated.
+Defaults: at most 2 concurrent subprocesses with a queue of 8 waiting callers
+(`QMIX_YTDLP_MAX_CONCURRENT`, `QMIX_YTDLP_QUEUE_LIMIT`), which keeps
+worst-case usage near 400 MiB inside the 512 MiB limit with headroom for the
+Go runtime and proxy buffers.
+
 ## 8. State management
 
 - All state is held **in memory** in one process, without a database.
@@ -243,24 +268,30 @@ served through `stream.ServeStream`.
 - `cmd/qmix` reads all runtime `QMIX_*` variables once into one typed
   `internal/config.Config` before constructing the logger and application. That
   aggregate owns address, logging, optional resolver credentials, the shared
-  yt-dlp executable and deadlines, stream cache TTL, and current room lifetime
-  settings. The composition root constructs the resolver, stream backend,
+  yt-dlp executable, deadlines, and capacity limits, stream cache TTL, and
+  current room lifetime settings. The composition root constructs the shared
+  yt-dlp capacity limiter, resolver, stream backend,
   handlers, and readiness check once; `App.Handler()` has no environment reads,
   executable resolution, or dependency construction.
 - Runtime variables are `QMIX_ADDR`, `QMIX_LOG_LEVEL`, `QMIX_LOG_FILE`,
   `QMIX_VK_TOKEN`, `QMIX_YM_TOKEN`, `QMIX_SPOTIFY_CLIENT_ID`,
   `QMIX_SPOTIFY_CLIENT_SECRET`, `QMIX_YTDLP_BIN`,
-  `QMIX_STREAM_CACHE_TTL`, `QMIX_YTDLP_METADATA_TIMEOUT`, and
-  `QMIX_YTDLP_SEARCH_TIMEOUT`. Defaults are respectively `:8080`, `warn`,
-  `qmix.log`, empty credentials, `yt-dlp`, `5m`, `30s`, and `60s`. Build and
-  Compose orchestration variables are outside this runtime contract.
+  `QMIX_STREAM_CACHE_TTL`, `QMIX_YTDLP_METADATA_TIMEOUT`,
+  `QMIX_YTDLP_SEARCH_TIMEOUT`, `QMIX_YTDLP_MAX_CONCURRENT`, and
+  `QMIX_YTDLP_QUEUE_LIMIT`. Defaults are respectively `:8080`, `warn`,
+  `qmix.log`, empty credentials, `yt-dlp`, `5m`, `30s`, `60s`, `2`, and `8`.
+  Build and Compose orchestration variables are outside this runtime contract.
 - Missing or blank runtime values use their defaults. Explicit malformed
   levels/durations fail startup with one secret-safe JSON record. It retains
   `error_kind: invalid_configuration` and adds only the predeclared
   `config_variable` and correction `guidance`; supplied values and wrapped error
   details are never emitted. Other startup categories remain detail-free.
   Metadata and search timeouts must be positive. Cache TTL must be positive or
-  negative (negative disables caching); explicit zero is invalid. Startup also
+  negative (negative disables caching); explicit zero is invalid.
+  `QMIX_YTDLP_MAX_CONCURRENT` must be a strictly positive integer. For
+  `QMIX_YTDLP_QUEUE_LIMIT`, a positive integer sets the limit, while missing,
+  blank, zero, or negative values use the documented default of 8. Malformed
+  or overflowing capacity integers fail startup. Startup also
   fails safely when yt-dlp is missing or non-executable. `/readyz` rechecks the
   executable without invoking it, while `/healthz` remains unconditional.
 - One service: **docker-compose** with one `backend` container.
@@ -275,7 +306,10 @@ served through `stream.ServeStream`.
   search apply separate server-side yt-dlp deadlines (30 seconds and 60 seconds
   by default), configured with `QMIX_YTDLP_METADATA_TIMEOUT` and
   `QMIX_YTDLP_SEARCH_TIMEOUT`; invalid or non-positive explicit values fail
-  startup. Proxy variables used to access
+  startup. Concurrent yt-dlp subprocesses are bounded by one shared capacity
+  limiter (default 2 running, 8 queued) sized for the 512 MiB `mem_limit`;
+  excess requests are rejected with 503 plus `Retry-After`. Proxy variables
+  used to access
   YouTube (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) are passed through Compose.
 - CI (GitHub Actions): gofmt + vet, build, `go test -race`, and a coverage gate
   of at least 95%. The `docker` job builds the image, checks yt-dlp inside it,

@@ -55,12 +55,17 @@ func NewApp(cfg config.Config, logger *slog.Logger, deps Dependencies) (*App, er
 		return nil, ErrYTDLPUnavailable
 	}
 
+	// One shared capacity limiter spans metadata resolution and stream search
+	// so no more than the configured number of yt-dlp subprocesses run at
+	// once (qmix#130). Both builders receive the same instance.
+	ytdlpLimiter := cfg.YTDLPCapacityLimiter()
+
 	store := NewStore(cfg.Rooms.EmptyTTL, cfg.Rooms.JanitorInterval, nil)
 	store.NonEmptyTTL = cfg.Rooms.NonEmptyTTL
 	hub := NewHubWithLogger(logger)
 	server := NewServerWithLogger(store, hub, logger)
-	server.Resolver = deps.BuildResolver(cfg.ResolverConfig())
-	server.StreamBackend = deps.BuildStreamBackend(cfg.StreamConfig())
+	server.Resolver = deps.BuildResolver(cfg.ResolverConfig(ytdlpLimiter))
+	server.StreamBackend = deps.BuildStreamBackend(cfg.StreamConfig(ytdlpLimiter))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
@@ -85,7 +90,7 @@ func (a *App) Handler() http.Handler {
 
 // NewStreamBackend returns a production yt-dlp StreamBackend from typed config.
 func NewStreamBackend(cfg stream.Config) stream.StreamBackend {
-	return &stream.YTDLP{Bin: cfg.YtdlpBin, CacheTTL: cfg.CacheTTL, SearchTimeout: cfg.YTDLPSearchTimeout}
+	return &stream.YTDLP{Bin: cfg.YtdlpBin, CacheTTL: cfg.CacheTTL, SearchTimeout: cfg.YTDLPSearchTimeout, Limiter: cfg.YTDLPLimiter}
 }
 
 // IsYTDLPUnavailable reports the stable startup validation category.

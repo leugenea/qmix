@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/leugenea/qmix/internal/logging"
 	"github.com/leugenea/qmix/internal/resolver"
 	"github.com/leugenea/qmix/internal/stream"
+	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
 
 // ErrInvalid categorizes a secret-safe startup configuration failure.
@@ -51,9 +53,19 @@ const (
 	defaultStreamCacheTTL       = 5 * time.Minute
 	defaultYTDLPMetadataTimeout = 30 * time.Second
 	defaultYTDLPSearchTimeout   = 60 * time.Second
-	defaultEmptyRoomTTL         = 12 * time.Hour
-	defaultNonEmptyRoomTTL      = 24 * time.Hour
-	defaultRoomJanitorInterval  = time.Minute
+	// defaultYTDLPMaxConcurrent bounds concurrent yt-dlp subprocesses. The
+	// Compose service is limited to 512 MiB while one yt-dlp process can
+	// spike to 100–200 MiB RSS, so 2 keeps the worst case near 400 MiB with
+	// headroom for the Go runtime and the audio proxy buffers (qmix#130).
+	defaultYTDLPMaxConcurrent = 2
+	// defaultYTDLPQueueLimit bounds callers waiting for a subprocess slot.
+	// 8 admits a burst of ~10 simultaneous lookups before rejecting with 503
+	// (qmix#130); deeper bursts are told to retry rather than queued into
+	// unbounded request latency.
+	defaultYTDLPQueueLimit     = 8
+	defaultEmptyRoomTTL        = 12 * time.Hour
+	defaultNonEmptyRoomTTL     = 24 * time.Hour
+	defaultRoomJanitorInterval = time.Minute
 )
 
 // LookupEnv is the environment lookup shape used by Parse.
@@ -75,11 +87,19 @@ type Resolver struct {
 }
 
 // YTDLP contains the one executable setting shared by metadata and streaming,
-// plus their independent subprocess deadlines.
+// plus their independent subprocess deadlines and the process-wide capacity
+// bound for concurrent yt-dlp subprocesses (qmix#130).
 type YTDLP struct {
 	Binary          string
 	MetadataTimeout time.Duration
 	SearchTimeout   time.Duration
+	// MaxConcurrent is how many yt-dlp subprocesses may run at once across
+	// metadata resolution and streaming. Positive values enable the shared
+	// capacity limiter.
+	MaxConcurrent int
+	// QueueLimit is how many callers may wait for a subprocess slot before
+	// further lookups are rejected with 503 (qmix#130).
+	QueueLimit int
 }
 
 // Stream contains direct audio URL cache settings.
@@ -110,8 +130,9 @@ func (c Config) LoggingConfig() logging.Config {
 	return logging.Config{Level: c.Logging.Level, File: c.Logging.File}
 }
 
-// ResolverConfig adapts the startup aggregate to resolver construction.
-func (c Config) ResolverConfig() resolver.Config {
+// ResolverConfig adapts the startup aggregate to resolver construction,
+// including the shared yt-dlp capacity limiter (qmix#130).
+func (c Config) ResolverConfig(limiter *ytdlpcap.Limiter) resolver.Config {
 	return resolver.Config{
 		VKToken:              c.Resolver.VKToken,
 		YMToken:              c.Resolver.YMToken,
@@ -119,12 +140,27 @@ func (c Config) ResolverConfig() resolver.Config {
 		SpotifyClientSecret:  c.Resolver.SpotifyClientSecret,
 		YTDLPBin:             c.YTDLP.Binary,
 		YTDLPMetadataTimeout: c.YTDLP.MetadataTimeout,
+		YTDLPLimiter:         limiter,
 	}
 }
 
-// StreamConfig adapts the startup aggregate to stream backend construction.
-func (c Config) StreamConfig() stream.Config {
-	return stream.Config{YtdlpBin: c.YTDLP.Binary, CacheTTL: c.Stream.CacheTTL, YTDLPSearchTimeout: c.YTDLP.SearchTimeout}
+// StreamConfig adapts the startup aggregate to stream backend construction,
+// including the shared yt-dlp capacity limiter (qmix#130).
+func (c Config) StreamConfig(limiter *ytdlpcap.Limiter) stream.Config {
+	return stream.Config{
+		YtdlpBin:           c.YTDLP.Binary,
+		CacheTTL:           c.Stream.CacheTTL,
+		YTDLPSearchTimeout: c.YTDLP.SearchTimeout,
+		YTDLPLimiter:       limiter,
+	}
+}
+
+// YTDLPCapacityLimiter builds the one shared capacity limiter for all yt-dlp
+// subprocesses (qmix#130). Metadata resolution and streaming both consume it.
+// A non-positive configured maximum disables the bound, keeping the pre-#130
+// behavior.
+func (c Config) YTDLPCapacityLimiter() *ytdlpcap.Limiter {
+	return ytdlpcap.New(c.YTDLP.MaxConcurrent, c.YTDLP.QueueLimit)
 }
 
 // Load parses the process environment once.
@@ -138,9 +174,15 @@ func Parse(lookup LookupEnv) (Config, error) {
 	cfg := Config{
 		Address: defaultAddress,
 		Logging: Logging{Level: slog.LevelWarn, File: defaultLogFile},
-		YTDLP:   YTDLP{Binary: defaultYTDLPBin, MetadataTimeout: defaultYTDLPMetadataTimeout, SearchTimeout: defaultYTDLPSearchTimeout},
-		Stream:  Stream{CacheTTL: defaultStreamCacheTTL},
-		Rooms:   Rooms{EmptyTTL: defaultEmptyRoomTTL, NonEmptyTTL: defaultNonEmptyRoomTTL, JanitorInterval: defaultRoomJanitorInterval},
+		YTDLP: YTDLP{
+			Binary:          defaultYTDLPBin,
+			MetadataTimeout: defaultYTDLPMetadataTimeout,
+			SearchTimeout:   defaultYTDLPSearchTimeout,
+			MaxConcurrent:   defaultYTDLPMaxConcurrent,
+			QueueLimit:      defaultYTDLPQueueLimit,
+		},
+		Stream: Stream{CacheTTL: defaultStreamCacheTTL},
+		Rooms:  Rooms{EmptyTTL: defaultEmptyRoomTTL, NonEmptyTTL: defaultNonEmptyRoomTTL, JanitorInterval: defaultRoomJanitorInterval},
 	}
 
 	if v := value(lookup, "QMIX_ADDR"); v != "" {
@@ -175,6 +217,12 @@ func Parse(lookup LookupEnv) (Config, error) {
 	if cfg.YTDLP.SearchTimeout, err = duration(lookup, "QMIX_YTDLP_SEARCH_TIMEOUT", defaultYTDLPSearchTimeout, false); err != nil {
 		return Config{}, err
 	}
+	if cfg.YTDLP.MaxConcurrent, err = positiveInt(lookup, "QMIX_YTDLP_MAX_CONCURRENT", defaultYTDLPMaxConcurrent); err != nil {
+		return Config{}, err
+	}
+	if cfg.YTDLP.QueueLimit, err = queueLimit(lookup, "QMIX_YTDLP_QUEUE_LIMIT", defaultYTDLPQueueLimit); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -204,6 +252,39 @@ func duration(lookup LookupEnv, name string, fallback time.Duration, allowNegati
 	}
 	if parsed < 0 && !allowNegative {
 		return 0, invalid(name, "must be greater than zero")
+	}
+	return parsed, nil
+}
+
+// positiveInt parses a strictly positive integer runtime setting. Missing or
+// blank values use the documented default; explicit zero, negative, or
+// malformed values fail startup without echoing the supplied value.
+func positiveInt(lookup LookupEnv, name string, fallback int) (int, error) {
+	raw := value(lookup, name)
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return 0, invalid(name, "must be a positive integer")
+	}
+	return parsed, nil
+}
+
+// queueLimit parses the bounded-wait queue size. Missing, blank, zero, and
+// negative values use the documented safe default; malformed values fail
+// startup without echoing the supplied value.
+func queueLimit(lookup LookupEnv, name string, fallback int) (int, error) {
+	raw := value(lookup, name)
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, invalid(name, "must be an integer")
+	}
+	if parsed <= 0 {
+		return fallback, nil
 	}
 	return parsed, nil
 }

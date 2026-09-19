@@ -1,6 +1,10 @@
 package stream
 
-import "time"
+import (
+	"time"
+
+	"github.com/leugenea/qmix/internal/ytdlpcap"
+)
 
 // Config holds stream backend settings supplied by the process composition
 // root.
@@ -12,4 +16,7 @@ type Config struct {
 	CacheTTL time.Duration
 	// YTDLPSearchTimeout bounds one yt-dlp YouTube search.
 	YTDLPSearchTimeout time.Duration
+	// YTDLPLimiter bounds concurrent yt-dlp subprocesses across the process
+	// (qmix#130). Nil keeps the pre-#130 unbounded behavior.
+	YTDLPLimiter *ytdlpcap.Limiter
 }

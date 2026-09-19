@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
 
 // ErrInvalidRange marks a client Range header that is syntactically invalid or
@@ -17,6 +19,11 @@ var ErrInvalidRange = errors.New("invalid range header")
 // It lets callers keep ordinary disconnects below the operational WARN level.
 var ErrClientWrite = errors.New("client stream write failed")
 
+// RetryAfterOverloaded is the fixed Retry-After seconds the proxy sends with
+// a 503 overload response (qmix#130). It is deliberately short: a capacity
+// slot frees as soon as one yt-dlp subprocess finishes.
+const RetryAfterOverloaded = "3"
+
 // ServeStream streams track's audio to the client through backend, honoring the
 // Range header for seek. It writes the correct status codes:
 //
@@ -25,6 +32,7 @@ var ErrClientWrite = errors.New("client stream write failed")
 //	416  invalid or unsatisfiable Range (invalid header, or backend says 416)
 //	404  no audio source found (ErrNotFound)
 //	502  upstream failure while locating/opening the source
+//	503  yt-dlp capacity exhausted (ErrOverloaded, qmix#130)
 //
 // It passes the client's Range header through to the backend so Range handling
 // is delegated to the underlying source, and reproduces the backend's content
@@ -44,6 +52,9 @@ func ServeStream(w http.ResponseWriter, r *http.Request, backend StreamBackend, 
 
 	res, err := backend.Stream(r.Context(), track, rangeHeader)
 	if err != nil {
+		if errors.Is(err, ytdlpcap.ErrOverloaded) {
+			w.Header().Set("Retry-After", RetryAfterOverloaded)
+		}
 		writeError(w, errorStatus(err), err.Error())
 		return err
 	}
@@ -130,13 +141,16 @@ func validateRangeHeader(rangeHeader string) error {
 }
 
 // errorStatus maps a backend error to an HTTP status: ErrNotFound -> 404,
-// ErrInvalidRange -> 416, anything else (upstream failure) -> 502.
+// ErrInvalidRange -> 416, capacity overload -> 503 (qmix#130), anything else
+// (upstream failure) -> 502.
 func errorStatus(err error) int {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, ErrInvalidRange):
 		return http.StatusRequestedRangeNotSatisfiable
+	case errors.Is(err, ytdlpcap.ErrOverloaded):
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusBadGateway
 	}
