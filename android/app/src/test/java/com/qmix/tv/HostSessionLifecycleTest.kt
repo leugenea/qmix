@@ -118,6 +118,9 @@ class HostSessionLifecycleTest {
                         .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
                 )
                 assertTrue(controller.createRoom())
+                if (controller.state is HostingState.HttpWarning) {
+                    assertTrue(controller.confirmHttpWarning())
+                }
             }
             assertTrue(invitationReady.await(5, TimeUnit.SECONDS))
 

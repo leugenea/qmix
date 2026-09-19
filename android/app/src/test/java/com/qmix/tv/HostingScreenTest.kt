@@ -147,6 +147,37 @@ class HostingScreenTest {
     }
 
     @Test
+    fun http_warning_explains_exposure_and_offers_focused_explicit_choice() {
+        var confirmations = 0
+        var cancellations = 0
+        composeRule.setContent {
+            HostingScreen(
+                state = HostingState.HttpWarning("http://192.168.1.20:8180", "http://192.168.1.20:8180"),
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+                onConfirmHttpWarning = { confirmations++ },
+                onCancelHttpWarning = { cancellations++ },
+            )
+        }
+
+        composeRule.onNodeWithText("HTTP is not private").assertExists()
+        composeRule.onNodeWithText(
+            "HTTP exposes room traffic and host credentials to devices on the local network. " +
+                "Use it only on a trusted LAN. Use HTTPS for public or remote deployments.",
+        ).assertExists()
+        composeRule.onNodeWithText("Use HTTP")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.Enter) }
+        composeRule.runOnIdle { assertEquals(1, confirmations) }
+        composeRule.onNodeWithText("Use HTTP").performKeyInput { pressKey(Key.DirectionRight) }
+        composeRule.onNodeWithText("Cancel")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.Enter) }
+        composeRule.runOnIdle { assertEquals(1, cancellations) }
+    }
+
+    @Test
     fun setup_supports_keyboard_input_and_primary_action_starts_focused() {
         var backend = "https://old.example"
         var origin = "https://guest.example"

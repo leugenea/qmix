@@ -9,12 +9,15 @@ internal fun HostingScreen(
     onSettingsChanged: (String, String) -> Unit,
     onCreate: () -> Unit,
     onEnterRoom: () -> Unit,
+    onConfirmHttpWarning: () -> Unit = {},
+    onCancelHttpWarning: () -> Unit = {},
     liveRoomHandler: LiveRoomHandler = NoOpLiveRoomHandler,
     onExitLiveRoom: () -> Unit = {},
 ) {
     MaterialTheme {
         when (state) {
             is HostingState.Setup -> SetupScreen(state, false, null, onSettingsChanged, onCreate)
+            is HostingState.HttpWarning -> HttpWarningScreen(onConfirmHttpWarning, onCancelHttpWarning)
             is HostingState.Pending -> SetupScreen(
                 HostingState.Setup(state.backendUrl, state.guestOrigin),
                 true,

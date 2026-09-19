@@ -28,6 +28,8 @@ class MainActivity : ComponentActivity() {
                 onSettingsChanged = controller::updateSettings,
                 onCreate = { controller.createRoom() },
                 onEnterRoom = controller::enterRoom,
+                onConfirmHttpWarning = { controller.confirmHttpWarning() },
+                onCancelHttpWarning = controller::cancelHttpWarning,
                 liveRoomHandler = controller,
                 onExitLiveRoom = ::finish,
             )

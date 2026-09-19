@@ -51,6 +51,9 @@ class QueueAdvancementInstrumentationTest {
         val subscription = controller.observe { if (it is HostingState.Invitation) invited.countDown() }
         try {
             assertTrue(controller.createRoom())
+            if (controller.state is HostingState.HttpWarning) {
+                assertTrue(controller.confirmHttpWarning())
+            }
             assertTrue(invited.await(5, TimeUnit.SECONDS))
 
             controller.enterRoom()

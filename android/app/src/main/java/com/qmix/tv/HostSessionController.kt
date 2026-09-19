@@ -1,12 +1,16 @@
 package com.qmix.tv
 
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import java.util.ArrayDeque
 import java.util.concurrent.Executor
 
+private const val INVALID_ENDPOINT_MESSAGE =
+    "Enter valid absolute http(s) URLs without credentials, queries, or fragments."
+private const val PERSISTENCE_ERROR_MESSAGE = "Could not save settings. Try again."
+
 sealed interface HostingState {
     data class Setup(val backendUrl: String, val guestOrigin: String) : HostingState
+    data class HttpWarning(val backendUrl: String, val guestOrigin: String) : HostingState
     data class Pending(val backendUrl: String, val guestOrigin: String) : HostingState
     data class Invitation(val invite: GuestInvite) : HostingState
     data class LiveRoom(
@@ -65,11 +69,14 @@ interface LiveRoomHandler {
 
 class HostSessionController(
     private val httpClient: OkHttpClient,
-    initialBackendUrl: String = "https://qmix.example",
+    initialBackendUrl: String = "",
     initialGuestOrigin: String = initialBackendUrl,
     private val executor: Executor = Executor { command ->
         Thread(command, "qmix-room-request").apply { isDaemon = true }.start()
     },
+    private val settingsPersistence: EndpointSettingsPersistence = InitialEndpointSettingsPersistence(
+        EndpointSettings(initialBackendUrl, initialGuestOrigin),
+    ),
     private val roomRepositoryFactory: ((String) -> RoomRepository)? = null,
     private val queueCoordinatorFactory: QueueCoordinatorFactory? = null,
     private val playbackCoordinatorFactory: PlaybackCoordinatorFactory? = null,
@@ -83,20 +90,22 @@ class HostSessionController(
         val recipients: List<(HostingState) -> Unit>,
     )
 
+    private val initialSettings = settingsPersistence.load()
     private val observers = linkedSetOf<(HostingState) -> Unit>()
     private val notifications = ArrayDeque<Notification>()
     private var deliveringNotifications = false
-    private var setupState = HostingState.Setup(initialBackendUrl, initialGuestOrigin)
+    private var setupState = HostingState.Setup(initialSettings.backendUrl, initialSettings.guestOrigin)
     private var credentials: RoomCredentials? = null
     private var activeBackendUrl: String? = null
     private var roomSubscription: AutoCloseable? = null
     private var queueCoordinator: QueueAdvancementCoordinator? = null
     private var playbackCoordinator: AuthoritativePlaybackCoordinator? = null
+    private var httpAcknowledgementQuarantined = false
     private var createGeneration = 0L
     private var syncGeneration = 0L
 
     @Volatile
-    var state: HostingState = HostingState.Setup(initialBackendUrl, initialGuestOrigin)
+    var state: HostingState = setupState
         private set
 
     val roomSyncState: RoomSyncState?
@@ -125,43 +134,95 @@ class HostSessionController(
     }
 
     fun createRoom(): Boolean {
-        lateinit var settings: HostingState.Setup
+        lateinit var settings: EndpointSettings
         var generation = 0L
+        var executeNow = false
         var accepted = false
         synchronized(this) {
-            settings = when (val current = state) {
+            val candidate = when (val current = state) {
                 is HostingState.Setup -> current
                 is HostingState.Error -> HostingState.Setup(current.backendUrl, current.guestOrigin)
                 else -> return false
             }
-            if (settings.backendUrl.toHttpUrlOrNull() == null || settings.guestOrigin.toHttpUrlOrNull() == null) {
+            val validated = EndpointSettings.validate(candidate.backendUrl, candidate.guestOrigin)
+            if (validated == null) {
+                setupState = HostingState.Setup("", "")
                 publishLocked(
                     HostingState.Error(
-                        "Enter valid absolute http(s) URLs.",
-                        settings.backendUrl,
-                        settings.guestOrigin,
+                        INVALID_ENDPOINT_MESSAGE,
+                        "",
+                        "",
                     ),
                 )
             } else {
-                setupState = settings
-                generation = ++createGeneration
-                publishLocked(HostingState.Pending(settings.backendUrl, settings.guestOrigin))
+                settings = validated
+                setupState = HostingState.Setup(validated.backendUrl, validated.guestOrigin)
+                if (
+                    validated.usesHttp &&
+                    (httpAcknowledgementQuarantined || !settingsPersistence.isHttpWarningAcknowledged())
+                ) {
+                    publishLocked(HostingState.HttpWarning(validated.backendUrl, validated.guestOrigin))
+                } else {
+                    generation = ++createGeneration
+                    publishLocked(HostingState.Pending(validated.backendUrl, validated.guestOrigin))
+                    executeNow = true
+                }
                 accepted = true
             }
         }
         drainNotifications()
-        if (!accepted) return false
+        if (executeNow) executeCreate(settings, generation)
+        return accepted
+    }
 
+    fun confirmHttpWarning(): Boolean {
+        lateinit var settings: EndpointSettings
+        var generation = 0L
+        val confirmed = synchronized(this) {
+            val warning = state as? HostingState.HttpWarning ?: return false
+            settings = EndpointSettings(warning.backendUrl, warning.guestOrigin)
+            httpAcknowledgementQuarantined = true
+            try {
+                settingsPersistence.acknowledgeHttpWarning()
+            } catch (_: IllegalStateException) {
+                publishLocked(HostingState.Error(PERSISTENCE_ERROR_MESSAGE, warning.backendUrl, warning.guestOrigin))
+                return@synchronized false
+            }
+            httpAcknowledgementQuarantined = false
+            setupState = HostingState.Setup(settings.backendUrl, settings.guestOrigin)
+            generation = ++createGeneration
+            publishLocked(HostingState.Pending(settings.backendUrl, settings.guestOrigin))
+            true
+        }
+        drainNotifications()
+        if (!confirmed) return false
+        executeCreate(settings, generation)
+        return true
+    }
+
+    fun cancelHttpWarning() {
+        val changed = synchronized(this) {
+            val warning = state as? HostingState.HttpWarning ?: return
+            setupState = HostingState.Setup(warning.backendUrl, warning.guestOrigin)
+            publishLocked(setupState)
+            true
+        }
+        if (changed) drainNotifications()
+    }
+
+    private fun executeCreate(settings: EndpointSettings, generation: Long) {
         executor.execute {
             try {
                 val created = RoomApiClient(httpClient, settings.backendUrl, roomApiLogger).createRoom()
+                val invite = GuestInvite.create(created, settings.guestOrigin)
                 val changed = synchronized(this) {
                     if (generation != createGeneration) {
                         false
                     } else {
+                        settingsPersistence.save(settings)
                         credentials = created
                         activeBackendUrl = settings.backendUrl
-                        publishLocked(HostingState.Invitation(GuestInvite.create(created, settings.guestOrigin)))
+                        publishLocked(HostingState.Invitation(invite))
                         true
                     }
                 }
@@ -169,13 +230,14 @@ class HostSessionController(
             } catch (error: RoomApiException) {
                 publishCreateError(generation, settings, error.message ?: "The request failed.")
             } catch (_: IllegalArgumentException) {
-                publishCreateError(generation, settings, "Enter valid absolute http(s) URLs.")
+                publishCreateError(generation, settings, INVALID_ENDPOINT_MESSAGE)
+            } catch (_: IllegalStateException) {
+                publishCreateError(generation, settings, PERSISTENCE_ERROR_MESSAGE)
             }
         }
-        return true
     }
 
-    private fun publishCreateError(generation: Long, settings: HostingState.Setup, message: String) {
+    private fun publishCreateError(generation: Long, settings: EndpointSettings, message: String) {
         val changed = synchronized(this) {
             if (generation != createGeneration) {
                 false
