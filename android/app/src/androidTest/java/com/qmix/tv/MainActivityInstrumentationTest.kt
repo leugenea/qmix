@@ -1,6 +1,13 @@
 package com.qmix.tv
 
+import android.content.Context
 import android.view.KeyEvent
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.waitUntilAtLeastOneExists
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -12,12 +19,58 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.Executor
 
 @RunWith(AndroidJUnit4::class)
 class MainActivityInstrumentationTest {
+    @get:Rule
+    val composeRule = createEmptyComposeRule()
+
+    @Test
+    fun recreated_activity_and_replacement_session_restore_endpoints_from_application_storage() {
+        val application = ApplicationProvider.getApplicationContext<QMixApplication>()
+        application.getSharedPreferences(EndpointSettingsStore.PREFERENCES_NAME, Context.MODE_PRIVATE)
+            .edit().clear().commit()
+        EndpointSettingsStore(application).save(
+            EndpointSettings("https://api.example", "https://guest.example"),
+        )
+        try {
+            val firstController = HostSessionController(
+                OkHttpClient(),
+                settingsPersistence = EndpointSettingsStore(application),
+            )
+            val firstLease = application.installActivityHostSessionProvider { firstController }
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    assertSetupEndpoints()
+                    scenario.recreate()
+                    assertSetupEndpoints()
+                }
+            } finally {
+                firstLease.close()
+            }
+
+            val replacementController = HostSessionController(
+                OkHttpClient(),
+                settingsPersistence = EndpointSettingsStore(application),
+            )
+            val replacementLease = application.installActivityHostSessionProvider { replacementController }
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use {
+                    assertSetupEndpoints()
+                }
+            } finally {
+                replacementLease.close()
+            }
+        } finally {
+            application.getSharedPreferences(EndpointSettingsStore.PREFERENCES_NAME, Context.MODE_PRIVATE)
+                .edit().clear().commit()
+        }
+    }
+
     @Test
     fun activity_uses_its_on_create_controller_for_framework_media_key_dispatch() {
         val server = MockWebServer()
@@ -135,6 +188,18 @@ class MainActivityInstrumentationTest {
                 }
             }
         }
+    }
+
+    private fun assertSetupEndpoints() {
+        assertEndpointText("Backend URL", "https://api.example")
+        assertEndpointText("Guest origin", "https://guest.example")
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    private fun assertEndpointText(label: String, expected: String) {
+        composeRule.waitUntilAtLeastOneExists(hasContentDescription(label), timeoutMillis = 5_000)
+        composeRule.onNodeWithContentDescription(label)
+            .assertTextEquals(expected, includeEditableText = true)
     }
 
     private fun createController(

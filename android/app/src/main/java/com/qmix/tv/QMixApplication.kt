@@ -48,8 +48,7 @@ class QMixApplication : Application() {
             .build()
         HostSessionController(
             httpClient = client,
-            initialBackendUrl = BuildConfig.DEFAULT_BACKEND_URL,
-            initialGuestOrigin = BuildConfig.DEFAULT_GUEST_ORIGIN,
+            settingsPersistence = EndpointSettingsStore(this),
             logger = logger.component(QMixLogComponent.APP_HOST_SESSION),
             roomApiLogger = logger.component(QMixLogComponent.ROOM_API_CREATION),
             roomRepositoryFactory = { backendUrl ->

@@ -38,6 +38,29 @@ cd android
 ./gradlew --no-daemon :app:connectedDebugAndroidTest
 ```
 
+## Backend and guest addresses
+
+The first setup screen is intentionally blank. Enter the backend API base URL
+and the guest web origin; there is no production-looking fallback host. After a
+room is created successfully, both canonical addresses are stored in the app's
+private `SharedPreferences` and restored after process or device restart. Host
+tokens are never stored with these settings and are never added to invitation
+URLs or QR codes.
+
+HTTPS remains supported and is recommended for every public or remote
+deployment. A trusted-LAN deployment may use addresses such as
+`http://192.168.1.20:8180`. Before the first HTTP request, the TV app requires a
+one-time acknowledgement that HTTP provides **no transport confidentiality**:
+room traffic and host credentials can be observed or modified by devices on the
+local network. Do not expose an HTTP QMix deployment to an untrusted network.
+
+Android cannot enumerate a host entered at runtime in a domain-scoped network
+security rule. The application therefore permits cleartext at the platform
+policy level, then restricts its own endpoint inputs to absolute `http` or
+`https` URLs without user info, queries, or fragments and presents the warning
+above. This platform opt-in applies to every HTTP request the app makes; it is
+not a claim that arbitrary HTTP is safe or confidential.
+
 The suite installs the APK, launches the activity through `LEANBACK_LAUNCHER`,
 checks the initial focus, and sends D-pad OK. CI uses Android TV API 36
 (`android-tv`, x86, `tv_1080p` profile).

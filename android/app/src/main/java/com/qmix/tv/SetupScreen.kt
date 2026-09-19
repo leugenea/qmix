@@ -3,6 +3,7 @@ package com.qmix.tv
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -58,6 +59,29 @@ internal fun SetupScreen(
         UrlInput("Guest origin", origin, !pending) {
             origin = it
             onSettingsChanged(backend, origin)
+        }
+    }
+}
+
+@Composable
+internal fun HttpWarningScreen(onConfirm: () -> Unit, onCancel: () -> Unit) {
+    val confirmFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { confirmFocus.requestFocus() }
+    Column(
+        Modifier.fillMaxSize().background(Color(0xFF101218)).padding(48.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("HTTP is not private", fontSize = 36.sp, color = Color(0xFFFFB4AB))
+        Text(
+            "HTTP exposes room traffic and host credentials to devices on the local network. " +
+                "Use it only on a trusted LAN. Use HTTPS for public or remote deployments.",
+            fontSize = 22.sp,
+            modifier = Modifier.width(760.dp).padding(vertical = 24.dp),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            FocusedButton("Use HTTP", true, confirmFocus, onClick = onConfirm)
+            FocusedButton("Cancel", true, remember { FocusRequester() }, onClick = onCancel)
         }
     }
 }

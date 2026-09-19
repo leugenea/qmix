@@ -3,5 +3,6 @@
     xmlns:tools="http://schemas.android.com/tools">
     <application
         android:networkSecurityConfig="@xml/debug_network_security_config"
+        tools:replace="android:networkSecurityConfig"
         tools:targetApi="n" />
 </manifest>

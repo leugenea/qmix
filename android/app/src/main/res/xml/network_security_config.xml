@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Debug builds use the same runtime-host policy as production. -->
+<!-- Runtime-selected LAN hosts cannot be enumerated here. Endpoint validation and
+     an explicit one-time warning constrain the app's use of this opt-in. -->
 <network-security-config xmlns:tools="http://schemas.android.com/tools">
     <base-config
         cleartextTrafficPermitted="true"

@@ -36,6 +36,39 @@ class HostingScreenInstrumentationTest {
     val composeRule = createComposeRule()
 
     @Test
+    fun http_warning_is_remote_navigable_and_states_lan_risk() {
+        var confirmations = 0
+        var cancellations = 0
+        composeRule.setContent {
+            HostingScreen(
+                HostingState.HttpWarning("http://192.168.1.20:8180", "http://192.168.1.20:8180"),
+                onSettingsChanged = { _, _ -> },
+                onCreate = {},
+                onEnterRoom = {},
+                onConfirmHttpWarning = { confirmations++ },
+                onCancelHttpWarning = { cancellations++ },
+            )
+        }
+
+        composeRule.onNodeWithText("HTTP is not private").assertExists()
+        composeRule.onNodeWithText(
+            "HTTP exposes room traffic and host credentials to devices on the local network. " +
+                "Use it only on a trusted LAN. Use HTTPS for public or remote deployments.",
+        ).assertExists()
+        composeRule.onNodeWithText("Use HTTP").assertIsFocused()
+            .performKeyInput {
+                pressKey(Key.Enter)
+                pressKey(Key.DirectionRight)
+            }
+        composeRule.onNodeWithText("Cancel").assertIsFocused()
+            .performKeyInput { pressKey(Key.Enter) }
+        composeRule.runOnIdle {
+            assertEquals(1, confirmations)
+            assertEquals(1, cancellations)
+        }
+    }
+
+    @Test
     fun setup_edits_both_urls_and_invokes_create() {
         var settings = ""
         var creates = 0
