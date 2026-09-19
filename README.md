@@ -66,6 +66,16 @@ through a proxy, set `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` in the environment;
 compose passes them to the container, where they are used by both `yt-dlp` and
 the audio HTTP proxy.
 
+**Capacity:** one shared limiter bounds how many `yt-dlp` subprocesses run at
+once across metadata resolution and streaming, because the Compose service is
+capped at 512 MiB and a single `yt-dlp` process can spike to roughly
+100–200 MiB RSS. Requests that find no free slot wait in a bounded FIFO queue;
+when the queue is also full, add-track and stream requests fail fast with
+`503` plus a `Retry-After` header instead of piling onto the overload. The
+queue is never held while waiting for capacity, so room operations stay
+responsive. See `QMIX_YTDLP_MAX_CONCURRENT` and `QMIX_YTDLP_QUEUE_LIMIT` in the
+configuration table below.
+
 ## Integration tests
 
 The required test tier is `make test-integration`: HTTP scenarios run against a
@@ -145,9 +155,14 @@ application configuration.
 | `QMIX_STREAM_CACHE_TTL` | `5m` | Positive Go duration; a negative duration disables caching; zero is invalid |
 | `QMIX_YTDLP_METADATA_TIMEOUT` | `30s` | Positive Go duration |
 | `QMIX_YTDLP_SEARCH_TIMEOUT` | `60s` | Positive Go duration |
+| `QMIX_YTDLP_MAX_CONCURRENT` | `2` | Positive integer; concurrent `yt-dlp` subprocesses allowed across metadata and streaming. The default keeps worst-case usage near 400 MiB inside the 512 MiB container, since one `yt-dlp` process can spike to 100–200 MiB RSS |
+| `QMIX_YTDLP_QUEUE_LIMIT` | `8` | Positive integers set the number of callers that may wait for a subprocess slot; missing, blank, zero, or negative values use the default `8`. Further requests are rejected with `503` and `Retry-After` |
 
-Missing or blank values use the listed defaults. An explicitly supplied invalid
-log level or duration stops startup with one JSON record whose
+Missing or blank values use the listed defaults. For
+`QMIX_YTDLP_QUEUE_LIMIT`, explicit zero or any negative integer also uses the
+listed default; malformed or overflowing integers are invalid. An explicitly
+supplied invalid log level, duration, or capacity integer stops startup with one
+JSON record whose
 `error_kind` is `invalid_configuration`; `config_variable` names the setting and
 `guidance` gives a safe correction without including the supplied value.
 Other startup failure categories do not include these detail fields. Startup

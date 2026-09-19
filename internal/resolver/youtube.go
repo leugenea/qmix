@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
 
 // Runner executes an external process and returns its raw stdout. It isolates
@@ -60,6 +62,9 @@ type YouTube struct {
 	Timeout time.Duration
 	// Name is the value reported in Track.ResolvedBy. Defaults to "youtube".
 	Name string
+	// Limiter bounds concurrent yt-dlp subprocesses across the process
+	// (qmix#130). Nil keeps the pre-#130 unbounded behavior.
+	Limiter *ytdlpcap.Limiter
 }
 
 func (y *YouTube) runner() Runner {
@@ -133,11 +138,17 @@ func playlistOnlyYouTubeURL(rawurl string) bool {
 	return !hasYouTubeVideoID(u)
 }
 
-// Resolve fetches metadata for a YouTube url through the runner.
+// Resolve fetches metadata for a YouTube url through the runner. The yt-dlp
+// subprocess holds one shared capacity slot for exactly its duration
+// (qmix#130); playlist-only URLs are rejected before any capacity is consumed.
 func (y *YouTube) Resolve(ctx context.Context, rawurl string) (*Track, error) {
 	if playlistOnlyYouTubeURL(rawurl) {
 		return nil, errors.Join(ErrUnsupported, errors.New("youtube: playlist URLs require a video ID"))
 	}
+	if err := y.Limiter.Acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer y.Limiter.Release()
 	runCtx, cancel := context.WithTimeout(ctx, y.timeout())
 	defer cancel()
 	out, err := y.runner().Run(runCtx, rawurl)

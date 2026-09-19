@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 			want: Config{
 				Address: ":8080",
 				Logging: Logging{Level: slog.LevelWarn, File: "qmix.log"},
-				YTDLP:   YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second},
+				YTDLP:   YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
 				Stream:  Stream{CacheTTL: 5 * time.Minute},
 				Rooms:   Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
 			},
@@ -37,6 +38,8 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				"QMIX_STREAM_CACHE_TTL":       "-1s",
 				"QMIX_YTDLP_METADATA_TIMEOUT": "17s",
 				"QMIX_YTDLP_SEARCH_TIMEOUT":   "41s",
+				"QMIX_YTDLP_MAX_CONCURRENT":   "5",
+				"QMIX_YTDLP_QUEUE_LIMIT":      "9",
 			},
 			want: Config{
 				Address: "127.0.0.1:9000",
@@ -45,9 +48,23 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 					VKToken: "vk-secret", YMToken: "ym-secret",
 					SpotifyClientID: "client-id", SpotifyClientSecret: "client-secret",
 				},
-				YTDLP:  YTDLP{Binary: "/opt/bin/yt-dlp", MetadataTimeout: 17 * time.Second, SearchTimeout: 41 * time.Second},
+				YTDLP:  YTDLP{Binary: "/opt/bin/yt-dlp", MetadataTimeout: 17 * time.Second, SearchTimeout: 41 * time.Second, MaxConcurrent: 5, QueueLimit: 9},
 				Stream: Stream{CacheTTL: -time.Second},
 				Rooms:  Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
+			},
+		},
+		{
+			name: "documented capacity defaults",
+			env: map[string]string{
+				"QMIX_YTDLP_MAX_CONCURRENT": "2",
+				"QMIX_YTDLP_QUEUE_LIMIT":    "8",
+			},
+			want: Config{
+				Address: ":8080",
+				Logging: Logging{Level: slog.LevelWarn, File: "qmix.log"},
+				YTDLP:   YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
+				Stream:  Stream{CacheTTL: 5 * time.Minute},
+				Rooms:   Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
 			},
 		},
 	}
@@ -92,6 +109,45 @@ func TestParseCacheZeroExplainsHowToDisableCaching(t *testing.T) {
 	}
 }
 
+func TestParseQueueLimitContract(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    int
+		wantErr bool
+	}{
+		{name: "missing", want: defaultYTDLPQueueLimit},
+		{name: "blank", env: map[string]string{"QMIX_YTDLP_QUEUE_LIMIT": "  "}, want: defaultYTDLPQueueLimit},
+		{name: "zero", env: map[string]string{"QMIX_YTDLP_QUEUE_LIMIT": "0"}, want: defaultYTDLPQueueLimit},
+		{name: "negative", env: map[string]string{"QMIX_YTDLP_QUEUE_LIMIT": "-1"}, want: defaultYTDLPQueueLimit},
+		{name: "positive", env: map[string]string{"QMIX_YTDLP_QUEUE_LIMIT": "3"}, want: 3},
+		{name: "malformed", env: map[string]string{"QMIX_YTDLP_QUEUE_LIMIT": "not-an-integer"}, wantErr: true},
+		{name: "overflow", env: map[string]string{"QMIX_YTDLP_QUEUE_LIMIT": "99999999999999999999"}, wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse(mapEnvironment(tc.env))
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalid) {
+					t.Fatalf("Parse() error = %v, want ErrInvalid", err)
+				}
+				detail, ok := InvalidDetail(err)
+				if !ok || detail != (ValidationDetail{Variable: "QMIX_YTDLP_QUEUE_LIMIT", Guidance: "must be an integer"}) {
+					t.Fatalf("InvalidDetail() = %#v, %v, want queue variable and predeclared guidance", detail, ok)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Parse() error = %v, want nil", err)
+			}
+			if cfg.YTDLP.QueueLimit != tc.want {
+				t.Fatalf("QueueLimit = %d, want %d", cfg.YTDLP.QueueLimit, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseRejectsInvalidValuesWithoutEchoingThem(t *testing.T) {
 	secret := "token=SENTINEL_DO_NOT_LOG"
 	tests := []struct {
@@ -108,6 +164,12 @@ func TestParseRejectsInvalidValuesWithoutEchoingThem(t *testing.T) {
 		{name: "search malformed", variable: "QMIX_YTDLP_SEARCH_TIMEOUT", value: secret},
 		{name: "search zero", variable: "QMIX_YTDLP_SEARCH_TIMEOUT", value: "0s"},
 		{name: "search negative", variable: "QMIX_YTDLP_SEARCH_TIMEOUT", value: "-1s"},
+		{name: "max concurrent malformed", variable: "QMIX_YTDLP_MAX_CONCURRENT", value: secret},
+		{name: "max concurrent zero", variable: "QMIX_YTDLP_MAX_CONCURRENT", value: "0"},
+		{name: "max concurrent negative", variable: "QMIX_YTDLP_MAX_CONCURRENT", value: "-2"},
+		{name: "max concurrent overflow", variable: "QMIX_YTDLP_MAX_CONCURRENT", value: "99999999999999999999"},
+		{name: "queue limit malformed", variable: "QMIX_YTDLP_QUEUE_LIMIT", value: secret},
+		{name: "queue limit overflow", variable: "QMIX_YTDLP_QUEUE_LIMIT", value: "99999999999999999999"},
 	}
 
 	for _, tc := range tests {

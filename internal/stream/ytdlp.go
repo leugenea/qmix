@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
 
 // ytdlpBin is the yt-dlp executable used when no Bin is configured.
@@ -75,6 +77,10 @@ type YTDLP struct {
 	CacheTTL time.Duration
 	// SearchTimeout bounds one yt-dlp search. Zero uses ytdlpSearchTimeout.
 	SearchTimeout time.Duration
+	// Limiter bounds concurrent yt-dlp subprocesses across the process
+	// (qmix#130). Only the search subprocess consumes capacity; the audio
+	// HTTP fetch is never gated. Nil keeps the pre-#130 unbounded behavior.
+	Limiter *ytdlpcap.Limiter
 	// cache is the lazily created TTL cache; mu guards its initialization and
 	// injection so concurrent Stream calls are safe under -race.
 	mu    sync.Mutex
@@ -216,7 +222,14 @@ func (b *YTDLP) resolveURL(ctx context.Context, t *Track) (string, error) {
 
 // searchURL runs the YouTube search via the runner and extracts the top audio
 // URL. It maps no-results to ErrNotFound and exec/parse failures to ErrService.
+// The yt-dlp subprocess holds one shared capacity slot for exactly its
+// duration (qmix#130), released on every path including error and
+// cancellation.
 func (b *YTDLP) searchURL(ctx context.Context, t *Track) (string, error) {
+	if err := b.Limiter.Acquire(ctx); err != nil {
+		return "", err
+	}
+	defer b.Limiter.Release()
 	searchCtx, cancel := context.WithTimeout(ctx, b.searchTimeout())
 	defer cancel()
 	out, err := b.runner().Search(searchCtx, ytdlpInput(t))

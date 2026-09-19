@@ -13,6 +13,7 @@ import (
 
 	"github.com/leugenea/qmix/internal/resolver"
 	"github.com/leugenea/qmix/internal/stream"
+	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
 
 // Server wires the Store and Hub to HTTP handlers.
@@ -217,6 +218,9 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logResolverFailure(err)
 		status, msg := resolveError(err)
+		if status == http.StatusServiceUnavailable {
+			w.Header().Set("Retry-After", retryAfterOverloaded)
+		}
 		writeError(w, status, msg)
 		return
 	}
@@ -293,11 +297,25 @@ func trackFromURL(u string) Track {
 	return Track{ID: newTrackID(), URL: u, Title: u}
 }
 
+// retryAfterOverloaded is the fixed Retry-After seconds sent with 503
+// overload responses (qmix#130). It is deliberately short and documented:
+// capacity frees as soon as one yt-dlp subprocess finishes, and clients that
+// honor it naturally smooth bursts without hammering the endpoint.
+const retryAfterOverloaded = "3"
+
+// isOverloaded reports whether err is the typed yt-dlp capacity rejection.
+func isOverloaded(err error) bool {
+	return errors.Is(err, ytdlpcap.ErrOverloaded)
+}
+
 // resolveError maps a resolver failure to an HTTP status and a human-readable
 // message. Unresolvable links (invalid, unsupported, no anonymous path) become
-// 422; transient upstream failures become 502. Nothing is ever 500.
+// 422; transient upstream failures become 502. Overload of the shared
+// yt-dlp capacity becomes 503 (qmix#130). Nothing is ever 500.
 func resolveError(err error) (int, string) {
 	switch {
+	case isOverloaded(err):
+		return http.StatusServiceUnavailable, err.Error()
 	case errors.Is(err, resolver.ErrInvalid),
 		errors.Is(err, resolver.ErrUnsupported),
 		errors.Is(err, resolver.ErrNoAnonymous):
@@ -356,6 +374,9 @@ func (s *Server) handleGuestAddTrack(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logResolverFailure(err)
 		status, code, msg := guestResolveError(err)
+		if status == http.StatusServiceUnavailable {
+			w.Header().Set("Retry-After", retryAfterOverloaded)
+		}
 		writeGuestError(w, status, code, msg)
 		return
 	}
@@ -375,9 +396,12 @@ func (s *Server) handleGuestAddTrack(w http.ResponseWriter, r *http.Request) {
 // guestResolveError maps a resolver failure to the guest API status, code and
 // human-readable message. Unlike the host API, an unparseable link is 400
 // invalid_url; unsupported and no-anonymous links are 422 unsupported_service;
-// upstream failures are 502 upstream_failure.
+// upstream failures are 502 upstream_failure. Overload of the shared yt-dlp
+// capacity is 503 overloaded (qmix#130).
 func guestResolveError(err error) (int, string, string) {
 	switch {
+	case isOverloaded(err):
+		return http.StatusServiceUnavailable, "overloaded", err.Error()
 	case errors.Is(err, resolver.ErrInvalid):
 		return http.StatusBadRequest, "invalid_url", err.Error()
 	case errors.Is(err, resolver.ErrUnsupported), errors.Is(err, resolver.ErrNoAnonymous):

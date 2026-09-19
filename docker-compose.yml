@@ -20,6 +20,12 @@ services:
       QMIX_LOG_FILE: "/var/log/qmix/qmix.log"
       QMIX_YTDLP_METADATA_TIMEOUT: "${QMIX_YTDLP_METADATA_TIMEOUT:-30s}"
       QMIX_YTDLP_SEARCH_TIMEOUT: "${QMIX_YTDLP_SEARCH_TIMEOUT:-60s}"
+      # Shared yt-dlp subprocess capacity (qmix#130): at most
+      # QMIX_YTDLP_MAX_CONCURRENT subprocesses run at once, with up to
+      # QMIX_YTDLP_QUEUE_LIMIT requests waiting; further requests are
+      # rejected with 503 and Retry-After.
+      QMIX_YTDLP_MAX_CONCURRENT: "${QMIX_YTDLP_MAX_CONCURRENT:-2}"
+      QMIX_YTDLP_QUEUE_LIMIT: "${QMIX_YTDLP_QUEUE_LIMIT:-8}"
       # Proxy passthrough for environments where YouTube is reachable only
       # via a proxy: yt-dlp and the audio proxy both honor these. Empty by
       # default.
