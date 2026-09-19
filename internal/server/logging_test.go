@@ -127,7 +127,7 @@ func TestRunLogsServerLifecycleFailure(t *testing.T) {
 	secret := "token=SENTINEL_DO_NOT_LOG"
 	cfg := testConfig(t)
 	cfg.Address = "127.0.0.1:" + secret
-	err := run(cfg, logger, Dependencies{CheckExecutable: func(string) bool { return true }})
+	err := run(context.Background(), cfg, logger, Dependencies{CheckExecutable: func(string) bool { return true }})
 	if err == nil {
 		t.Fatal("Run returned nil for invalid listen address")
 	}
@@ -140,7 +140,7 @@ func TestRunLogsServerLifecycleFailure(t *testing.T) {
 func TestRunAcceptsNilLogger(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Address = "127.0.0.1:99999"
-	if err := run(cfg, nil, Dependencies{CheckExecutable: func(string) bool { return true }}); err == nil {
+	if err := run(context.Background(), cfg, nil, Dependencies{CheckExecutable: func(string) bool { return true }}); err == nil {
 		t.Fatal("Run returned nil for invalid listen address")
 	}
 }

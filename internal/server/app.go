@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/leugenea/qmix/internal/config"
@@ -23,15 +25,18 @@ type Dependencies struct {
 	CheckExecutable    func(string) bool
 	BuildResolver      func(resolver.Config) resolver.Resolver
 	BuildStreamBackend func(stream.Config) stream.StreamBackend
+	Listen             func(string, string) (net.Listener, error)
 }
 
 // App wires the store, hub, routes, and process dependencies into one runnable
 // backend. Every field used by Handler is constructed once in NewApp.
 type App struct {
-	Store   *Store
-	Hub     *Hub
-	handler http.Handler
-	stop    chan struct{}
+	Store       *Store
+	Hub         *Hub
+	handler     http.Handler
+	stop        chan struct{}
+	janitorDone chan struct{}
+	closeOnce   sync.Once
 }
 
 // NewApp validates the required executable, constructs process dependencies
@@ -72,14 +77,25 @@ func NewApp(cfg config.Config, logger *slog.Logger, deps Dependencies) (*App, er
 	mux.HandleFunc("GET /readyz", readyz(cfg.YTDLP.Binary, deps.CheckExecutable))
 	server.Routes(mux)
 
-	a := &App{Store: store, Hub: hub, handler: mux, stop: make(chan struct{})}
-	go a.Store.Janitor(a.stop)
+	a := &App{
+		Store:       store,
+		Hub:         hub,
+		handler:     mux,
+		stop:        make(chan struct{}),
+		janitorDone: make(chan struct{}),
+	}
+	go func() {
+		defer close(a.janitorDone)
+		a.Store.Janitor(a.stop)
+	}()
 	return a, nil
 }
 
-// Close stops the janitor.
+// Close stops the janitor and waits for it to exit. It is safe to call
+// repeatedly or concurrently.
 func (a *App) Close() {
-	close(a.stop)
+	a.closeOnce.Do(func() { close(a.stop) })
+	<-a.janitorDone
 }
 
 // Handler returns the prebuilt process handler without reading environment,
@@ -139,15 +155,136 @@ func newHTTPServer(addr string, h http.Handler) *http.Server {
 	}
 }
 
-// Run validates and constructs the backend before listening, then serves until
-// the listener fails. The caller supplies the already-parsed process config.
-func Run(cfg config.Config, logger *slog.Logger) error {
-	return run(cfg, logger, Dependencies{})
+// shutdownTimeout is the documented 12-second process deadline (qmix#132).
+// The listener closes immediately. Active HTTP, SSE, and stream handlers get
+// an 11-second grace period; the final second cancels request contexts and
+// force-closes connections without allowing a stuck close to deadlock exit.
+const (
+	shutdownTimeout  = 12 * time.Second
+	forceCloseWindow = time.Second
+)
+
+type httpServer interface {
+	Serve(net.Listener) error
+	Shutdown(context.Context) error
+	Close() error
 }
 
-func run(cfg config.Config, logger *slog.Logger, deps Dependencies) error {
+func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, cancelRequests context.CancelFunc, deadline time.Duration) error {
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(listener) }()
+
+	select {
+	case err := <-serveErr:
+		cancelRequests()
+		return err
+	case <-ctx.Done():
+	}
+
+	if deadline < 0 {
+		deadline = 0
+	}
+	forceWindow := min(forceCloseWindow, deadline/5)
+	graceTimer := time.NewTimer(deadline - forceWindow)
+	defer graceTimer.Stop()
+	grace := graceTimer.C
+	totalTimer := time.NewTimer(deadline)
+	defer totalTimer.Stop()
+
+	shutdownCtx, cancelShutdown := context.WithCancel(context.Background())
+	defer cancelShutdown()
+	shutdownErr := make(chan error, 1)
+	go func() { shutdownErr <- server.Shutdown(shutdownCtx) }()
+
+	var closeErr chan error
+	closeStarted := false
+	startClose := func() {
+		if closeStarted {
+			return
+		}
+		closeStarted = true
+		closeErr = make(chan error, 1)
+		go func(result chan<- error) { result <- server.Close() }(closeErr)
+	}
+
+	var shutdownResult, closeResult, serveResult error
+	shutdownDone, closeDone, serveDone := false, false, false
+	shutdownCanceled := false
+	for {
+		if shutdownDone && serveDone && (!closeStarted || closeDone) {
+			return errors.Join(shutdownResult, closeResult, serveResult)
+		}
+
+		select {
+		case err := <-shutdownErr:
+			shutdownErr = nil
+			shutdownDone = true
+			if !(shutdownCanceled && errors.Is(err, context.Canceled)) {
+				shutdownResult = err
+			}
+			cancelRequests()
+			if err != nil && !errors.Is(err, context.Canceled) {
+				startClose()
+			}
+		case err := <-closeErr:
+			closeErr = nil
+			closeDone = true
+			closeResult = err
+		case err := <-serveErr:
+			serveErr = nil
+			serveDone = true
+			serveResult = intentionalServeError(err)
+		case <-grace:
+			grace = nil
+			cancelRequests()
+			shutdownCanceled = true
+			cancelShutdown()
+			startClose()
+		case <-totalTimer.C:
+			cancelRequests()
+			shutdownCanceled = true
+			cancelShutdown()
+			startClose()
+			for {
+				select {
+				case err := <-shutdownErr:
+					shutdownErr = nil
+					if !(shutdownCanceled && errors.Is(err, context.Canceled)) {
+						shutdownResult = err
+					}
+				case err := <-closeErr:
+					closeErr = nil
+					closeResult = err
+				case err := <-serveErr:
+					serveErr = nil
+					serveResult = intentionalServeError(err)
+				default:
+					return errors.Join(context.DeadlineExceeded, shutdownResult, closeResult, serveResult)
+				}
+			}
+		}
+	}
+}
+
+func intentionalServeError(err error) error {
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+// Run validates and constructs the backend before listening, then serves until
+// the process context is canceled or serving fails.
+func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	return run(ctx, cfg, logger, Dependencies{})
+}
+
+func run(ctx context.Context, cfg config.Config, logger *slog.Logger, deps Dependencies) error {
 	if logger == nil {
 		logger = discardLogger()
+	}
+	if deps.Listen == nil {
+		deps.Listen = net.Listen
 	}
 	a, err := NewApp(cfg, logger, deps)
 	if err != nil {
@@ -155,13 +292,18 @@ func run(cfg config.Config, logger *slog.Logger, deps Dependencies) error {
 	}
 	defer a.Close()
 	serverLogger := logger.With("component", "server/http")
-	listener, err := net.Listen("tcp", cfg.Address)
+	listener, err := deps.Listen("tcp", cfg.Address)
 	if err != nil {
 		serverLogger.Error("server stopped", "error_kind", "listen_failed")
 		return err
 	}
 	serverLogger.Info("server listening", "address", listener.Addr().String())
-	err = newHTTPServer(cfg.Address, a.Handler()).Serve(listener)
-	serverLogger.Error("server stopped", "error_kind", "serve_failed")
+	requestCtx, cancelRequests := context.WithCancel(context.Background())
+	httpServer := newHTTPServer(cfg.Address, a.Handler())
+	httpServer.BaseContext = func(net.Listener) context.Context { return requestCtx }
+	err = serveHTTP(ctx, httpServer, listener, cancelRequests, shutdownTimeout)
+	if err != nil {
+		serverLogger.Error("server stopped", "error_kind", "serve_failed")
+	}
 	return err
 }

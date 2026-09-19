@@ -176,6 +176,12 @@ required executable on every request and returns `200` with
 it returns stable `503` JSON `{"status":"unavailable"}`. Readiness never runs
 `yt-dlp` and never performs network access.
 
+The backend handles both `SIGINT` and `SIGTERM` through `signal.NotifyContext`.
+It stops accepting new connections immediately, allows active HTTP, SSE, and
+audio-stream work 11 seconds to finish, then cancels request contexts and
+force-closes remaining connections within a 12-second total deadline. The room
+janitor is stopped and joined exactly once on this path and on listen failure.
+
 ## Backend logs
 
 The backend emits structured JSON to stderr (visible with

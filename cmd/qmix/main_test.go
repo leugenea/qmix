@@ -1,21 +1,108 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/leugenea/qmix/internal/buildinfo"
 	"github.com/leugenea/qmix/internal/config"
 	"github.com/leugenea/qmix/internal/logging"
 	"github.com/leugenea/qmix/internal/server"
 )
+
+func TestProcessContextHandlesSIGTERM(t *testing.T) {
+	ctx, stop := notifyProcessContext()
+	stop()
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("stopping process notifications did not cancel context")
+	}
+
+	if os.Getenv("QMIX_SIGNAL_HELPER") == "1" {
+		ctx, stop := notifyProcessContext()
+		defer stop()
+		fmt.Println("ready")
+		<-ctx.Done()
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestProcessContextHandlesSIGTERM$")
+	cmd.Env = append(os.Environ(), "QMIX_SIGNAL_HELPER=1")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	waitDone := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(waitDone)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-waitDone:
+			return
+		default:
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-waitDone:
+		case <-time.After(2 * time.Second):
+		}
+	})
+
+	watchdog := time.NewTimer(5 * time.Second)
+	defer watchdog.Stop()
+	ready := make(chan struct {
+		line string
+		err  error
+	}, 1)
+	go func() {
+		line, readErr := bufio.NewReader(stdout).ReadString('\n')
+		ready <- struct {
+			line string
+			err  error
+		}{line: line, err: readErr}
+	}()
+	select {
+	case result := <-ready:
+		if result.err != nil || result.line != "ready\n" {
+			t.Fatalf("helper readiness = %q, %v", result.line, result.err)
+		}
+	case <-waitDone:
+		t.Fatalf("helper exited before readiness: %v", waitErr)
+	case <-watchdog.C:
+		t.Fatal("timed out waiting for helper readiness")
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-waitDone:
+		if waitErr != nil {
+			t.Fatalf("SIGTERM helper exited non-zero: %v", waitErr)
+		}
+	case <-watchdog.C:
+		t.Fatal("timed out waiting for SIGTERM helper exit")
+	}
+}
 
 func TestExecuteDispatchesVersionOrServer(t *testing.T) {
 	oldVersion, oldCommit := buildinfo.Version, buildinfo.Commit

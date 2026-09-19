@@ -347,6 +347,12 @@ Go runtime and proxy buffers.
   or overflowing capacity integers fail startup. Startup also
   fails safely when yt-dlp is missing or non-executable. `/readyz` rechecks the
   executable without invoking it, while `/healthz` remains unconditional.
+- The process subscribes to `SIGINT` and `SIGTERM` with
+  `signal.NotifyContext`. Shutdown closes the HTTP listener immediately, gives
+  active HTTP, SSE, and audio-stream handlers an 11-second grace period, then
+  cancels their request contexts and force-closes connections within a
+  documented 12-second total deadline. The room janitor is stopped and joined
+  exactly once on normal shutdown and listen/startup failure.
 - One service: **docker-compose** with one `backend` container.
 - The container is built from `Dockerfile` (multi-stage build, static Go binary).
 - Port `8080`, configured through the `QMIX_ADDR` environment variable.
