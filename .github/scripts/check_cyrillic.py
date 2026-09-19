@@ -15,7 +15,7 @@ from pathlib import Path
 CYRILLIC = re.compile(
     r"[\u0400-\u052f\u1c80-\u1c8f\u2de0-\u2dff\ua640-\ua69f\U0001e030-\U0001e08f]"
 )
-GENERATED_PATHS = {".ua/knowledge-graph.json"}
+GENERATED_PATHS: set[str] = set()
 
 
 def is_test_or_fixture_path(path: str) -> bool:

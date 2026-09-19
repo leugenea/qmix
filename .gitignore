@@ -9,8 +9,5 @@ agent-apps-data/
 .env.*
 
 # Understand Anything
-.ua/intermediate/
-.ua/diff-overlay.json
-.ua/.trash*
-.ua/tmp/
+.ua/
 .claude/launch.json
