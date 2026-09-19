@@ -15,6 +15,7 @@ from pathlib import Path
 CYRILLIC = re.compile(
     r"[\u0400-\u052f\u1c80-\u1c8f\u2de0-\u2dff\ua640-\ua69f\U0001e030-\U0001e08f]"
 )
+GENERATED_PATHS: set[str] = set()
 
 
 def is_test_or_fixture_path(path: str) -> bool:
@@ -27,13 +28,21 @@ def is_test_or_fixture_path(path: str) -> bool:
     )
 
 
-def load_allowlist(path: Path) -> dict[tuple[str, str], int]:
+def load_allowlist(path: Path) -> tuple[set[str], dict[tuple[str, str], int]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if data.get("version") != 1:
         raise ValueError("The allowlist must declare version 1")
-    if "ignored_paths" in data:
-        raise ValueError("The allowlist no longer supports ignored_paths; remove it")
+    ignored_paths: set[str] = set()
     allowed_lines: dict[tuple[str, str], int] = {}
+
+    for entry in data.get("ignored_paths", []):
+        tracked_path = entry.get("path", "")
+        reason = entry.get("reason", "")
+        if not tracked_path or not reason:
+            raise ValueError("Every ignored path requires non-empty path and reason fields")
+        if tracked_path not in GENERATED_PATHS:
+            raise ValueError(f"{tracked_path} is not a recognized generated path")
+        ignored_paths.add(tracked_path)
 
     for entry in data.get("allowed_lines", []):
         tracked_path = entry.get("path", "")
@@ -57,7 +66,7 @@ def load_allowlist(path: Path) -> dict[tuple[str, str], int]:
             raise ValueError(f"Duplicate allowed line for {tracked_path}")
         allowed_lines[key] = occurrences
 
-    return allowed_lines
+    return ignored_paths, allowed_lines
 
 
 def tracked_files(root: Path) -> list[str]:
@@ -70,11 +79,14 @@ def tracked_files(root: Path) -> list[str]:
 def unexpected_lines(
     root: Path,
     paths: list[str],
+    ignored_paths: set[str],
     allowed_lines: dict[tuple[str, str], int],
 ) -> tuple[list[tuple[str, int, str]], Counter[tuple[str, str]]]:
     findings: list[tuple[str, int, str]] = []
     allowed_counts: Counter[tuple[str, str]] = Counter()
     for relative_path in paths:
+        if relative_path in ignored_paths:
+            continue
         raw = (root / relative_path).read_bytes()
         if b"\0" in raw:
             continue
@@ -110,9 +122,9 @@ def main() -> int:
         allowlist_path = root / allowlist_path
 
     try:
-        allowed_lines = load_allowlist(allowlist_path)
+        ignored_paths, allowed_lines = load_allowlist(allowlist_path)
         findings, allowed_counts = unexpected_lines(
-            root, tracked_files(root), allowed_lines
+            root, tracked_files(root), ignored_paths, allowed_lines
         )
         for key, expected in allowed_lines.items():
             actual = allowed_counts[key]
