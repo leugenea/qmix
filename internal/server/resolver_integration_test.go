@@ -143,8 +143,8 @@ func TestAddTrackRejectsRoomExpiredDuringResolution(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
-	if room := store.Get(code); room != nil {
-		t.Fatalf("room = %+v, want expired room to remain absent", room)
+	if store.Exists(code) {
+		t.Fatalf("room %q still exists, want expired room to remain absent", code)
 	}
 }
 

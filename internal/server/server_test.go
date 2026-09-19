@@ -28,11 +28,13 @@ func newTestServer() (*Server, *Store) {
 
 func mustCreateRoom(t *testing.T, store *Store) *Room {
 	t.Helper()
-	room, err := store.CreateRoom()
+	credentials, err := store.CreateRoom()
 	if err != nil {
 		t.Fatalf("CreateRoom: %v", err)
 	}
-	return room
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.rooms[credentials.Code]
 }
 
 // seqCodeGen produces codes "aaaaaa", "aaaaab", ... deterministically.
@@ -183,9 +185,13 @@ func TestAppendTrackDoesNotExposeMutationBeforePublication(t *testing.T) {
 	s.hub.mu.Lock()
 	started := make(chan struct{})
 	done := make(chan struct{})
+	ref, err := store.AppendPreflight(room.Code)
+	if err != nil {
+		t.Fatalf("AppendPreflight: %v", err)
+	}
 	go func() {
 		close(started)
-		s.appendTrack(room, trackFromURL("https://example.com/concurrent"))
+		_, _ = store.Append(ref, trackFromURL("https://example.com/concurrent"))
 		close(done)
 	}()
 	<-started
@@ -328,14 +334,18 @@ func TestAddTrackRejectsFullQueue(t *testing.T) {
 	}
 }
 
-func TestCanAppendTrackRejectsDeletedRoom(t *testing.T) {
-	s, store := newTestServer()
+func TestCheckAppendRejectsDeletedRoom(t *testing.T) {
+	_, store := newTestServer()
 	room := mustCreateRoom(t, store)
+	ref, err := store.AppendPreflight(room.Code)
+	if err != nil {
+		t.Fatalf("AppendPreflight: %v", err)
+	}
 	store.mu.Lock()
 	delete(store.rooms, room.Code)
 	store.mu.Unlock()
 
-	if err := s.canAppendTrack(room); !errors.Is(err, errRoomNotFound) {
+	if err := store.CheckAppend(ref); !errors.Is(err, errRoomNotFound) {
 		t.Fatalf("error = %v, want %v", err, errRoomNotFound)
 	}
 }
@@ -424,35 +434,6 @@ func TestCurrentPayloadIncludesTrackMetadata(t *testing.T) {
 	decodeBody(t, rec, &view)
 	if view.Current.Title != "Song title" || view.Current.Artist != "Song artist" {
 		t.Fatalf("room current = %+v", view.Current)
-	}
-}
-
-func TestSkipRejectsReplacementRoom(t *testing.T) {
-	s, store := newTestServer()
-	oldRoom := mustCreateRoom(t, store)
-	oldRoom.Queue = []Track{{ID: "old"}}
-	replacement := &Room{
-		Code:         oldRoom.Code,
-		HostToken:    newToken(),
-		Queue:        []Track{{ID: "new"}},
-		LastActivity: time.Now(),
-	}
-	store.mu.Lock()
-	store.rooms[oldRoom.Code] = replacement
-	store.mu.Unlock()
-	events, cancel := s.hub.Subscribe(oldRoom.Code)
-	defer cancel()
-
-	if _, err := s.skipRoom(oldRoom, oldRoom.HostToken); !errors.Is(err, errRoomNotFound) {
-		t.Fatalf("error = %v, want %v", err, errRoomNotFound)
-	}
-	if got := replacement.Queue[0].ID; got != "new" {
-		t.Fatalf("replacement queue[0] = %q, want new", got)
-	}
-	select {
-	case event := <-events:
-		t.Fatalf("unexpected stale event: %+v", event)
-	default:
 	}
 }
 
@@ -755,6 +736,67 @@ func TestSSESnapshotAndEvents(t *testing.T) {
 	}
 }
 
+func TestSweepDisconnectsActiveSSEBeforeCodeReuse(t *testing.T) {
+	const code = "reuse2"
+	store := NewStore(time.Hour, time.Hour, reusedCodeGenerator{code: code})
+	server := NewServer(store, NewHub())
+	credentials, err := store.CreateRoom()
+	if err != nil {
+		t.Fatalf("CreateRoom old: %v", err)
+	}
+
+	httpServer := httptest.NewServer(newTestMux(server))
+	defer httpServer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, httpServer.URL+"/rooms/"+code+"/events", nil)
+	if err != nil {
+		t.Fatalf("new SSE request: %v", err)
+	}
+	response, err := httpServer.Client().Do(request)
+	if err != nil {
+		t.Fatalf("connect SSE: %v", err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	if _, name, _ := readSSE(t, reader); name != "queue_snapshot" {
+		t.Fatalf("initial event = %q, want queue_snapshot", name)
+	}
+
+	store.mu.Lock()
+	store.rooms[code].LastActivity = time.Now().Add(-2 * store.TTL)
+	store.mu.Unlock()
+	store.sweep()
+	streamEnded := make(chan error, 1)
+	go func() {
+		_, readErr := reader.ReadByte()
+		streamEnded <- readErr
+	}()
+	select {
+	case readErr := <-streamEnded:
+		if readErr == nil {
+			t.Fatal("expired SSE stream remained readable")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired SSE stream remained connected")
+	}
+
+	replacement, err := store.CreateRoom()
+	if err != nil {
+		t.Fatalf("CreateRoom replacement: %v", err)
+	}
+	if replacement.Code != credentials.Code {
+		t.Fatalf("replacement code = %q, want reused %q", replacement.Code, credentials.Code)
+	}
+	ref, err := store.AppendPreflight(code)
+	if err != nil {
+		t.Fatalf("AppendPreflight replacement: %v", err)
+	}
+	if _, err := store.Append(ref, Track{ID: "replacement"}); err != nil {
+		t.Fatalf("Append replacement: %v", err)
+	}
+}
+
 func TestServeHTTPSkipsEventsCoveredBySnapshot(t *testing.T) {
 	hub := NewHub()
 	mux := http.NewServeMux()
@@ -1047,7 +1089,7 @@ func TestTTLJanitor(t *testing.T) {
 	// Empty room: created, then removed by janitor.
 	code, _ := createRoom(t, mux)
 	time.Sleep(150 * time.Millisecond)
-	if store.Get(code) != nil {
+	if store.Exists(code) {
 		t.Fatalf("empty room %q not removed by janitor", code)
 	}
 
@@ -1055,7 +1097,7 @@ func TestTTLJanitor(t *testing.T) {
 	code2, _ := createRoom(t, mux)
 	addTrack(t, mux, code2, "https://a.example/1")
 	time.Sleep(150 * time.Millisecond)
-	if store.Get(code2) == nil {
+	if !store.Exists(code2) {
 		t.Fatalf("room with tracks %q was removed", code2)
 	}
 }
@@ -1070,8 +1112,8 @@ func TestSweepRemovesAbandonedNonEmptyRoom(t *testing.T) {
 
 	store.sweep()
 
-	if got := store.Get(room.Code); got != nil {
-		t.Fatalf("room = %+v, want abandoned non-empty room removed", got)
+	if store.Exists(room.Code) {
+		t.Fatalf("room %q still exists, want abandoned non-empty room removed", room.Code)
 	}
 }
 
@@ -1234,14 +1276,17 @@ func TestRandomCodeGenerator(t *testing.T) {
 
 func TestNewStoreDefaultGen(t *testing.T) {
 	s := NewStore(time.Hour, time.Hour, nil)
-	room := mustCreateRoom(t, s)
-	if len(room.Code) != codeLength {
-		t.Fatalf("code = %q, want %d chars", room.Code, codeLength)
+	credentials, err := s.CreateRoom()
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
 	}
-	if room.HostToken == "" {
+	if len(credentials.Code) != codeLength {
+		t.Fatalf("code = %q, want %d chars", credentials.Code, codeLength)
+	}
+	if credentials.HostToken == "" {
 		t.Fatal("empty host token")
 	}
-	if s.Get(room.Code) == nil {
+	if !s.Exists(credentials.Code) {
 		t.Fatal("room not stored")
 	}
 }
