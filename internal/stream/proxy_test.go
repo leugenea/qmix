@@ -3,11 +3,14 @@ package stream
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
 
 // mockBackend is a configurable StreamBackend for proxy tests.
@@ -153,6 +156,34 @@ func TestProxyServiceError502(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "error") {
 		t.Fatalf("body = %q, want error json", rec.Body.String())
+	}
+}
+
+func TestProxyErrorsUseSafeEnvelope(t *testing.T) {
+	const secret = "https://user:password@example.test/audio?token=credential"
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "not found", err: fmt.Errorf("%w: %s", ErrNotFound, secret), wantStatus: http.StatusNotFound, wantBody: `{"error":"stream_not_found","message":"audio stream not found"}`},
+		{name: "invalid range", err: fmt.Errorf("%w: %s", ErrInvalidRange, secret), wantStatus: http.StatusRequestedRangeNotSatisfiable, wantBody: `{"error":"invalid_range","message":"requested range is not available"}`},
+		{name: "overloaded", err: fmt.Errorf("%w: %s", ytdlpcap.ErrOverloaded, secret), wantStatus: http.StatusServiceUnavailable, wantBody: `{"error":"overloaded","message":"stream resolver is temporarily overloaded"}`},
+		{name: "upstream", err: errors.New(secret), wantStatus: http.StatusBadGateway, wantBody: `{"error":"upstream_failure","message":"audio service is temporarily unavailable"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := serveProxy(t, &mockBackend{err: tc.err}, testTrack(), "")
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
+			}
+			if rec.Body.String() != tc.wantBody {
+				t.Fatalf("body = %q, want %q", rec.Body.String(), tc.wantBody)
+			}
+			if strings.Contains(rec.Body.String(), secret) || strings.Contains(rec.Body.String(), "password") || strings.Contains(rec.Body.String(), "credential") {
+				t.Fatalf("secret-bearing backend detail leaked: %s", rec.Body.String())
+			}
+		})
 	}
 }
 

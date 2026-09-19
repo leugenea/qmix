@@ -1386,12 +1386,13 @@ func TestHeartbeatInterval(t *testing.T) {
 // streaming-unsupported error path.
 type noFlushWriter struct {
 	header http.Header
+	body   strings.Builder
 	code   int
 }
 
 func (w *noFlushWriter) Header() http.Header         { return w.header }
 func (w *noFlushWriter) WriteHeader(code int)        { w.code = code }
-func (w *noFlushWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (w *noFlushWriter) Write(b []byte) (int, error) { return w.body.Write(b) }
 
 func TestServeHTTPNoFlusher(t *testing.T) {
 	hub := NewHub()
@@ -1399,6 +1400,13 @@ func TestServeHTTPNoFlusher(t *testing.T) {
 	hub.ServeHTTP(context.Background(), w, "somecode", func() (int64, interface{}) { return 0, map[string]string{} })
 	if w.code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", w.code, http.StatusInternalServerError)
+	}
+	if got := w.header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want %q", got, "application/json")
+	}
+	const wantBody = "{\"error\":\"streaming_unsupported\",\"message\":\"streaming unsupported\"}\n"
+	if got := w.body.String(); got != wantBody {
+		t.Fatalf("body = %q, want %q", got, wantBody)
 	}
 }
 

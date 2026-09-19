@@ -23,7 +23,7 @@ var guestIcon512 []byte
 // handleGuestPage serves the public room UI after checking that the room exists.
 func (s *Server) handleGuestPage(w http.ResponseWriter, r *http.Request) {
 	if !s.store.Exists(r.PathValue("code")) {
-		writeError(w, http.StatusNotFound, "room not found")
+		writeError(w, http.StatusNotFound, "room_not_found", "room not found")
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
