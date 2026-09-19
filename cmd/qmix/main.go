@@ -2,17 +2,24 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/leugenea/qmix/internal/buildinfo"
 	"github.com/leugenea/qmix/internal/config"
 	"github.com/leugenea/qmix/internal/logging"
 	"github.com/leugenea/qmix/internal/server"
 )
+
+func notifyProcessContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
 
 func execute(args []string, out io.Writer, serve func() error) error {
 	return buildinfo.Run(args, out, serve)
@@ -60,8 +67,10 @@ func startupErrorKind(err error) string {
 
 func main() {
 	if err := execute(os.Args[1:], os.Stdout, func() error {
+		ctx, stop := notifyProcessContext()
+		defer stop()
 		return startServer(os.Stderr, func(cfg config.Config, logger *slog.Logger) error {
-			return server.Run(cfg, logger)
+			return server.Run(ctx, cfg, logger)
 		})
 	}); err != nil {
 		writeStartupError(os.Stderr, err)
