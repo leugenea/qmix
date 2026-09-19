@@ -33,12 +33,12 @@ func TestCreateRoomFailsClosedWhenEntropyUnavailable(t *testing.T) {
 	store := NewStore(time.Hour, time.Hour, &seqCodeGen{})
 	store.tokenRandom = errorReader{err: errors.New("entropy unavailable")}
 
-	room, err := store.CreateRoom()
+	credentials, err := store.CreateRoom()
 	if err == nil {
 		t.Fatal("CreateRoom returned nil error")
 	}
-	if room != nil {
-		t.Fatalf("room = %+v, want nil", room)
+	if credentials != (RoomCredentials{}) {
+		t.Fatalf("credentials = %+v, want zero value", credentials)
 	}
 	if len(store.rooms) != 0 {
 		t.Fatalf("stored %d rooms after token generation failed", len(store.rooms))

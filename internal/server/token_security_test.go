@@ -35,10 +35,11 @@ func TestHostTokenRejectionAndDisclosureSurfaces(t *testing.T) {
 		t.Fatalf("guest/QR URL exposes host token: %q", credentials.URL)
 	}
 
-	room := store.Get(credentials.Code)
-	store.mu.Lock()
-	snapshot, err := json.Marshal(snapshotPayload(room))
-	store.mu.Unlock()
+	eventSnapshot, err := store.EventSnapshot(credentials.Code)
+	if err != nil {
+		t.Fatalf("EventSnapshot: %v", err)
+	}
+	snapshot, err := json.Marshal(eventSnapshot.Data)
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}

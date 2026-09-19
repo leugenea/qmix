@@ -217,13 +217,13 @@ func capacityRoom(t *testing.T, store *Store, withCurrent bool) string {
 // needs its own subprocess slot.
 func capacityStreamRoom(t *testing.T, store *Store, index int, withCurrent bool) string {
 	t.Helper()
-	room, err := store.CreateRoom()
+	credentials, err := store.CreateRoom()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if withCurrent {
 		store.mu.Lock()
-		room.Current = &Current{
+		store.rooms[credentials.Code].Current = &Current{
 			TrackID:    fmt.Sprintf("capacity-current-%d", index),
 			State:      "playing",
 			URL:        fmt.Sprintf("https://www.youtube.com/watch?v=capacity-current-%d", index),
@@ -233,7 +233,7 @@ func capacityStreamRoom(t *testing.T, store *Store, index int, withCurrent bool)
 		}
 		store.mu.Unlock()
 	}
-	return room.Code
+	return credentials.Code
 }
 
 // capacityOutcome records one endpoint response.

@@ -10,6 +10,7 @@ type Room struct {
 	Queue        []Track
 	Current      *Current
 	LastActivity time.Time
+	generation   uint64
 }
 
 // Track is a single queue entry. Title, Artist, DurationSec and ResolvedBy are

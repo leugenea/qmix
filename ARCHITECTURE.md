@@ -256,6 +256,29 @@ Go runtime and proxy buffers.
 
 - All state is held **in memory** in one process, without a database.
 - One `Store` supports multiple rooms.
+- The `Store` exclusively owns mutable room records, room incarnation identity,
+  host authorization, queue limits, expiry checks, activity timestamps, and
+  mutation ordering. HTTP handlers pass room codes plus immutable operation
+  references/results; they never retain live room pointers or access the room
+  map or Store mutex.
+- Public room views, append/reorder results, SSE payloads, event snapshots, and
+  current-stream inputs are copied values with no mutable aliases into stored
+  room state. `CreateRoom` returns only immutable code/token credentials.
+- Resolver and stream backend calls run after Store snapshots/preflight and
+  outside Store locks. Append commits revalidate the original room incarnation
+  and queue capacity, so deletion, expiry, or code reuse during resolution
+  cannot mutate a replacement room.
+- A Store mutation holds the Store-before-Hub lock order through non-blocking
+  event publication. Every Hub registered by a Server receives the committed
+  event; registration is idempotent, and snapshots read the same Hub used by
+  that Server's subscription rather than a mutable Store-wide sink. Mutation
+  results and events therefore describe the same committed snapshot, skip
+  events remain ordered as `track_changed`, `player_state`, then
+  `queue_updated`, and SSE connection snapshots capture room state plus their
+  event-ID boundary atomically.
+- Hub subscriptions and publications are keyed by room code plus Store-assigned
+  incarnation generation. Expiry disconnects that exact incarnation before its
+  code can be reused, so a stale SSE stream cannot observe a replacement room.
 - Empty rooms (no queued or current track) expire after 12 hours of inactivity.
   Non-empty rooms expire after 24 hours without a queue or playback mutation,
   bounding memory retained by abandoned queues.
