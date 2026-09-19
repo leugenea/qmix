@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/leugenea/qmix/internal/resolver"
@@ -49,7 +48,7 @@ func TestAddTrackOverloadedReturns503WithRetryAfter(t *testing.T) {
 	if got := rec.Header().Get("Retry-After"); got != wantRetryAfter {
 		t.Fatalf("Retry-After = %q, want %q", got, wantRetryAfter)
 	}
-	wantBody := `{"error":"` + ytdlpcap.ErrOverloaded.Error() + `"}` + "\n"
+	wantBody := `{"error":"overloaded","message":"track resolver is temporarily overloaded"}` + "\n"
 	if rec.Body.String() != wantBody {
 		t.Fatalf("body = %q, want %q", rec.Body.String(), wantBody)
 	}
@@ -70,7 +69,7 @@ func TestGuestAddTrackOverloadedReturns503WithRetryAfter(t *testing.T) {
 	if got := rec.Header().Get("Retry-After"); got != wantRetryAfter {
 		t.Fatalf("Retry-After = %q, want %q", got, wantRetryAfter)
 	}
-	wantBody := `{"error":"overloaded","message":"` + ytdlpcap.ErrOverloaded.Error() + `"}` + "\n"
+	wantBody := `{"error":"overloaded","message":"track resolver is temporarily overloaded"}` + "\n"
 	if rec.Body.String() != wantBody {
 		t.Fatalf("body = %q, want %q", rec.Body.String(), wantBody)
 	}
@@ -94,35 +93,31 @@ func TestStreamOverloadedReturns503WithRetryAfter(t *testing.T) {
 	if got := rec.Header().Get("Retry-After"); got != wantRetryAfter {
 		t.Fatalf("Retry-After = %q, want %q", got, wantRetryAfter)
 	}
-	if !strings.Contains(rec.Body.String(), ytdlpcap.ErrOverloaded.Error()) {
-		t.Fatalf("body = %q, want it to contain %q", rec.Body.String(), ytdlpcap.ErrOverloaded.Error())
+	wantBody := `{"error":"overloaded","message":"stream resolver is temporarily overloaded"}`
+	if rec.Body.String() != wantBody {
+		t.Fatalf("body = %q, want %q", rec.Body.String(), wantBody)
 	}
 }
 
-// TestResolveErrorKeepsExistingMappings guards the non-overload resolver
-// mappings while adding the 503 overload case (qmix#130). The host API maps
-// invalid/unsupported/no-anonymous to 422; the guest API maps invalid to
-// 400 and the rest to 422, so the cases are table-driven per endpoint.
-func TestResolveErrorKeepsExistingMappings(t *testing.T) {
+// TestQueueSubmissionErrorMapping covers the centralized resolver mapping.
+func TestQueueSubmissionErrorMapping(t *testing.T) {
 	cases := []struct {
-		name      string
-		err       error
-		wantHost  int
-		wantGuest int
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
 	}{
-		{name: "invalid", err: resolver.ErrInvalid, wantHost: http.StatusUnprocessableEntity, wantGuest: http.StatusBadRequest},
-		{name: "unsupported", err: resolver.ErrUnsupported, wantHost: http.StatusUnprocessableEntity, wantGuest: http.StatusUnprocessableEntity},
-		{name: "no anonymous", err: resolver.ErrNoAnonymous, wantHost: http.StatusUnprocessableEntity, wantGuest: http.StatusUnprocessableEntity},
-		{name: "overloaded", err: ytdlpcap.ErrOverloaded, wantHost: http.StatusServiceUnavailable, wantGuest: http.StatusServiceUnavailable},
-		{name: "upstream", err: errors.New("upstream down"), wantHost: http.StatusBadGateway, wantGuest: http.StatusBadGateway},
+		{name: "invalid", err: resolver.ErrInvalid, wantStatus: http.StatusBadRequest, wantCode: "invalid_url"},
+		{name: "unsupported", err: resolver.ErrUnsupported, wantStatus: http.StatusUnprocessableEntity, wantCode: "unsupported_service"},
+		{name: "no anonymous", err: resolver.ErrNoAnonymous, wantStatus: http.StatusUnprocessableEntity, wantCode: "unsupported_service"},
+		{name: "overloaded", err: ytdlpcap.ErrOverloaded, wantStatus: http.StatusServiceUnavailable, wantCode: "overloaded"},
+		{name: "upstream", err: errors.New("upstream down"), wantStatus: http.StatusBadGateway, wantCode: "upstream_failure"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if status, _ := resolveError(tc.err); status != tc.wantHost {
-				t.Fatalf("resolveError status = %d, want %d", status, tc.wantHost)
-			}
-			if status, _, _ := guestResolveError(tc.err); status != tc.wantGuest {
-				t.Fatalf("guestResolveError status = %d, want %d", status, tc.wantGuest)
+			got := queueSubmissionError(tc.err)
+			if got.Status != tc.wantStatus || got.Code != tc.wantCode {
+				t.Fatalf("mapping = %+v, want status=%d code=%q", got, tc.wantStatus, tc.wantCode)
 			}
 		})
 	}

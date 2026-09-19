@@ -273,16 +273,17 @@ func TestAddTrackUnknownDomain422(t *testing.T) {
 	}
 }
 
-// TestAddTrackInvalidLink422 verifies an invalid URL maps to 422.
-func TestAddTrackInvalidLink422(t *testing.T) {
+// TestAddTrackInvalidLink400 verifies both queue aliases classify an invalid URL
+// as a client error under the unified qmix#136 mapping.
+func TestAddTrackInvalidLink400(t *testing.T) {
 	r := stubResolver{err: resolver.ErrInvalid}
 	s, _ := newResolverTestServer(r)
 	mux := newTestMux(s)
 	code, _ := createRoom(t, mux)
 
 	rec := addTrack(t, mux, code, "::::not a url")
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
 

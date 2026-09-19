@@ -129,12 +129,11 @@ through `StreamBackend` and caches the URL with a TTL
 - `POST /rooms/{code}/queue` — append a track with `{url}`; the request body is
   limited to 4 KiB and each room holds at most 100 queued tracks. When the
   shared yt-dlp capacity queue is full, resolution is rejected with `503` plus
-  `Retry-After` (qmix#130)
+  `Retry-After`. This is the canonical submission route
 - `GET /r/{code}` — get the guest room page (no login)
-- `POST /r/{code}/queue` — append a track from the guest page; the response
-  includes a machine-readable status for the UI, including `queue_full` and
-  `request_too_large`; capacity overload is `503` with the `overloaded` code
-  plus `Retry-After` (qmix#130)
+- `POST /r/{code}/queue` — compatibility alias for the same queue-submission
+  operation. Its historical `201 {"status":"accepted","track":...}` success
+  body is retained; the canonical route retains its historical bare track body
 - `PATCH /rooms/{code}/queue` — reorder the queue with `{"order": [trackID, ...]}` (host only; exact permutation of IDs)
 - `POST /rooms/{code}/skip` — advance to the next track (host only)
 - `GET /rooms/{code}/current/stream` — stream the current track with Range/seek support: 200 / 206 / 416; 404 when there is no current track; 503 plus `Retry-After` when the shared yt-dlp capacity queue is full (qmix#130)
@@ -143,6 +142,37 @@ through `StreamBackend` and caches the URL with a TTL
   while the configured/default executable is resolvable and executable;
   otherwise `503 {"status":"unavailable"}`. The check never executes yt-dlp or
   accesses the network.
+
+Application errors written by public HTTP handlers use one JSON envelope:
+`{"error":"<code>","message":"<text>"}`. Health/readiness status documents and
+HTTP media-range responses retain their endpoint-specific bodies. Codes and
+messages are fixed public classifications; wrapped resolver/backend
+errors, submitted URLs, paths, credentials, and host tokens are never copied
+into responses. If the response transport for `GET /rooms/{code}/events` does
+not support flushing, the endpoint returns `500` with `streaming_unsupported`
+and `streaming unsupported` in this envelope. Both queue-submission aliases use
+this mapping:
+
+| Failure | Status | `error` | `message` |
+|---|---:|---|---|
+| Room missing or expired | 404 | `room_not_found` | `room not found` |
+| Malformed JSON | 400 | `bad_request` | `invalid json body` |
+| Body over 4 KiB | 413 | `request_too_large` | `request body too large` |
+| Blank URL | 400 | `invalid_url` | `url must not be empty` |
+| Resolver rejects URL syntax | 400 | `invalid_url` | `invalid track url` |
+| Unsupported service | 422 | `unsupported_service` | `unsupported track service` |
+| Anonymous resolution unavailable | 422 | `unsupported_service` | `track is not publicly available` |
+| Queue at capacity | 409 | `queue_full` | `queue is full` |
+| Resolver capacity exhausted | 503 | `overloaded` | `track resolver is temporarily overloaded` |
+| Resolver/upstream failure | 502 | `upstream_failure` | `track service is temporarily unavailable` |
+
+The only queue status change in qmix#136 is invalid resolver URLs on
+`POST /rooms/{code}/queue`: they now return 400 instead of 422, matching the
+existing guest route and distinguishing malformed input from a valid URL for an
+unsupported service. All other queue statuses and both successful response
+bodies remain unchanged. The guest web client already reads `message`; the
+Android client does not submit queue links, so neither client requires a format
+migration.
 
 Host operations (skip and reorder) require the `X-Host-Token` header issued
 when the room is created.

@@ -52,10 +52,11 @@ func ServeStream(w http.ResponseWriter, r *http.Request, backend StreamBackend, 
 
 	res, err := backend.Stream(r.Context(), track, rangeHeader)
 	if err != nil {
-		if errors.Is(err, ytdlpcap.ErrOverloaded) {
-			w.Header().Set("Retry-After", RetryAfterOverloaded)
+		public := publicStreamError(err)
+		if public.retryAfter != "" {
+			w.Header().Set("Retry-After", public.retryAfter)
 		}
-		writeError(w, errorStatus(err), err.Error())
+		writeError(w, public.status, public.code, public.message)
 		return err
 	}
 	defer res.Body.Close()
@@ -140,25 +141,30 @@ func validateRangeHeader(rangeHeader string) error {
 	return nil
 }
 
-// errorStatus maps a backend error to an HTTP status: ErrNotFound -> 404,
-// ErrInvalidRange -> 416, capacity overload -> 503 (qmix#130), anything else
-// (upstream failure) -> 502.
-func errorStatus(err error) int {
+type streamAPIError struct {
+	status     int
+	code       string
+	message    string
+	retryAfter string
+}
+
+// publicStreamError maps backend failures to allowlisted public responses.
+func publicStreamError(err error) streamAPIError {
 	switch {
 	case errors.Is(err, ErrNotFound):
-		return http.StatusNotFound
+		return streamAPIError{status: http.StatusNotFound, code: "stream_not_found", message: "audio stream not found"}
 	case errors.Is(err, ErrInvalidRange):
-		return http.StatusRequestedRangeNotSatisfiable
+		return streamAPIError{status: http.StatusRequestedRangeNotSatisfiable, code: "invalid_range", message: "requested range is not available"}
 	case errors.Is(err, ytdlpcap.ErrOverloaded):
-		return http.StatusServiceUnavailable
+		return streamAPIError{status: http.StatusServiceUnavailable, code: "overloaded", message: "stream resolver is temporarily overloaded", retryAfter: RetryAfterOverloaded}
 	default:
-		return http.StatusBadGateway
+		return streamAPIError{status: http.StatusBadGateway, code: "upstream_failure", message: "audio service is temporarily unavailable"}
 	}
 }
 
-// writeError writes a human-readable error body.
-func writeError(w http.ResponseWriter, status int, msg string) {
+// writeError writes the uniform API error envelope.
+func writeError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, `{"error":`+strconv.Quote(msg)+`}`)
+	_, _ = io.WriteString(w, `{"error":`+strconv.Quote(code)+`,"message":`+strconv.Quote(msg)+`}`)
 }

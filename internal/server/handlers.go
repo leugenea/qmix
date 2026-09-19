@@ -70,7 +70,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /rooms/{code}", s.observeHTTP(s.handleGetRoom))
 	mux.HandleFunc("POST /rooms/{code}/queue", s.observeHTTP(s.handleAddTrack))
 	mux.HandleFunc("GET /r/{code}", s.observeHTTP(s.handleGuestPage))
-	mux.HandleFunc("POST /r/{code}/queue", s.observeHTTP(s.handleGuestAddTrack))
+	mux.HandleFunc("POST /r/{code}/queue", s.observeHTTP(s.handleAddTrack))
 	mux.HandleFunc("POST /rooms/{code}/skip", s.observeHTTP(s.handleSkip))
 	mux.HandleFunc("PATCH /rooms/{code}/queue", s.observeHTTP(s.handleReorder))
 	mux.HandleFunc("GET /rooms/{code}/events", s.observeHTTP(s.handleEvents))
@@ -84,15 +84,15 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeError writes a human-readable error body.
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+// writeError writes the uniform public API error envelope.
+func writeError(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, errorEnvelope{Error: code, Message: msg})
 }
 
 // decodeJSON decodes the request body into v, returning a 400 on failure.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v interface{}) bool {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid json body")
 		return false
 	}
 	return true
@@ -138,7 +138,7 @@ func isRequestTooLarge(err error) bool {
 func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 	credentials, err := s.store.CreateRoom()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create room")
+		writeError(w, http.StatusInternalServerError, "internal_error", "failed to create room")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{
@@ -153,7 +153,7 @@ func (s *Server) handleGetRoom(w http.ResponseWriter, r *http.Request) {
 	view, err := s.store.View(r.PathValue("code"))
 	if err != nil {
 		s.storeLogger.Debug("room lookup failed", "operation", "get", "error_kind", "not_found")
-		writeError(w, http.StatusNotFound, "room not found")
+		writeError(w, http.StatusNotFound, "room_not_found", "room not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -183,17 +183,13 @@ func viewRoom(room *Room) roomView {
 	return v
 }
 
-// handleAddTrack appends a track to the queue. Open to guests. When a resolver
-// is wired in, the URL is resolved to track metadata first; unresolvable links
-// return 422 (bad link) or 502 (upstream service failure).
+// handleAddTrack implements queue submission for both public route aliases. The
+// guest route keeps its historical success wrapper; errors are identical.
 func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
+	guestAlias := r.Pattern == "POST /r/{code}/queue"
 	ref, err := s.store.AppendPreflight(r.PathValue("code"))
 	if err != nil {
-		if errors.Is(err, errQueueFull) {
-			writeError(w, http.StatusConflict, errQueueFull.Error())
-		} else {
-			writeError(w, http.StatusNotFound, errRoomNotFound.Error())
-		}
+		writeQueueSubmissionError(w, err)
 		return
 	}
 
@@ -202,42 +198,35 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeAddTrackJSON(w, r, &req); err != nil {
 		if isRequestTooLarge(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
-			return
+			writeQueueSubmissionError(w, errRequestTooLarge)
+		} else {
+			writeQueueSubmissionError(w, errInvalidJSON)
 		}
-		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
 	if strings.TrimSpace(req.URL) == "" {
-		writeError(w, http.StatusBadRequest, "url must not be empty")
+		writeQueueSubmissionError(w, errEmptyTrackURL)
 		return
 	}
-	if err := s.store.CheckAppend(ref); errors.Is(err, errQueueFull) {
-		writeError(w, http.StatusConflict, errQueueFull.Error())
-		return
-	} else if err != nil {
-		writeError(w, http.StatusNotFound, errRoomNotFound.Error())
+	if err := s.store.CheckAppend(ref); err != nil {
+		writeQueueSubmissionError(w, err)
 		return
 	}
 
 	track, err := s.trackFromRequest(r.Context(), req.URL)
 	if err != nil {
 		s.logResolverFailure(err)
-		status, msg := resolveError(err)
-		if status == http.StatusServiceUnavailable {
-			w.Header().Set("Retry-After", retryAfterOverloaded)
-		}
-		writeError(w, status, msg)
+		writeQueueSubmissionError(w, err)
 		return
 	}
 
 	track, err = s.store.Append(ref, track)
-	if errors.Is(err, errQueueFull) {
-		writeError(w, http.StatusConflict, errQueueFull.Error())
+	if err != nil {
+		writeQueueSubmissionError(w, err)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusNotFound, "room not found")
+	if guestAlias {
+		writeJSON(w, http.StatusCreated, map[string]interface{}{"status": "accepted", "track": track})
 		return
 	}
 	writeJSON(w, http.StatusCreated, track)
@@ -279,126 +268,74 @@ func isOverloaded(err error) bool {
 	return errors.Is(err, ytdlpcap.ErrOverloaded)
 }
 
-// resolveError maps a resolver failure to an HTTP status and a human-readable
-// message. Unresolvable links (invalid, unsupported, no anonymous path) become
-// 422; transient upstream failures become 502. Overload of the shared
-// yt-dlp capacity becomes 503 (qmix#130). Nothing is ever 500.
-func resolveError(err error) (int, string) {
-	switch {
-	case isOverloaded(err):
-		return http.StatusServiceUnavailable, err.Error()
-	case errors.Is(err, resolver.ErrInvalid),
-		errors.Is(err, resolver.ErrUnsupported),
-		errors.Is(err, resolver.ErrNoAnonymous):
-		return http.StatusUnprocessableEntity, err.Error()
-	default:
-		return http.StatusBadGateway, err.Error()
-	}
+var (
+	errInvalidJSON     = errors.New("invalid json body")
+	errRequestTooLarge = errors.New("request body too large")
+	errEmptyTrackURL   = errors.New("url must not be empty")
+)
+
+// apiError is the public, allowlisted error contract. Message values must never
+// be built from wrapped errors, request data, URLs, paths, or credentials.
+type apiError struct {
+	Status     int
+	Code       string
+	Message    string
+	RetryAfter string
 }
 
-// guestError is the guest API error body: a machine-readable code for the
-// frontend plus a human-readable message for the snackbar.
-type guestError struct {
+type errorEnvelope struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
 }
 
-// writeGuestError writes a guest API error with the given status and code.
-func writeGuestError(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, guestError{Error: code, Message: msg})
-}
-
-// handleGuestAddTrack is the guest-facing POST /r/{code}/queue endpoint. It
-// adds a link to the room queue like handleAddTrack, but responses carry
-// machine-readable status codes for the guest UI.
-func (s *Server) handleGuestAddTrack(w http.ResponseWriter, r *http.Request) {
-	ref, err := s.store.AppendPreflight(r.PathValue("code"))
-	if err != nil {
-		if errors.Is(err, errQueueFull) {
-			writeGuestError(w, http.StatusConflict, "queue_full", errQueueFull.Error())
-		} else {
-			writeGuestError(w, http.StatusNotFound, "room_not_found", "room not found")
-		}
-		return
-	}
-
-	var req struct {
-		URL string `json:"url"`
-	}
-	if err := decodeAddTrackJSON(w, r, &req); err != nil {
-		if isRequestTooLarge(err) {
-			writeGuestError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
-			return
-		}
-		writeGuestError(w, http.StatusBadRequest, "bad_request", "invalid json body")
-		return
-	}
-	if strings.TrimSpace(req.URL) == "" {
-		writeGuestError(w, http.StatusBadRequest, "invalid_url", "url must not be empty")
-		return
-	}
-	if err := s.store.CheckAppend(ref); errors.Is(err, errQueueFull) {
-		writeGuestError(w, http.StatusConflict, "queue_full", errQueueFull.Error())
-		return
-	} else if err != nil {
-		writeGuestError(w, http.StatusNotFound, "room_not_found", errRoomNotFound.Error())
-		return
-	}
-
-	track, err := s.trackFromRequest(r.Context(), req.URL)
-	if err != nil {
-		s.logResolverFailure(err)
-		status, code, msg := guestResolveError(err)
-		if status == http.StatusServiceUnavailable {
-			w.Header().Set("Retry-After", retryAfterOverloaded)
-		}
-		writeGuestError(w, status, code, msg)
-		return
-	}
-
-	track, err = s.store.Append(ref, track)
-	if errors.Is(err, errQueueFull) {
-		writeGuestError(w, http.StatusConflict, "queue_full", errQueueFull.Error())
-		return
-	}
-	if err != nil {
-		writeGuestError(w, http.StatusNotFound, "room_not_found", "room not found")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]interface{}{"status": "accepted", "track": track})
-}
-
-// guestResolveError maps a resolver failure to the guest API status, code and
-// human-readable message. Unlike the host API, an unparseable link is 400
-// invalid_url; unsupported and no-anonymous links are 422 unsupported_service;
-// upstream failures are 502 upstream_failure. Overload of the shared yt-dlp
-// capacity is 503 overloaded (qmix#130).
-func guestResolveError(err error) (int, string, string) {
+// queueSubmissionError centralizes every domain/resolver failure mapping used
+// by both queue route aliases.
+func queueSubmissionError(err error) apiError {
 	switch {
+	case errors.Is(err, errRoomNotFound):
+		return apiError{Status: http.StatusNotFound, Code: "room_not_found", Message: "room not found"}
+	case errors.Is(err, errQueueFull):
+		return apiError{Status: http.StatusConflict, Code: "queue_full", Message: "queue is full"}
+	case errors.Is(err, errRequestTooLarge):
+		return apiError{Status: http.StatusRequestEntityTooLarge, Code: "request_too_large", Message: "request body too large"}
+	case errors.Is(err, errInvalidJSON):
+		return apiError{Status: http.StatusBadRequest, Code: "bad_request", Message: "invalid json body"}
+	case errors.Is(err, errEmptyTrackURL):
+		return apiError{Status: http.StatusBadRequest, Code: "invalid_url", Message: "url must not be empty"}
 	case isOverloaded(err):
-		return http.StatusServiceUnavailable, "overloaded", err.Error()
+		return apiError{Status: http.StatusServiceUnavailable, Code: "overloaded", Message: "track resolver is temporarily overloaded", RetryAfter: retryAfterOverloaded}
 	case errors.Is(err, resolver.ErrInvalid):
-		return http.StatusBadRequest, "invalid_url", err.Error()
-	case errors.Is(err, resolver.ErrUnsupported), errors.Is(err, resolver.ErrNoAnonymous):
-		return http.StatusUnprocessableEntity, "unsupported_service", err.Error()
+		return apiError{Status: http.StatusBadRequest, Code: "invalid_url", Message: "invalid track url"}
+	case errors.Is(err, resolver.ErrUnsupported):
+		return apiError{Status: http.StatusUnprocessableEntity, Code: "unsupported_service", Message: "unsupported track service"}
+	case errors.Is(err, resolver.ErrNoAnonymous):
+		return apiError{Status: http.StatusUnprocessableEntity, Code: "unsupported_service", Message: "track is not publicly available"}
 	default:
-		return http.StatusBadGateway, "upstream_failure", err.Error()
+		return apiError{Status: http.StatusBadGateway, Code: "upstream_failure", Message: "track service is temporarily unavailable"}
 	}
+}
+
+func writeQueueSubmissionError(w http.ResponseWriter, err error) {
+	public := queueSubmissionError(err)
+	if public.RetryAfter != "" {
+		w.Header().Set("Retry-After", public.RetryAfter)
+	}
+	writeJSON(w, public.Status, errorEnvelope{Error: public.Code, Message: public.Message})
 }
 
 // handleSkip advances to the next track. Host-only.
 func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request) {
 	payload, err := s.store.Skip(r.PathValue("code"), hostToken(r))
 	if errors.Is(err, errRoomNotFound) {
-		writeError(w, http.StatusNotFound, errRoomNotFound.Error())
+		writeError(w, http.StatusNotFound, "room_not_found", errRoomNotFound.Error())
 		return
 	}
 	if errors.Is(err, errInvalidHostToken) {
-		writeError(w, http.StatusForbidden, errInvalidHostToken.Error())
+		writeError(w, http.StatusForbidden, "invalid_host_token", errInvalidHostToken.Error())
 		return
 	}
 	if errors.Is(err, errQueueEmpty) {
-		writeError(w, http.StatusBadRequest, "queue is empty")
+		writeError(w, http.StatusBadRequest, "queue_empty", "queue is empty")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"current": payload})
@@ -411,9 +348,9 @@ func (s *Server) handleReorder(w http.ResponseWriter, r *http.Request) {
 	ref, err := s.store.ReorderPreflight(r.PathValue("code"), token)
 	if err != nil {
 		if errors.Is(err, errRoomNotFound) {
-			writeError(w, http.StatusNotFound, errRoomNotFound.Error())
+			writeError(w, http.StatusNotFound, "room_not_found", errRoomNotFound.Error())
 		} else {
-			writeError(w, http.StatusForbidden, errInvalidHostToken.Error())
+			writeError(w, http.StatusForbidden, "invalid_host_token", errInvalidHostToken.Error())
 		}
 		return
 	}
@@ -428,11 +365,11 @@ func (s *Server) handleReorder(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, errRoomNotFound):
-			writeError(w, http.StatusNotFound, errRoomNotFound.Error())
+			writeError(w, http.StatusNotFound, "room_not_found", errRoomNotFound.Error())
 		case errors.Is(err, errInvalidHostToken):
-			writeError(w, http.StatusForbidden, errInvalidHostToken.Error())
+			writeError(w, http.StatusForbidden, "invalid_host_token", errInvalidHostToken.Error())
 		default:
-			writeError(w, http.StatusBadRequest, errInvalidOrder.Error())
+			writeError(w, http.StatusBadRequest, "invalid_order", errInvalidOrder.Error())
 		}
 		return
 	}
@@ -463,7 +400,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
 	sub, snapshot, cancel, err := s.store.subscribeEvents(code, s.hub)
 	if errors.Is(err, errRoomNotFound) {
-		writeError(w, http.StatusNotFound, errRoomNotFound.Error())
+		writeError(w, http.StatusNotFound, "room_not_found", errRoomNotFound.Error())
 		return
 	}
 	s.hub.serveSubscriptionHTTP(r.Context(), w, sub, cancel, snapshot)
@@ -512,11 +449,11 @@ func snapshotPayload(room *Room) map[string]interface{} {
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	current, err := s.store.CurrentStream(r.PathValue("code"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "room not found")
+		writeError(w, http.StatusNotFound, "room_not_found", "room not found")
 		return
 	}
 	if s.StreamBackend == nil {
-		writeError(w, http.StatusNotFound, "no stream backend configured")
+		writeError(w, http.StatusNotFound, "stream_unavailable", "no stream backend configured")
 		return
 	}
 
@@ -525,7 +462,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		track = &stream.Track{ID: current.ID, URL: current.URL, Title: current.Title, Artist: current.Artist, ResolvedBy: current.ResolvedBy}
 	}
 	if track == nil || strings.TrimSpace(track.Title) == "" {
-		writeError(w, http.StatusNotFound, "no current track")
+		writeError(w, http.StatusNotFound, "no_current_track", "no current track")
 		return
 	}
 

@@ -336,7 +336,7 @@ func (h *Hub) serveSubscriberHTTP(ctx context.Context, w http.ResponseWriter, su
 
 	if _, ok := w.(http.Flusher); !ok {
 		h.logger.Warn("SSE transport unavailable", "operation", "connect", "error_kind", "flusher_unavailable")
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "streaming_unsupported", "streaming unsupported")
 		return nil
 	}
 
