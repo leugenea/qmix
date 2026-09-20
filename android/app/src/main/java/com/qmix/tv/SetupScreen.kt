@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
@@ -30,7 +31,7 @@ import androidx.tv.material3.Text
 internal fun SetupScreen(
     settings: HostingState.Setup,
     pending: Boolean,
-    error: String?,
+    error: UserMessage?,
     onSettingsChanged: (String, String) -> Unit,
     onCreate: () -> Unit,
 ) {
@@ -43,20 +44,22 @@ internal fun SetupScreen(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("QMix TV", fontSize = 42.sp)
-        if (error != null) Text(error, color = Color(0xFFFFB4AB), modifier = Modifier.padding(12.dp))
-        if (pending) Text("Creating room…", modifier = Modifier.padding(12.dp))
+        Text(stringResource(R.string.setup_title), fontSize = 42.sp)
+        if (error != null) {
+            Text(stringResource(error.resourceId()), color = Color(0xFFFFB4AB), modifier = Modifier.padding(12.dp))
+        }
+        if (pending) Text(stringResource(R.string.creating_room), modifier = Modifier.padding(12.dp))
         FocusedButton(
-            text = if (error == null) "Create room" else "Retry",
+            text = stringResource(if (error == null) R.string.create_room else R.string.retry),
             enabled = !pending,
             focusRequester = actionFocus,
             onClick = onCreate,
         )
-        UrlInput("Backend URL", backend, !pending) {
+        UrlInput(stringResource(R.string.backend_url), backend, !pending) {
             backend = it
             onSettingsChanged(backend, origin)
         }
-        UrlInput("Guest origin", origin, !pending) {
+        UrlInput(stringResource(R.string.guest_origin), origin, !pending) {
             origin = it
             onSettingsChanged(backend, origin)
         }
@@ -72,16 +75,15 @@ internal fun HttpWarningScreen(onConfirm: () -> Unit, onCancel: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("HTTP is not private", fontSize = 36.sp, color = Color(0xFFFFB4AB))
+        Text(stringResource(R.string.http_warning_title), fontSize = 36.sp, color = Color(0xFFFFB4AB))
         Text(
-            "HTTP exposes room traffic and host credentials to devices on the local network. " +
-                "Use it only on a trusted LAN. Use HTTPS for public or remote deployments.",
+            stringResource(R.string.http_warning_body),
             fontSize = 22.sp,
             modifier = Modifier.width(760.dp).padding(vertical = 24.dp),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            FocusedButton("Use HTTP", true, confirmFocus, onClick = onConfirm)
-            FocusedButton("Cancel", true, remember { FocusRequester() }, onClick = onCancel)
+            FocusedButton(stringResource(R.string.use_http), true, confirmFocus, onClick = onConfirm)
+            FocusedButton(stringResource(R.string.cancel), true, remember { FocusRequester() }, onClick = onCancel)
         }
     }
 }

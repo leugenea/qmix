@@ -115,14 +115,14 @@ class RoomApiClientInstrumentationTest {
     @Test
     fun every_http_status_family_has_a_safe_human_message() {
         listOf(
-            403 to "Host access was denied.",
-            404 to "The room was not found.",
-            503 to "The server is temporarily unavailable.",
-            418 to "The server rejected the request.",
+            403 to UserMessage.HOST_ACCESS_DENIED,
+            404 to UserMessage.ROOM_NOT_FOUND,
+            503 to UserMessage.SERVER_UNAVAILABLE,
+            418 to UserMessage.REQUEST_REJECTED,
         ).forEach { (status, expected) ->
             server.enqueue(MockResponse().setResponseCode(status))
             val error = assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }
-            assertEquals(expected, error.message)
+            assertEquals(expected, error.userMessage)
         }
     }
 
@@ -174,14 +174,14 @@ class RoomApiClientInstrumentationTest {
             server.url("/").toString(),
         )
         assertEquals(
-            "The server timed out. Try again.",
-            assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }.message,
+            UserMessage.SERVER_TIMEOUT,
+            assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }.userMessage,
         )
 
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
         assertEquals(
-            "Could not reach the server.",
-            assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }.message,
+            UserMessage.SERVER_UNREACHABLE,
+            assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }.userMessage,
         )
 
         val otherOrigin = MockWebServer()
@@ -192,8 +192,8 @@ class RoomApiClientInstrumentationTest {
                     .addHeader("Location", otherOrigin.url("/capture")),
             )
             assertEquals(
-                "The server rejected the request.",
-                assertThrows(RoomApiException::class.java) { api.skip("ABCD", "host-secret") }.message,
+                UserMessage.REQUEST_REJECTED,
+                assertThrows(RoomApiException::class.java) { api.skip("ABCD", "host-secret") }.userMessage,
             )
             assertEquals(0, otherOrigin.requestCount)
         } finally {
@@ -229,6 +229,6 @@ class RoomApiClientInstrumentationTest {
 
     private fun assertInvalid(block: () -> Unit) {
         val error = assertThrows(RoomApiException::class.java, block)
-        assertEquals("The server returned an invalid response.", error.message)
+        assertEquals(UserMessage.INVALID_RESPONSE, error.userMessage)
     }
 }

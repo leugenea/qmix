@@ -309,7 +309,7 @@ class HostSessionControllerTest {
             assertTrue(controller.createRoom())
 
             assertEquals(1, server.requestCount)
-            assertEquals("Could not save settings. Try again.", (controller.state as HostingState.Error).message)
+            assertEquals(UserMessage.PERSISTENCE_ERROR, (controller.state as HostingState.Error).message)
             assertFalse(states.any { it is HostingState.Invitation })
             assertEquals(EndpointSettings.EMPTY, failingStore.load())
             assertEquals(
@@ -355,7 +355,7 @@ class HostSessionControllerTest {
         assertFalse(controller.createRoom())
 
         assertEquals(
-            HostingState.Error("Enter valid absolute http(s) URLs without credentials, queries, or fragments.", "", ""),
+            HostingState.Error(UserMessage.INVALID_ENDPOINT, "", ""),
             controller.state,
         )
         assertFalse(controller.state.toString().contains("host-secret"))
@@ -418,7 +418,7 @@ class HostSessionControllerTest {
         Thread.sleep(200)
         assertEquals(1, server.requestCount)
         assertEquals(
-            "Could not reach the server.",
+            UserMessage.SERVER_UNREACHABLE,
             (controller.state as HostingState.Error).message,
         )
     }

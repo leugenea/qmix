@@ -147,7 +147,7 @@ class EndpointSettingsStoreInstrumentationTest {
         assertFalse(controller.confirmHttpWarning())
 
         assertEquals(
-            HostingState.Error("Could not save settings. Try again.", backend, guestOrigin),
+            HostingState.Error(UserMessage.PERSISTENCE_ERROR, backend, guestOrigin),
             controller.state,
         )
         assertFalse(failingStore.isHttpWarningAcknowledged())

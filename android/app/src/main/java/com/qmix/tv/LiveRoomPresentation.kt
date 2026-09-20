@@ -1,13 +1,15 @@
 package com.qmix.tv
 
+import androidx.annotation.StringRes
+
 internal fun handleLiveRoomBack(handler: LiveRoomHandler, onExitLiveRoom: () -> Unit) {
     if (handler.onBack() == LiveRoomBackResult.EXIT_ACTIVITY) {
         onExitLiveRoom()
     }
 }
 
-internal fun formatDuration(durationSeconds: Int): String {
-    if (durationSeconds <= 0) return "Duration unknown"
+internal fun formatDuration(durationSeconds: Int, unknownDuration: String): String {
+    if (durationSeconds <= 0) return unknownDuration
     val hours = durationSeconds / 3600
     val minutes = (durationSeconds % 3600) / 60
     val seconds = durationSeconds % 60
@@ -18,36 +20,69 @@ internal fun formatDuration(durationSeconds: Int): String {
     }
 }
 
-internal fun localPlaybackStatusLabel(status: LocalPlaybackStatus): String = when (status) {
-    LocalPlaybackStatus.IDLE -> "Idle"
-    LocalPlaybackStatus.BUFFERING -> "Buffering"
-    LocalPlaybackStatus.PLAYING -> "Playing"
-    LocalPlaybackStatus.PAUSED -> "Paused"
-    LocalPlaybackStatus.COMPLETED -> "Completed"
-    LocalPlaybackStatus.ERROR -> "Error"
+@StringRes
+internal fun localPlaybackStatusResource(status: LocalPlaybackStatus): Int = when (status) {
+    LocalPlaybackStatus.IDLE -> R.string.playback_status_idle
+    LocalPlaybackStatus.BUFFERING -> R.string.playback_status_buffering
+    LocalPlaybackStatus.PLAYING -> R.string.playback_status_playing
+    LocalPlaybackStatus.PAUSED -> R.string.playback_status_paused
+    LocalPlaybackStatus.COMPLETED -> R.string.playback_status_completed
+    LocalPlaybackStatus.ERROR -> R.string.playback_status_error
 }
 
-internal fun localPlaybackErrorMessage(error: PlaybackError): String = when (error.kind) {
-    PlaybackErrorKind.HTTP -> error.httpResponseCode?.let { "Stream request failed (HTTP $it)." }
-        ?: "Stream request failed."
-    PlaybackErrorKind.RANGE -> error.httpResponseCode?.let { "Stream seek failed (HTTP $it)." }
-        ?: "Stream seek failed."
-    PlaybackErrorKind.DECODE -> "Audio format could not be played."
-    PlaybackErrorKind.NETWORK -> "Network connection interrupted."
-    PlaybackErrorKind.UNKNOWN -> "Playback failed unexpectedly."
+internal data class FormattedText(@param:StringRes val resource: Int, val argument: Int? = null)
+
+internal fun localPlaybackErrorText(error: PlaybackError): FormattedText = when (error.kind) {
+    PlaybackErrorKind.HTTP -> error.httpResponseCode?.let {
+        FormattedText(R.string.playback_stream_request_failed_http, it)
+    } ?: FormattedText(R.string.playback_stream_request_failed)
+    PlaybackErrorKind.RANGE -> error.httpResponseCode?.let {
+        FormattedText(R.string.playback_stream_seek_failed_http, it)
+    } ?: FormattedText(R.string.playback_stream_seek_failed)
+    PlaybackErrorKind.DECODE -> FormattedText(R.string.playback_decode_failed)
+    PlaybackErrorKind.NETWORK -> FormattedText(R.string.playback_network_interrupted)
+    PlaybackErrorKind.UNKNOWN -> FormattedText(R.string.playback_unknown_failed)
 }
 
-internal fun synchronizationMessage(synchronization: RoomSyncState): String? = when (synchronization) {
-    is RoomSyncState.Missing -> "Room not found."
+@StringRes
+internal fun synchronizationMessageResource(synchronization: RoomSyncState): Int? = when (synchronization) {
+    is RoomSyncState.Missing -> R.string.sync_room_missing
     is RoomSyncState.Active -> when {
-        synchronization.connection == LiveConnection.CONNECTING -> "Connecting to room…"
+        synchronization.connection == LiveConnection.CONNECTING -> R.string.sync_connecting
         synchronization.connection == LiveConnection.RECONNECTING && synchronization.room != null ->
-            "Reconnecting… Showing last known room."
-        synchronization.connection == LiveConnection.RECONNECTING -> "Reconnecting…"
+            R.string.sync_reconnecting_with_room
+        synchronization.connection == LiveConnection.RECONNECTING -> R.string.sync_reconnecting
         synchronization.freshness == Freshness.STALE && synchronization.room != null ->
-            "Updates are stale. Showing last known room."
-        synchronization.freshness == Freshness.STALE -> "Could not refresh the room."
-        synchronization.freshness == Freshness.LOADING -> "Waiting for room data…"
+            R.string.sync_stale_with_room
+        synchronization.freshness == Freshness.STALE -> R.string.sync_refresh_failed
+        synchronization.freshness == Freshness.LOADING -> R.string.sync_waiting
         else -> null
     }
+}
+
+enum class UserMessage {
+    INVALID_ENDPOINT,
+    PERSISTENCE_ERROR,
+    REQUEST_FAILED,
+    INVALID_RESPONSE,
+    SERVER_TIMEOUT,
+    SERVER_UNREACHABLE,
+    HOST_ACCESS_DENIED,
+    ROOM_NOT_FOUND,
+    SERVER_UNAVAILABLE,
+    REQUEST_REJECTED,
+}
+
+@StringRes
+internal fun UserMessage.resourceId(): Int = when (this) {
+    UserMessage.INVALID_ENDPOINT -> R.string.error_invalid_endpoint
+    UserMessage.PERSISTENCE_ERROR -> R.string.error_persistence
+    UserMessage.REQUEST_FAILED -> R.string.error_request_failed
+    UserMessage.INVALID_RESPONSE -> R.string.error_invalid_response
+    UserMessage.SERVER_TIMEOUT -> R.string.error_server_timeout
+    UserMessage.SERVER_UNREACHABLE -> R.string.error_server_unreachable
+    UserMessage.HOST_ACCESS_DENIED -> R.string.error_host_access_denied
+    UserMessage.ROOM_NOT_FOUND -> R.string.error_room_not_found
+    UserMessage.SERVER_UNAVAILABLE -> R.string.error_server_unavailable
+    UserMessage.REQUEST_REJECTED -> R.string.error_request_rejected
 }

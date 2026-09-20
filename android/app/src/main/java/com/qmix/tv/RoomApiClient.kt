@@ -116,7 +116,7 @@ class RoomApiClient(
     private fun decodeRoom(body: String): RoomState {
         val json = parseObject(body)
         if (!json.has("current")) {
-            throw RoomApiException("The server returned an invalid response.")
+            throw RoomApiException(UserMessage.INVALID_RESPONSE)
         }
         val current = when (val value = json.opt("current")) {
             JSONObject.NULL -> null
@@ -127,13 +127,13 @@ class RoomApiClient(
                 title = value.requiredString("title"),
                 artist = value.requiredString("artist", allowBlank = true),
             )
-            else -> throw RoomApiException("The server returned an invalid response.")
+            else -> throw RoomApiException(UserMessage.INVALID_RESPONSE)
         }
         val queueJson = json.optJSONArray("queue")
-            ?: throw RoomApiException("The server returned an invalid response.")
+            ?: throw RoomApiException(UserMessage.INVALID_RESPONSE)
         val queue = (0 until queueJson.length()).map { index ->
             val track = queueJson.optJSONObject(index)
-                ?: throw RoomApiException("The server returned an invalid response.")
+                ?: throw RoomApiException(UserMessage.INVALID_RESPONSE)
             QueuedTrack(
                 id = track.requiredString("id"),
                 url = track.requiredString("url"),
@@ -159,7 +159,7 @@ class RoomApiClient(
             .build()
         return execute(request, 200) { body ->
             val current = parseObject(body).optJSONObject("current")
-                ?: throw RoomApiException("The server returned an invalid response.")
+                ?: throw RoomApiException(UserMessage.INVALID_RESPONSE)
             CurrentTrack(
                 trackId = current.requiredString("track_id"),
                 positionSeconds = current.requiredInt("pos_sec"),
@@ -176,22 +176,22 @@ class RoomApiClient(
             decode(response.body.string())
         }
     } catch (_: SocketTimeoutException) {
-        throw RoomApiException("The server timed out. Try again.", QMixLogCause.NETWORK)
+        throw RoomApiException(UserMessage.SERVER_TIMEOUT, QMixLogCause.NETWORK)
     } catch (_: IOException) {
-        throw RoomApiException("Could not reach the server.", QMixLogCause.NETWORK)
+        throw RoomApiException(UserMessage.SERVER_UNREACHABLE, QMixLogCause.NETWORK)
     }
 
     private fun parseObject(body: String): JSONObject = try {
         JSONObject(body)
     } catch (_: JSONException) {
-        throw RoomApiException("The server returned an invalid response.")
+        throw RoomApiException(UserMessage.INVALID_RESPONSE)
     }
 
     private fun JSONObject.requiredString(name: String, allowBlank: Boolean = false): String {
         val value = opt(name) as? String
-            ?: throw RoomApiException("The server returned an invalid response.")
+            ?: throw RoomApiException(UserMessage.INVALID_RESPONSE)
         if (!allowBlank && value.isBlank()) {
-            throw RoomApiException("The server returned an invalid response.")
+            throw RoomApiException(UserMessage.INVALID_RESPONSE)
         }
         return value
     }
@@ -202,20 +202,20 @@ class RoomApiClient(
             is Long -> raw.toInt().takeIf { it.toLong() == raw }
             else -> null
         }
-        return value ?: throw RoomApiException("The server returned an invalid response.")
+        return value ?: throw RoomApiException(UserMessage.INVALID_RESPONSE)
     }
 }
 
 class RoomApiException(
-    message: String,
+    val userMessage: UserMessage,
     internal val logCause: QMixLogCause = QMixLogCause.UNKNOWN,
-) : Exception(message) {
+) : Exception(userMessage.name) {
     companion object {
         fun forStatus(status: Int): RoomApiException = when (status) {
-            403 -> RoomApiException("Host access was denied.", QMixLogCause.HTTP_STATUS)
-            404 -> RoomApiException("The room was not found.", QMixLogCause.HTTP_STATUS)
-            in 500..599 -> RoomApiException("The server is temporarily unavailable.", QMixLogCause.HTTP_STATUS)
-            else -> RoomApiException("The server rejected the request.", QMixLogCause.HTTP_STATUS)
+            403 -> RoomApiException(UserMessage.HOST_ACCESS_DENIED, QMixLogCause.HTTP_STATUS)
+            404 -> RoomApiException(UserMessage.ROOM_NOT_FOUND, QMixLogCause.HTTP_STATUS)
+            in 500..599 -> RoomApiException(UserMessage.SERVER_UNAVAILABLE, QMixLogCause.HTTP_STATUS)
+            else -> RoomApiException(UserMessage.REQUEST_REJECTED, QMixLogCause.HTTP_STATUS)
         }
     }
 }

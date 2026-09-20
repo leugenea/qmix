@@ -951,8 +951,9 @@ func TestServeHTTPReturnsAfterSubscriberOverflow(t *testing.T) {
 	go func() {
 		defer close(handlerDone)
 		hub.ServeHTTP(ctx, w, "room", func() (int64, interface{}) {
+			snapshotID := hub.currentID("room")
 			close(subscribed)
-			return hub.currentID("room"), map[string]int{"version": 0}
+			return snapshotID, map[string]int{"version": 0}
 		})
 	}()
 	<-subscribed

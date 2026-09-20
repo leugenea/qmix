@@ -1,8 +1,14 @@
 package com.qmix.tv
 
+import android.content.Context
+import android.content.res.Configuration
+import android.os.LocaleList
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -20,6 +26,7 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.pressKey
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -29,6 +36,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.Locale
 
 @RunWith(AndroidJUnit4::class)
 class HostingScreenInstrumentationTest {
@@ -121,7 +129,7 @@ class HostingScreenInstrumentationTest {
         composeRule.setContent {
             HostingScreen(
                 HostingState.Error(
-                    "The server timed out. Try again.",
+                    UserMessage.SERVER_TIMEOUT,
                     "https://api.example",
                     "https://guest.example",
                 ),
@@ -151,7 +159,7 @@ class HostingScreenInstrumentationTest {
 
         composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertExists()
         composeRule.onNodeWithText("Join this room").assertExists()
-        composeRule.onNodeWithText("ABCD").assertExists()
+        composeRule.onNodeWithText("Room code: ABCD").assertExists()
         composeRule.onNodeWithText("https://guest.example/r/ABCD").assertExists()
         composeRule.onNodeWithText("Enter room").assertIsFocused()
             .performKeyInput { pressKey(Key.Enter) }
@@ -578,5 +586,103 @@ class HostingScreenInstrumentationTest {
             composeRule.onAllNodes(leakedDetail).assertCountEquals(0)
             composeRule.onAllNodes(leakedDetail, useUnmergedTree = true).assertCountEquals(0)
         }
+    }
+
+    @Test
+    fun russian_copy_fits_1920x1080_tv_bounds_and_preserves_focus_and_accessibility_semantics() {
+        val base = ApplicationProvider.getApplicationContext<Context>()
+        val configuration = Configuration(base.resources.configuration).apply {
+            setLocales(LocaleList(Locale.forLanguageTag("ru")))
+        }
+        val russianContext = base.createConfigurationContext(configuration)
+        val invitationUrl = "https://guest.example/r/ABCD"
+        val httpWarning = "\u041f\u0440\u0438 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0438 HTTP \u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u0430 \u0432 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e\u0439 \u0441\u0435\u0442\u0438 \u043c\u043e\u0433\u0443\u0442 \u043f\u0435\u0440\u0435\u0445\u0432\u0430\u0442\u0438\u0442\u044c \u0434\u0430\u043d\u043d\u044b\u0435 \u043a\u043e\u043c\u043d\u0430\u0442\u044b \u0438 \u0443\u0447\u0451\u0442\u043d\u044b\u0435 \u0434\u0430\u043d\u043d\u044b\u0435 \u0432\u0435\u0434\u0443\u0449\u0435\u0433\u043e. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 HTTP \u0442\u043e\u043b\u044c\u043a\u043e \u0432 \u0434\u043e\u0432\u0435\u0440\u0435\u043d\u043d\u043e\u0439 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e\u0439 \u0441\u0435\u0442\u0438, \u0430 \u0434\u043b\u044f \u043f\u0443\u0431\u043b\u0438\u0447\u043d\u043e\u0433\u043e \u0438\u043b\u0438 \u0443\u0434\u0430\u043b\u0451\u043d\u043d\u043e\u0433\u043e \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u2014 HTTPS."
+        val state = mutableStateOf<HostingState>(
+            HostingState.HttpWarning("http://192.168.1.20:8180", "http://192.168.1.20:8180"),
+        )
+        composeRule.setContent {
+            CompositionLocalProvider(LocalContext provides russianContext) {
+                HostingScreen(
+                    state.value,
+                    onSettingsChanged = { _, _ -> },
+                    onCreate = {},
+                    onEnterRoom = {},
+                    onConfirmHttpWarning = {},
+                    onCancelHttpWarning = {},
+                )
+            }
+        }
+
+        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        assertEquals(1920f, root.width, 0f)
+        assertEquals(1080f, root.height, 0f)
+        assertInsideRoot(httpWarning)
+        assertInsideRoot("HTTP \u043d\u0435 \u0437\u0430\u0449\u0438\u0449\u0430\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0435")
+        composeRule.onNodeWithText("\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c HTTP")
+            .assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionRight) }
+        composeRule.onNodeWithText("\u041e\u0442\u043c\u0435\u043d\u0430").assertIsFocused()
+
+        composeRule.runOnIdle {
+            state.value = HostingState.Invitation(GuestInvite("ABCD", invitationUrl))
+        }
+        assertInsideRoot("\u041f\u0440\u0438\u0441\u043e\u0435\u0434\u0438\u043d\u044f\u0439\u0442\u0435\u0441\u044c \u043a \u043a\u043e\u043c\u043d\u0430\u0442\u0435")
+        assertInsideRoot("\u041a\u043e\u0434 \u043a\u043e\u043c\u043d\u0430\u0442\u044b: ABCD")
+        assertInsideRoot(invitationUrl)
+        assertInsideRoot(
+            composeRule.onNodeWithContentDescription("QR-\u043a\u043e\u0434 \u0434\u043b\u044f $invitationUrl"),
+            "Russian invitation QR semantics",
+        )
+        composeRule.onNodeWithText("\u0412\u043e\u0439\u0442\u0438 \u0432 \u043a\u043e\u043c\u043d\u0430\u0442\u0443").assertIsFocused()
+
+        composeRule.runOnIdle {
+            state.value = HostingState.Error(
+                UserMessage.INVALID_ENDPOINT,
+                "https://api.example",
+                "https://guest.example",
+            )
+        }
+        composeRule.onNodeWithText("\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c").assertIsFocused()
+        composeRule.onNodeWithContentDescription("URL \u0441\u0435\u0440\u0432\u0435\u0440\u0430").assertExists()
+        assertInsideRoot("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u043e\u043b\u043d\u044b\u0435 \u0430\u0434\u0440\u0435\u0441\u0430 http(s) \u0431\u0435\u0437 \u0443\u0447\u0451\u0442\u043d\u044b\u0445 \u0434\u0430\u043d\u043d\u044b\u0445, \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u043e\u0432 \u0437\u0430\u043f\u0440\u043e\u0441\u0430 \u0438 \u0444\u0440\u0430\u0433\u043c\u0435\u043d\u0442\u043e\u0432.")
+
+        composeRule.runOnIdle {
+            state.value = HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState(
+                        "ABCD",
+                        CurrentTrack("current", 0, "playing", "Current title", "Current artist"),
+                        listOf(QueuedTrack("next", "https://example/next", "Next", "Artist", 60, "fixture")),
+                    ),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+                playback = LocalPlaybackState(
+                    trackId = "current",
+                    status = LocalPlaybackStatus.ERROR,
+                    error = PlaybackError(PlaybackErrorKind.HTTP, "must not render", 503),
+                ),
+            )
+        }
+
+        composeRule.onNodeWithTag("room-next").assertIsFocused()
+        assertInsideRoot("\u041e\u0448\u0438\u0431\u043a\u0430 \u0432\u043e\u0441\u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0434\u0435\u043d\u0438\u044f: \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u044c \u0430\u0443\u0434\u0438\u043e\u043f\u043e\u0442\u043e\u043a (HTTP 503).")
+        assertInsideRoot("\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u0442\u0440\u0435\u043a")
+        assertInsideRoot("\u0422\u0440\u0435\u043a, \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439 \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u043c")
+    }
+
+    private fun assertInsideRoot(text: String) {
+        assertInsideRoot(composeRule.onNodeWithText(text), text)
+    }
+
+    private fun assertInsideRoot(node: SemanticsNodeInteraction, label: String) {
+        val root = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        val bounds = node.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertTrue("$label is clipped on the left", bounds.left >= root.left)
+        assertTrue("$label is clipped on the top", bounds.top >= root.top)
+        assertTrue("$label is clipped on the right", bounds.right <= root.right)
+        assertTrue("$label is clipped on the bottom", bounds.bottom <= root.bottom)
     }
 }

@@ -33,33 +33,33 @@ class LiveRoomPresentationTest {
     }
 
     @Test
-    fun local_playback_labels_cover_every_actual_state_and_sanitize_errors() {
-        assertEquals("Idle", localPlaybackStatusLabel(LocalPlaybackStatus.IDLE))
-        assertEquals("Buffering", localPlaybackStatusLabel(LocalPlaybackStatus.BUFFERING))
-        assertEquals("Playing", localPlaybackStatusLabel(LocalPlaybackStatus.PLAYING))
-        assertEquals("Paused", localPlaybackStatusLabel(LocalPlaybackStatus.PAUSED))
-        assertEquals("Completed", localPlaybackStatusLabel(LocalPlaybackStatus.COMPLETED))
-        assertEquals("Error", localPlaybackStatusLabel(LocalPlaybackStatus.ERROR))
+    fun local_playback_resources_cover_every_actual_state_and_sanitize_errors() {
+        assertEquals(R.string.playback_status_idle, localPlaybackStatusResource(LocalPlaybackStatus.IDLE))
+        assertEquals(R.string.playback_status_buffering, localPlaybackStatusResource(LocalPlaybackStatus.BUFFERING))
+        assertEquals(R.string.playback_status_playing, localPlaybackStatusResource(LocalPlaybackStatus.PLAYING))
+        assertEquals(R.string.playback_status_paused, localPlaybackStatusResource(LocalPlaybackStatus.PAUSED))
+        assertEquals(R.string.playback_status_completed, localPlaybackStatusResource(LocalPlaybackStatus.COMPLETED))
+        assertEquals(R.string.playback_status_error, localPlaybackStatusResource(LocalPlaybackStatus.ERROR))
 
         assertEquals(
-            "Stream request failed (HTTP 502).",
-            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.HTTP, "token=do-not-render", 502)),
+            FormattedText(R.string.playback_stream_request_failed_http, 502),
+            localPlaybackErrorText(PlaybackError(PlaybackErrorKind.HTTP, "token=do-not-render", 502)),
         )
         assertEquals(
-            "Stream seek failed (HTTP 416).",
-            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.RANGE, "secret URL", 416)),
+            FormattedText(R.string.playback_stream_seek_failed_http, 416),
+            localPlaybackErrorText(PlaybackError(PlaybackErrorKind.RANGE, "secret URL", 416)),
         )
         assertEquals(
-            "Audio format could not be played.",
-            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.DECODE, "decoder internals")),
+            FormattedText(R.string.playback_decode_failed),
+            localPlaybackErrorText(PlaybackError(PlaybackErrorKind.DECODE, "decoder internals")),
         )
         assertEquals(
-            "Network connection interrupted.",
-            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.NETWORK, "private endpoint")),
+            FormattedText(R.string.playback_network_interrupted),
+            localPlaybackErrorText(PlaybackError(PlaybackErrorKind.NETWORK, "private endpoint")),
         )
         assertEquals(
-            "Playback failed unexpectedly.",
-            localPlaybackErrorMessage(PlaybackError(PlaybackErrorKind.UNKNOWN, "stack details")),
+            FormattedText(R.string.playback_unknown_failed),
+            localPlaybackErrorText(PlaybackError(PlaybackErrorKind.UNKNOWN, "stack details")),
         )
     }
 

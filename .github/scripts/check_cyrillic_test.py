@@ -68,6 +68,78 @@ class CyrillicCheckTest(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
+    def test_allows_only_real_android_locale_string_resources(self):
+        for directory in (
+            "values-ru",
+            "values-ru-rRU",
+            "values-b+ru+RU",
+            "values-ru-rRU-night",
+            "values-b+ru+RU-sw600dp-land",
+            "values-ru-1920x1080-v35",
+            "values-mcc310-en-rUS",
+            "values-mcc310-mnc260-b+ru+RU-night",
+        ):
+            with self.subTest(directory=directory):
+                check = load_check_module()
+                self.assertTrue(
+                    check.is_android_locale_string_resource(
+                        f"android/app/src/main/res/{directory}/strings.xml"
+                    )
+                )
+
+    def test_rejects_non_locale_android_value_qualifiers(self):
+        check = load_check_module()
+
+        for directory in (
+            "values-night",
+            "values-v35",
+            "values-land",
+            "values-car",
+            "values-xx",
+            "values-b+ru+ABCD",
+            "values-ru-sw0dp",
+            "values-ru-0x0",
+            "values-ru-v0",
+            "values-ru-320x480",
+            "values-not-a-locale",
+            "values-night-ru",
+            "values-ru-night-sw600dp",
+        ):
+            with self.subTest(directory=directory):
+                self.assertFalse(
+                    check.is_android_locale_string_resource(
+                        f"android/app/src/main/res/{directory}/strings.xml"
+                    )
+                )
+
+    def test_non_locale_android_value_resources_remain_fail_closed(self):
+        for directory in ("values-night", "values-v35", "values-land", "values-not-a-locale"):
+            self.write_tracked(
+                f"android/app/src/main/res/{directory}/strings.xml",
+                "<resources><string name=\"hello\">\u041f\u0440\u0438\u0432\u0435\u0442</string></resources>\n",
+            )
+
+        result = self.run_check()
+
+        self.assertEqual(1, result.returncode)
+        for directory in ("values-night", "values-v35", "values-land", "values-not-a-locale"):
+            self.assertIn(f"android/app/src/main/res/{directory}/strings.xml:1", result.stdout)
+
+    def test_duplicate_bcp47_variants_remain_fail_closed(self):
+        for directory in ("values-b+ru+fonipa+fonipa", "values-b+ru+1996+1996"):
+            self.write_tracked(
+                f"android/app/src/main/res/{directory}/strings.xml",
+                "<resources><string name=\"hello\">\u041f\u0440\u0438\u0432\u0435\u0442</string></resources>\n",
+            )
+
+        result = self.run_check()
+
+        self.assertEqual(1, result.returncode)
+        for directory in ("values-b+ru+fonipa+fonipa", "values-b+ru+1996+1996"):
+            path = f"android/app/src/main/res/{directory}/strings.xml"
+            self.assertFalse(load_check_module().is_android_locale_string_resource(path))
+            self.assertIn(f"{path}:1", result.stdout)
+
     def test_rejects_boolean_occurrence_count(self):
         text = "\u041d\u0430\u043c\u0435\u0440\u0435\u043d\u043d\u0430\u044f \u0444\u0438\u043a\u0441\u0442\u0443\u0440\u0430"
         self.write_tracked("testdata/international.txt", text + "\n")

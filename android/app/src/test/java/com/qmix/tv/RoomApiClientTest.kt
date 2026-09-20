@@ -136,13 +136,13 @@ class RoomApiClientTest {
     @Test
     fun status_errors_have_human_messages() {
         listOf(
-            403 to "Host access was denied.",
-            404 to "The room was not found.",
-            503 to "The server is temporarily unavailable.",
+            403 to UserMessage.HOST_ACCESS_DENIED,
+            404 to UserMessage.ROOM_NOT_FOUND,
+            503 to UserMessage.SERVER_UNAVAILABLE,
         ).forEach { (status, expected) ->
             server.enqueue(MockResponse().setResponseCode(status))
             val error = assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }
-            assertEquals(expected, error.message)
+            assertEquals(expected, error.userMessage)
         }
     }
 
@@ -152,7 +152,7 @@ class RoomApiClientTest {
 
         val error = assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }
 
-        assertEquals("The server returned an invalid response.", error.message)
+        assertEquals(UserMessage.INVALID_RESPONSE, error.userMessage)
     }
 
     @Test
@@ -165,7 +165,7 @@ class RoomApiClientTest {
 
             val error = assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }
 
-            assertEquals("The server returned an invalid response.", error.message)
+            assertEquals(UserMessage.INVALID_RESPONSE, error.userMessage)
         }
 
         server.enqueue(MockResponse().setBody("""{"code":"ABCD","current":null,"queue":[]}"""))
@@ -183,7 +183,7 @@ class RoomApiClientTest {
 
         val positionError = assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }
 
-        assertEquals("The server returned an invalid response.", positionError.message)
+        assertEquals(UserMessage.INVALID_RESPONSE, positionError.userMessage)
 
         server.enqueue(
             MockResponse().setResponseCode(201)
@@ -192,7 +192,7 @@ class RoomApiClientTest {
 
         val stringError = assertThrows(RoomApiException::class.java) { api.createRoom() }
 
-        assertEquals("The server returned an invalid response.", stringError.message)
+        assertEquals(UserMessage.INVALID_RESPONSE, stringError.userMessage)
     }
 
     @Test
@@ -205,7 +205,7 @@ class RoomApiClientTest {
 
         val error = assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }
 
-        assertEquals("The server timed out. Try again.", error.message)
+        assertEquals(UserMessage.SERVER_TIMEOUT, error.userMessage)
     }
 
     @Test

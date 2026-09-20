@@ -33,6 +33,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,7 +54,7 @@ internal fun LiveRoomScreen(
         InvitationScreen(
             invite = state.invite,
             onAction = { handleLiveRoomBack(handler, onExitLiveRoom) },
-            actionText = "Back to room",
+            actionText = R.string.back_to_room,
         )
         return
     }
@@ -148,21 +149,26 @@ internal fun LiveRoomScreen(
             .padding(48.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            Text("Room ${state.invite.code}", fontSize = 42.sp)
+            Text(stringResource(R.string.room_title, state.invite.code), fontSize = 42.sp)
             Text(
-                "Local playback: ${localPlaybackStatusLabel(state.playback.status)}",
+                stringResource(
+                    R.string.local_playback,
+                    stringResource(localPlaybackStatusResource(state.playback.status)),
+                ),
                 modifier = Modifier.padding(top = 12.dp),
             )
         }
-        synchronizationMessage(state.synchronization)?.let { message ->
-            Text(message, color = Color(0xFFFFDDB3), modifier = Modifier.padding(top = 12.dp))
+        synchronizationMessageResource(state.synchronization)?.let { resource ->
+            Text(stringResource(resource), color = Color(0xFFFFDDB3), modifier = Modifier.padding(top = 12.dp))
         }
         Row(
             modifier = Modifier.padding(top = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             FocusedButton(
-                text = if (state.primaryAction == LiveRoomPrimaryAction.START) "Start" else "Next",
+                text = stringResource(
+                    if (state.primaryAction == LiveRoomPrimaryAction.START) R.string.start else R.string.next,
+                ),
                 enabled = state.isPrimaryActionEnabled,
                 focusRequester = primaryFocus,
                 focusProperties = {
@@ -174,7 +180,7 @@ internal fun LiveRoomScreen(
                 onClick = handler::onStartOrNext,
             )
             FocusedButton(
-                text = "Invite",
+                text = stringResource(R.string.invite),
                 enabled = true,
                 focusRequester = inviteFocus,
                 focusProperties = {
@@ -187,11 +193,14 @@ internal fun LiveRoomScreen(
             )
         }
         if (state.commandPending) {
-            Text("Command pending…", modifier = Modifier.padding(top = 8.dp))
+            Text(stringResource(R.string.command_pending), modifier = Modifier.padding(top = 8.dp))
         }
         state.playback.error?.let { error ->
+            val detail = localPlaybackErrorText(error)
+            val detailText = detail.argument?.let { stringResource(detail.resource, it) }
+                ?: stringResource(detail.resource)
             Text(
-                "Playback error: ${localPlaybackErrorMessage(error)}",
+                stringResource(R.string.playback_error, detailText),
                 color = Color(0xFFFFDDB3),
                 modifier = Modifier.padding(top = 8.dp),
             )
@@ -203,7 +212,9 @@ internal fun LiveRoomScreen(
             ) {
                 if (showPlayPause) {
                     FocusedButton(
-                        text = if (state.playback.status == LocalPlaybackStatus.PAUSED) "Play" else "Pause",
+                        text = stringResource(
+                            if (state.playback.status == LocalPlaybackStatus.PAUSED) R.string.play else R.string.pause,
+                        ),
                         enabled = true,
                         focusRequester = playPauseFocus,
                         focusProperties = {
@@ -217,7 +228,7 @@ internal fun LiveRoomScreen(
                     )
                     if (showSeek) {
                         FocusedButton(
-                            text = "−10 seconds",
+                            text = stringResource(R.string.seek_back_ten_seconds),
                             enabled = true,
                             focusRequester = seekBackFocus,
                             focusProperties = {
@@ -231,7 +242,7 @@ internal fun LiveRoomScreen(
                             onClick = { handler.onSeekBy(-10_000) },
                         )
                         FocusedButton(
-                            text = "+10 seconds",
+                            text = stringResource(R.string.seek_forward_ten_seconds),
                             enabled = true,
                             focusRequester = seekForwardFocus,
                             focusProperties = {
@@ -247,7 +258,7 @@ internal fun LiveRoomScreen(
                 }
                 if (showRetry) {
                     FocusedButton(
-                        text = "Retry Current",
+                        text = stringResource(R.string.retry_current),
                         enabled = true,
                         focusRequester = retryFocus,
                         focusProperties = {
@@ -262,9 +273,9 @@ internal fun LiveRoomScreen(
             }
         }
         if (room != null) {
-            Text("Server-selected track", fontSize = 28.sp, modifier = Modifier.padding(top = 24.dp))
+            Text(stringResource(R.string.server_selected_track), fontSize = 28.sp, modifier = Modifier.padding(top = 24.dp))
             if (room.current == null) {
-                Text("No track playing", modifier = Modifier.padding(top = 8.dp))
+                Text(stringResource(R.string.no_track_playing), modifier = Modifier.padding(top = 8.dp))
             } else {
                 Text(
                     room.current.title,
@@ -280,9 +291,9 @@ internal fun LiveRoomScreen(
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
-            Text("Queue", fontSize = 28.sp, modifier = Modifier.padding(top = 24.dp))
+            Text(stringResource(R.string.queue), fontSize = 28.sp, modifier = Modifier.padding(top = 24.dp))
             if (room.queue.isEmpty()) {
-                Text("Queue is empty", modifier = Modifier.padding(top = 8.dp))
+                Text(stringResource(R.string.queue_empty), modifier = Modifier.padding(top = 8.dp))
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp).testTag("queue-list"),
@@ -339,7 +350,11 @@ private fun QueueTrackRow(
     ) {
         Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(track.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color(0xFFCAC4D0))
-        Text(formatDuration(track.durationSeconds), fontSize = 14.sp, color = Color(0xFFCAC4D0))
+        Text(
+            formatDuration(track.durationSeconds, stringResource(R.string.duration_unknown)),
+            fontSize = 14.sp,
+            color = Color(0xFFCAC4D0),
+        )
     }
 }
 
