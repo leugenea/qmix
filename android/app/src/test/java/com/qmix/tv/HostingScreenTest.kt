@@ -229,7 +229,7 @@ class HostingScreenTest {
         composeRule.setContent {
             HostingScreen(
                 state = HostingState.Error(
-                    "The server timed out. Try again.",
+                    UserMessage.SERVER_TIMEOUT,
                     "https://api.example",
                     "https://guest.example",
                 ),
@@ -729,7 +729,7 @@ class HostingScreenTest {
                 pressKey(Key.Enter)
             }
             composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertExists()
-            composeRule.onNodeWithText("ABCD").assertExists()
+            composeRule.onNodeWithText("Room code: ABCD").assertExists()
             composeRule.onNodeWithText("https://guest.example/r/ABCD").assertExists()
             composeRule.onNodeWithText("Back to room")
                 .assertIsFocused()
@@ -1146,7 +1146,7 @@ class HostingScreenTest {
         }
 
         composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertExists()
-        composeRule.onNodeWithText("ABCD").assertExists()
+        composeRule.onNodeWithText("Room code: ABCD").assertExists()
         composeRule.onNodeWithText("https://guest.example/r/ABCD").assertExists()
         composeRule.onNodeWithText("Enter room")
             .assertIsFocused()

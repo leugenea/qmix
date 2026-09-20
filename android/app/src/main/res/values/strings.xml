@@ -1,5 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">QMix</string>
-
+    <string name="app_name" translatable="false">QMix</string>
+    <string name="setup_title" translatable="false">QMix TV</string>
+    <string name="creating_room">Creating room…</string>
+    <string name="create_room">Create room</string>
+    <string name="retry">Retry</string>
+    <string name="backend_url">Backend URL</string>
+    <string name="guest_origin">Guest origin</string>
+    <string name="http_warning_title">HTTP is not private</string>
+    <string name="http_warning_body">HTTP exposes room traffic and host credentials to devices on the local network. Use it only on a trusted LAN. Use HTTPS for public or remote deployments.</string>
+    <string name="use_http">Use HTTP</string>
+    <string name="cancel">Cancel</string>
+    <string name="enter_room">Enter room</string>
+    <string name="back_to_room">Back to room</string>
+    <string name="join_this_room">Join this room</string>
+    <string name="invitation_room_code">Room code: %1$s</string>
+    <string name="invitation_qr_description">QR code for %1$s</string>
+    <string name="room_title">Room %1$s</string>
+    <string name="local_playback">Local playback: %1$s</string>
+    <string name="playback_status_idle">Idle</string>
+    <string name="playback_status_buffering">Buffering</string>
+    <string name="playback_status_playing">Playing</string>
+    <string name="playback_status_paused">Paused</string>
+    <string name="playback_status_completed">Completed</string>
+    <string name="playback_status_error">Error</string>
+    <string name="start">Start</string>
+    <string name="next">Next</string>
+    <string name="invite">Invite</string>
+    <string name="command_pending">Command pending…</string>
+    <string name="playback_error">Playback error: %1$s</string>
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="seek_back_ten_seconds">−10 seconds</string>
+    <string name="seek_forward_ten_seconds">+10 seconds</string>
+    <string name="retry_current">Retry current</string>
+    <string name="server_selected_track">Server-selected track</string>
+    <string name="no_track_playing">No track playing</string>
+    <string name="queue">Queue</string>
+    <string name="queue_empty">Queue is empty</string>
+    <string name="duration_unknown">Duration unknown</string>
+    <string name="playback_stream_request_failed_http">Stream request failed (HTTP %1$d).</string>
+    <string name="playback_stream_request_failed">Stream request failed.</string>
+    <string name="playback_stream_seek_failed_http">Stream seek failed (HTTP %1$d).</string>
+    <string name="playback_stream_seek_failed">Stream seek failed.</string>
+    <string name="playback_decode_failed">Audio format could not be played.</string>
+    <string name="playback_network_interrupted">Network connection interrupted.</string>
+    <string name="playback_unknown_failed">Playback failed unexpectedly.</string>
+    <string name="sync_room_missing">Room not found.</string>
+    <string name="sync_connecting">Connecting to room…</string>
+    <string name="sync_reconnecting_with_room">Reconnecting… Showing last known room.</string>
+    <string name="sync_reconnecting">Reconnecting…</string>
+    <string name="sync_stale_with_room">Updates are stale. Showing last known room.</string>
+    <string name="sync_refresh_failed">Could not refresh the room.</string>
+    <string name="sync_waiting">Waiting for room data…</string>
+    <string name="error_invalid_endpoint">Enter valid absolute http(s) URLs without credentials, queries, or fragments.</string>
+    <string name="error_persistence">Could not save settings. Try again.</string>
+    <string name="error_request_failed">The request failed.</string>
+    <string name="error_invalid_response">The server returned an invalid response.</string>
+    <string name="error_server_timeout">The server timed out. Try again.</string>
+    <string name="error_server_unreachable">Could not reach the server.</string>
+    <string name="error_host_access_denied">Host access was denied.</string>
+    <string name="error_room_not_found">The room was not found.</string>
+    <string name="error_server_unavailable">The server is temporarily unavailable.</string>
+    <string name="error_request_rejected">The server rejected the request.</string>
 </resources>

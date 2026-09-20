@@ -1,6 +1,7 @@
 package com.qmix.tv
 
 import android.graphics.Bitmap
+import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
@@ -27,7 +29,7 @@ import androidx.tv.material3.Text
 internal fun InvitationScreen(
     invite: GuestInvite,
     onAction: () -> Unit,
-    actionText: String = "Enter room",
+    @StringRes actionText: Int = R.string.enter_room,
 ) {
     val actionFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { actionFocus.requestFocus() }
@@ -42,16 +44,20 @@ internal fun InvitationScreen(
     ) {
         Image(
             bitmap = bitmap,
-            contentDescription = "QR code for ${invite.guestUrl}",
+            contentDescription = stringResource(R.string.invitation_qr_description, invite.guestUrl),
             modifier = Modifier.size(360.dp),
         )
         Spacer(Modifier.width(48.dp))
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Join this room", fontSize = 32.sp)
-            Text(invite.code, fontSize = 64.sp, modifier = Modifier.padding(12.dp))
+            Text(stringResource(R.string.join_this_room), fontSize = 32.sp)
+            Text(
+                stringResource(R.string.invitation_room_code, invite.code),
+                fontSize = 64.sp,
+                modifier = Modifier.padding(12.dp),
+            )
             Text(invite.guestUrl, fontSize = 20.sp, modifier = Modifier.padding(bottom = 24.dp))
             FocusedButton(
-                text = actionText,
+                text = stringResource(actionText),
                 enabled = true,
                 focusRequester = actionFocus,
                 onClick = onAction,

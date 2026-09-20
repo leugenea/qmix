@@ -4,10 +4,6 @@ import okhttp3.OkHttpClient
 import java.util.ArrayDeque
 import java.util.concurrent.Executor
 
-private const val INVALID_ENDPOINT_MESSAGE =
-    "Enter valid absolute http(s) URLs without credentials, queries, or fragments."
-private const val PERSISTENCE_ERROR_MESSAGE = "Could not save settings. Try again."
-
 sealed interface HostingState {
     data class Setup(val backendUrl: String, val guestOrigin: String) : HostingState
     data class HttpWarning(val backendUrl: String, val guestOrigin: String) : HostingState
@@ -36,7 +32,7 @@ sealed interface HostingState {
                     active.connection == LiveConnection.CONNECTED
             }
     }
-    data class Error(val message: String, val backendUrl: String, val guestOrigin: String) : HostingState
+    data class Error(val message: UserMessage, val backendUrl: String, val guestOrigin: String) : HostingState
 }
 
 enum class LiveRoomPrimaryAction { START, NEXT }
@@ -149,7 +145,7 @@ class HostSessionController(
                 setupState = HostingState.Setup("", "")
                 publishLocked(
                     HostingState.Error(
-                        INVALID_ENDPOINT_MESSAGE,
+                        UserMessage.INVALID_ENDPOINT,
                         "",
                         "",
                     ),
@@ -185,7 +181,9 @@ class HostSessionController(
             try {
                 settingsPersistence.acknowledgeHttpWarning()
             } catch (_: IllegalStateException) {
-                publishLocked(HostingState.Error(PERSISTENCE_ERROR_MESSAGE, warning.backendUrl, warning.guestOrigin))
+                publishLocked(
+                    HostingState.Error(UserMessage.PERSISTENCE_ERROR, warning.backendUrl, warning.guestOrigin),
+                )
                 return@synchronized false
             }
             httpAcknowledgementQuarantined = false
@@ -228,16 +226,16 @@ class HostSessionController(
                 }
                 if (changed) drainNotifications()
             } catch (error: RoomApiException) {
-                publishCreateError(generation, settings, error.message ?: "The request failed.")
+                publishCreateError(generation, settings, error.userMessage)
             } catch (_: IllegalArgumentException) {
-                publishCreateError(generation, settings, INVALID_ENDPOINT_MESSAGE)
+                publishCreateError(generation, settings, UserMessage.INVALID_ENDPOINT)
             } catch (_: IllegalStateException) {
-                publishCreateError(generation, settings, PERSISTENCE_ERROR_MESSAGE)
+                publishCreateError(generation, settings, UserMessage.PERSISTENCE_ERROR)
             }
         }
     }
 
-    private fun publishCreateError(generation: Long, settings: EndpointSettings, message: String) {
+    private fun publishCreateError(generation: Long, settings: EndpointSettings, message: UserMessage) {
         val changed = synchronized(this) {
             if (generation != createGeneration) {
                 false

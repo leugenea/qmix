@@ -89,7 +89,7 @@ class HostSessionControllerInstrumentationTest {
         assertFalse(controller.createRoom())
         assertEquals(
             HostingState.Error(
-                "Enter valid absolute http(s) URLs without credentials, queries, or fragments.",
+                UserMessage.INVALID_ENDPOINT,
                 "",
                 "",
             ),
@@ -102,7 +102,7 @@ class HostSessionControllerInstrumentationTest {
         executor.runNext()
         assertEquals(
             HostingState.Error(
-                "The server is temporarily unavailable.",
+                UserMessage.SERVER_UNAVAILABLE,
                 server.url("/").toString().trimEnd('/'),
                 "https://guest.example",
             ),
@@ -171,7 +171,7 @@ class HostSessionControllerInstrumentationTest {
 
         assertEquals(
             HostingState.Error(
-                "Enter valid absolute http(s) URLs without credentials, queries, or fragments.",
+                UserMessage.INVALID_ENDPOINT,
                 server.url("/").toString().trimEnd('/'),
                 "https://guest.example",
             ),
