@@ -122,6 +122,25 @@ is fully replenished. If none is reclaimable, a new identity fails closed with
 429 while identities already in the registry continue according to their own
 buckets. Cleanup runs inline; there are no per-identity goroutines or timers.
 
+## Room submission rate limit
+
+Each room incarnation has one non-blocking token bucket shared by
+`POST /rooms/{code}/queue` and `POST /r/{code}/queue`; alternating aliases does
+not increase capacity. The default burst is 10 syntactically valid submissions,
+with 30 tokens replenished per minute. A room code reused after expiry receives
+a fresh bucket. Exhausted requests return HTTP `429`, `application/json`, a
+positive integer `Retry-After`, and
+`{"error":"rate_limited","message":"room submission rate limit exceeded"}`
+without starting resolver work or mutating room or SSE state.
+
+Room existence, the bounded 4 KiB JSON body, URL validation, and an already-full
+100-track queue are checked before a token is consumed. Once those checks pass,
+one token is consumed before resolver work, including when the resolver later
+rejects the URL or fails upstream. This admission limit is separate from the
+100-track queue length and from the process-wide yt-dlp concurrency/wait-queue
+limit: queue-full remains `409`, while exhausted yt-dlp capacity remains `503`
+after room admission has been consumed.
+
 ## Integration tests
 
 The required test tier is `make test-integration`: HTTP scenarios run against a
@@ -206,13 +225,16 @@ application configuration.
 | `QMIX_ROOM_CREATE_RATE_PER_MINUTE` | `10` | Integer from `1` through `60000`; token replenishment rate per client identity for `POST /rooms` |
 | `QMIX_ROOM_CREATE_BURST` | `5` | Integer from `1` through `10000`; maximum token-bucket burst per client identity |
 | `QMIX_ROOM_CREATE_IDENTITY_LIMIT` | `4096` | Integer from `1` through `65536`; hard cap on retained client-identity buckets; unseen identities fail closed with `429` when no inactive full bucket can be reclaimed |
+| `QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE` | `30` | Integer from `1` through `60000`; per-room-incarnation queue-submission token replenishment shared by canonical and guest aliases |
+| `QMIX_ROOM_SUBMISSION_BURST` | `10` | Integer from `1` through `10000`; maximum admitted queue-submission burst per room incarnation |
 | `QMIX_TRUSTED_PROXY_CIDRS` | empty | Comma-separated IPv4/IPv6 CIDRs for immediate reverse proxies trusted to supply one `X-Forwarded-For` field; empty means all forwarding headers are ignored |
 
 Missing or blank values use the listed defaults. For
 `QMIX_YTDLP_QUEUE_LIMIT`, explicit zero or any negative integer also uses the
 listed default; malformed or overflowing integers are invalid. Room creation
 rate must be from 1 through 60000, burst from 1 through 10000, and identity
-limit from 1 through 65536; out-of-range values are rejected rather than
+limit from 1 through 65536. Room submission rate and burst use the same
+respective bounded domains; out-of-range values are rejected rather than
 clamped. Trusted proxy entries must each be an IPv4 or IPv6 CIDR; malformed or
 empty list members are invalid. IPv4-mapped CIDRs must use prefix lengths from
 `/96` through `/128`; QMix converts those to equivalent IPv4 prefixes and

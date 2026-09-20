@@ -1118,7 +1118,9 @@ func TestSweepRemovesAbandonedNonEmptyRoom(t *testing.T) {
 }
 
 func TestConcurrentMutationsAndSSE(t *testing.T) {
-	s, _ := newTestServer()
+	// qmix#156: admit all 20 mutations so this test exercises SSE accounting.
+	store := NewStoreWithSubmissionLimit(time.Hour, time.Hour, &seqCodeGen{}, 30, 20, nil)
+	s := NewServer(store, NewHub())
 	mux := newTestMux(s)
 	code, token := createRoom(t, mux)
 

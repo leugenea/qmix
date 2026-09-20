@@ -473,6 +473,54 @@ func TestIntegrationResolverMockUnknownLink(t *testing.T) {
 	}
 }
 
+func TestIntegrationRoomSubmissionRateLimitSharedAcrossAliases(t *testing.T) {
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RoomSubmission.RatePerMinute = 30
+	cfg.RoomSubmission.Burst = 1
+	trackResolver := &submissionCountingResolver{err: resolver.ErrUnsupported}
+	app, err := NewApp(cfg, nil, Dependencies{
+		CheckExecutable: func(string) bool { return true },
+		BuildResolver:   func(resolver.Config) resolver.Resolver { return trackResolver },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	base := integServe(t, app.Handler())
+
+	for _, tc := range []struct {
+		name        string
+		firstPath   func(string) string
+		limitedPath func(string) string
+	}{
+		{name: "canonical consumes guest bucket", firstPath: func(code string) string { return "/rooms/" + code + "/queue" }, limitedPath: func(code string) string { return "/r/" + code + "/queue" }},
+		{name: "guest consumes canonical bucket", firstPath: func(code string) string { return "/r/" + code + "/queue" }, limitedPath: func(code string) string { return "/rooms/" + code + "/queue" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _ := integCreateRoom(t, base)
+			body := `{"url":"https://example.test/unsupported"}`
+			if first := integDo(t, http.MethodPost, base+tc.firstPath(code), body, ""); first.status != http.StatusUnprocessableEntity {
+				t.Fatalf("admitted status = %d, want 422; body=%s", first.status, first.body)
+			}
+			limited := integDo(t, http.MethodPost, base+tc.limitedPath(code), body, "")
+			if limited.status != http.StatusTooManyRequests || limited.header.Get("Content-Type") != "application/json" || limited.header.Get("Retry-After") != "2" {
+				t.Fatalf("limited response = status %d content-type %q retry %q body=%s", limited.status, limited.header.Get("Content-Type"), limited.header.Get("Retry-After"), limited.body)
+			}
+			var envelope errorEnvelope
+			integJSON(t, limited, &envelope)
+			if envelope != (errorEnvelope{Error: "rate_limited", Message: "room submission rate limit exceeded"}) {
+				t.Fatalf("envelope = %+v", envelope)
+			}
+		})
+	}
+	if trackResolver.count() != 2 {
+		t.Fatalf("resolver calls = %d, want one per room", trackResolver.count())
+	}
+}
+
 // Scenario 5: streaming through a fake yt-dlp binary. The stream backend is
 // configured via QMIX_YTDLP_BIN when the App is built and streams from a local
 // mock upstream with Range support.

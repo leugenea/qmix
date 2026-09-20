@@ -1,16 +1,22 @@
 package server
 
-import "time"
+import (
+	"time"
+
+	"github.com/leugenea/qmix/internal/roomsubmission"
+)
 
 // Room is a collaborative listening session. HostToken authorizes host-only
 // operations (skip, reorder). Queue holds the ordered list of tracks.
 type Room struct {
-	Code         string
-	HostToken    string
-	Queue        []Track
-	Current      *Current
-	LastActivity time.Time
-	generation   uint64
+	Code               string
+	HostToken          string
+	Queue              []Track
+	Current            *Current
+	LastActivity       time.Time
+	generation         uint64
+	submissionLimiter  *roomsubmission.Limiter
+	appendReservations int
 }
 
 // Track is a single queue entry. Title, Artist, DurationSec and ResolvedBy are
