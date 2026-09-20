@@ -124,7 +124,9 @@ through `StreamBackend` and caches the URL with a TTL
 ## 6. API surface
 
 **REST**
-- `POST /rooms` — create a room → `{code, host_token, url}` (`url` = `/r/{code}`)
+- `POST /rooms` — create a room → `{code, host_token, url}` (`url` = `/r/{code}`).
+  Creation is admitted by a per-client token bucket before allocation; rejection
+  is `429` with `Retry-After` and the public `rate_limited` envelope
 - `GET /rooms/{code}` — get public room state (`code`, `current`, and `queue`; no `host_token`)
 - `POST /rooms/{code}/queue` — append a track with `{url}`; the request body is
   limited to 4 KiB and each room holds at most 100 queued tracks. When the
@@ -282,6 +284,44 @@ Defaults: at most 2 concurrent subprocesses with a queue of 8 waiting callers
 worst-case usage near 400 MiB inside the 512 MiB limit with headroom for the
 Go runtime and proxy buffers.
 
+**Room creation admission** (qmix#155). `POST /rooms` passes through one
+process-wide non-blocking token-bucket registry before calling `Store.CreateRoom`:
+each client may burst 5 creations and replenishes 10 tokens per minute. A denial
+allocates no room and returns exactly HTTP 429, `application/json`, a positive
+integer `Retry-After`, and
+`{"error":"rate_limited","message":"room creation rate limit exceeded"}`. The
+limiter expresses denial through an opaque typed admission error whose
+package-owned constructors select fixed status, code, and message mappings for
+room creation, future room queue rate limits, and future live-room capacity.
+Callers can read but cannot supply or mutate public metadata; nil, zero-value,
+and unknown denials map to a fixed safe 503 fallback. The HTTP boundary
+centrally formats positive integer Retry-After delta-seconds; later admission
+work can reuse this contract without being implemented by qmix#155.
+The registry is mutex-protected but never waits, starts no goroutines or timers,
+and is capped at 4096 identities. When full, it deterministically reclaims the
+least-recently-seen bucket among inactive buckets that have fully replenished.
+If no bucket is eligible, an unseen identity fails closed while known identities
+continue against their existing token state. Admission occurs before the Store
+mutex is acquired, so contention or rejection cannot stall unrelated room
+operations. Queue submissions, live room counts, body/queue/TTL rules, and the
+yt-dlp capacity limiter are unchanged.
+
+The identity trust boundary is the transport peer. With the default empty
+`QMIX_TRUSTED_PROXY_CIDRS`, `RemoteAddr` is canonicalized to an IPv4 or IPv6
+address and all forwarding headers are ignored. If and only if that immediate
+peer belongs to an explicitly configured trusted CIDR, QMix accepts one
+unambiguous `X-Forwarded-For` field, parses address-only entries, walks from
+right to left through trusted hops, and selects the first untrusted address (or
+the leftmost address when every hop is trusted). Malformed/empty entries,
+host-and-port entries, or multiple XFF fields fall back to the immediate peer.
+IPv4-mapped peers and XFF entries are canonicalized to IPv4. Mapped trusted
+prefixes from `/96` through `/128` are converted to equivalent IPv4 prefixes;
+broader mapped forms are rejected at startup because they cannot match safely
+after address canonicalization. `Forwarded` and `X-Real-IP` are never
+consulted. This prevents an Internet
+client from selecting a new rate-limit identity by spoofing proxy headers;
+operators must list only reverse proxies that overwrite/sanitize XFF.
+
 ## 8. State management
 
 - All state is held **in memory** in one process, without a database.
@@ -330,9 +370,12 @@ Go runtime and proxy buffers.
   `QMIX_VK_TOKEN`, `QMIX_YM_TOKEN`, `QMIX_SPOTIFY_CLIENT_ID`,
   `QMIX_SPOTIFY_CLIENT_SECRET`, `QMIX_YTDLP_BIN`,
   `QMIX_STREAM_CACHE_TTL`, `QMIX_YTDLP_METADATA_TIMEOUT`,
-  `QMIX_YTDLP_SEARCH_TIMEOUT`, `QMIX_YTDLP_MAX_CONCURRENT`, and
-  `QMIX_YTDLP_QUEUE_LIMIT`. Defaults are respectively `:8080`, `warn`,
-  `qmix.log`, empty credentials, `yt-dlp`, `5m`, `30s`, `60s`, `2`, and `8`.
+  `QMIX_YTDLP_SEARCH_TIMEOUT`, `QMIX_YTDLP_MAX_CONCURRENT`,
+  `QMIX_YTDLP_QUEUE_LIMIT`, `QMIX_ROOM_CREATE_RATE_PER_MINUTE`,
+  `QMIX_ROOM_CREATE_BURST`, `QMIX_ROOM_CREATE_IDENTITY_LIMIT`, and
+  `QMIX_TRUSTED_PROXY_CIDRS`. Defaults are respectively `:8080`, `warn`,
+  `qmix.log`, empty credentials, `yt-dlp`, `5m`, `30s`, `60s`, `2`, `8`, `10`,
+  `5`, `4096`, and an empty trusted-proxy list.
   Build and Compose orchestration variables are outside this runtime contract.
 - Missing or blank runtime values use their defaults. Explicit malformed
   levels/durations fail startup with one secret-safe JSON record. It retains
@@ -344,7 +387,12 @@ Go runtime and proxy buffers.
   `QMIX_YTDLP_MAX_CONCURRENT` must be a strictly positive integer. For
   `QMIX_YTDLP_QUEUE_LIMIT`, a positive integer sets the limit, while missing,
   blank, zero, or negative values use the documented default of 8. Malformed
-  or overflowing capacity integers fail startup. Startup also
+  or overflowing capacity integers fail startup. Room creation rate must be in
+  `1..60000`, burst in `1..10000`, and identity limit in `1..65536`; values
+  outside those bounded domains fail startup rather than being clamped. The
+  trusted-proxy setting must be empty or a comma-separated list of valid
+  IPv4/IPv6 CIDRs. Those failures use
+  the same safe diagnostic fields and never echo supplied values. Startup also
   fails safely when yt-dlp is missing or non-executable. `/readyz` rechecks the
   executable without invoking it, while `/healthz` remains unconditional.
 - The process subscribes to `SIGINT` and `SIGTERM` with

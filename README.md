@@ -76,6 +76,52 @@ queue is never held while waiting for capacity, so room operations stay
 responsive. See `QMIX_YTDLP_MAX_CONCURRENT` and `QMIX_YTDLP_QUEUE_LIMIT` in the
 configuration table below.
 
+## Room creation rate limit
+
+`POST /rooms` is protected before room allocation by a non-blocking per-client
+token bucket. The default burst is 5 room creations and the bucket replenishes
+at 10 tokens per minute. Rejected requests return HTTP `429`,
+`Content-Type: application/json`, a positive integer `Retry-After`, and the
+fixed public envelope
+`{"error":"rate_limited","message":"room creation rate limit exceeded"}`.
+The limiter returns an opaque typed admission denial. Package-owned constructors
+select an allowlisted status/code/message mapping for room creation, future room
+queue rate limits, or future live-room capacity; callers can only read that
+mapping and a normalized retry delta. Nil, zero-value, and unknown denials map to
+a fixed safe `503` fallback. The HTTP boundary uses one shared positive integer
+`Retry-After` delta-seconds formatter. This contract is available to later
+admission limits without enabling those limits here. This limit does not apply
+to queue submission or any other route.
+
+The client identity is the immediate TCP peer address by default. `Forwarded`,
+`X-Real-IP`, and `X-Forwarded-For` are all ignored for direct deployments, so a
+client cannot evade the limit by supplying forwarding headers. For a deployment
+behind a known reverse proxy, set `QMIX_TRUSTED_PROXY_CIDRS` to the proxy CIDRs.
+Only then is a single `X-Forwarded-For` field accepted: QMix walks its addresses
+right-to-left through trusted hops and uses the first untrusted address.
+Malformed, empty, host-and-port, or multiple XFF fields fall back to the
+immediate peer. `Forwarded` and `X-Real-IP` are never used. IPv4-mapped peer and
+XFF addresses are canonicalized to IPv4. Mapped trusted prefixes with lengths
+from `/96` through `/128` are canonicalized to equivalent IPv4 prefixes; broader
+mapped forms are rejected at startup because they cannot be represented after
+address canonicalization.
+
+Examples:
+
+```bash
+# Direct exposure: leave proxy trust empty (the safe default).
+QMIX_TRUSTED_PROXY_CIDRS= make run
+
+# Behind reverse proxies on these private networks only.
+QMIX_TRUSTED_PROXY_CIDRS="10.0.0.0/8,2001:db8:100::/48" make run
+```
+
+The identity registry is capped at 4096 entries by default. At capacity, QMix
+deterministically reclaims the least-recently-seen inactive bucket only after it
+is fully replenished. If none is reclaimable, a new identity fails closed with
+429 while identities already in the registry continue according to their own
+buckets. Cleanup runs inline; there are no per-identity goroutines or timers.
+
 ## Integration tests
 
 The required test tier is `make test-integration`: HTTP scenarios run against a
@@ -157,12 +203,22 @@ application configuration.
 | `QMIX_YTDLP_SEARCH_TIMEOUT` | `60s` | Positive Go duration |
 | `QMIX_YTDLP_MAX_CONCURRENT` | `2` | Positive integer; concurrent `yt-dlp` subprocesses allowed across metadata and streaming. The default keeps worst-case usage near 400 MiB inside the 512 MiB container, since one `yt-dlp` process can spike to 100–200 MiB RSS |
 | `QMIX_YTDLP_QUEUE_LIMIT` | `8` | Positive integers set the number of callers that may wait for a subprocess slot; missing, blank, zero, or negative values use the default `8`. Further requests are rejected with `503` and `Retry-After` |
+| `QMIX_ROOM_CREATE_RATE_PER_MINUTE` | `10` | Integer from `1` through `60000`; token replenishment rate per client identity for `POST /rooms` |
+| `QMIX_ROOM_CREATE_BURST` | `5` | Integer from `1` through `10000`; maximum token-bucket burst per client identity |
+| `QMIX_ROOM_CREATE_IDENTITY_LIMIT` | `4096` | Integer from `1` through `65536`; hard cap on retained client-identity buckets; unseen identities fail closed with `429` when no inactive full bucket can be reclaimed |
+| `QMIX_TRUSTED_PROXY_CIDRS` | empty | Comma-separated IPv4/IPv6 CIDRs for immediate reverse proxies trusted to supply one `X-Forwarded-For` field; empty means all forwarding headers are ignored |
 
 Missing or blank values use the listed defaults. For
 `QMIX_YTDLP_QUEUE_LIMIT`, explicit zero or any negative integer also uses the
-listed default; malformed or overflowing integers are invalid. An explicitly
-supplied invalid log level, duration, or capacity integer stops startup with one
-JSON record whose
+listed default; malformed or overflowing integers are invalid. Room creation
+rate must be from 1 through 60000, burst from 1 through 10000, and identity
+limit from 1 through 65536; out-of-range values are rejected rather than
+clamped. Trusted proxy entries must each be an IPv4 or IPv6 CIDR; malformed or
+empty list members are invalid. IPv4-mapped CIDRs must use prefix lengths from
+`/96` through `/128`; QMix converts those to equivalent IPv4 prefixes and
+rejects broader mapped forms without echoing the supplied configuration value.
+An explicitly supplied invalid log level, duration, capacity integer, room
+creation setting, or proxy list stops startup with one JSON record whose
 `error_kind` is `invalid_configuration`; `config_variable` names the setting and
 `guidance` gives a safe correction without including the supplied value.
 Other startup failure categories do not include these detail fields. Startup

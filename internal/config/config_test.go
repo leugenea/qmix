@@ -3,6 +3,9 @@ package config
 import (
 	"errors"
 	"log/slog"
+	"net/netip"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,29 +20,34 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 		{
 			name: "documented defaults",
 			want: Config{
-				Address: ":8080",
-				Logging: Logging{Level: slog.LevelWarn, File: "qmix.log"},
-				YTDLP:   YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
-				Stream:  Stream{CacheTTL: 5 * time.Minute},
-				Rooms:   Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
+				Address:      ":8080",
+				Logging:      Logging{Level: slog.LevelWarn, File: "qmix.log"},
+				YTDLP:        YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
+				Stream:       Stream{CacheTTL: 5 * time.Minute},
+				Rooms:        Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
+				RoomCreation: RoomCreation{RatePerMinute: 10, Burst: 5, IdentityLimit: 4096},
 			},
 		},
 		{
 			name: "all runtime variables",
 			env: map[string]string{
-				"QMIX_ADDR":                   "127.0.0.1:9000",
-				"QMIX_LOG_LEVEL":              "INFO",
-				"QMIX_LOG_FILE":               "/safe/qmix.log",
-				"QMIX_VK_TOKEN":               "vk-secret",
-				"QMIX_YM_TOKEN":               "ym-secret",
-				"QMIX_SPOTIFY_CLIENT_ID":      "client-id",
-				"QMIX_SPOTIFY_CLIENT_SECRET":  "client-secret",
-				"QMIX_YTDLP_BIN":              "/opt/bin/yt-dlp",
-				"QMIX_STREAM_CACHE_TTL":       "-1s",
-				"QMIX_YTDLP_METADATA_TIMEOUT": "17s",
-				"QMIX_YTDLP_SEARCH_TIMEOUT":   "41s",
-				"QMIX_YTDLP_MAX_CONCURRENT":   "5",
-				"QMIX_YTDLP_QUEUE_LIMIT":      "9",
+				"QMIX_ADDR":                        "127.0.0.1:9000",
+				"QMIX_LOG_LEVEL":                   "INFO",
+				"QMIX_LOG_FILE":                    "/safe/qmix.log",
+				"QMIX_VK_TOKEN":                    "vk-secret",
+				"QMIX_YM_TOKEN":                    "ym-secret",
+				"QMIX_SPOTIFY_CLIENT_ID":           "client-id",
+				"QMIX_SPOTIFY_CLIENT_SECRET":       "client-secret",
+				"QMIX_YTDLP_BIN":                   "/opt/bin/yt-dlp",
+				"QMIX_STREAM_CACHE_TTL":            "-1s",
+				"QMIX_YTDLP_METADATA_TIMEOUT":      "17s",
+				"QMIX_YTDLP_SEARCH_TIMEOUT":        "41s",
+				"QMIX_YTDLP_MAX_CONCURRENT":        "5",
+				"QMIX_YTDLP_QUEUE_LIMIT":           "9",
+				"QMIX_ROOM_CREATE_RATE_PER_MINUTE": "30",
+				"QMIX_ROOM_CREATE_BURST":           "7",
+				"QMIX_ROOM_CREATE_IDENTITY_LIMIT":  "99",
+				"QMIX_TRUSTED_PROXY_CIDRS":         "10.0.0.0/8, 2001:db8::/32",
 			},
 			want: Config{
 				Address: "127.0.0.1:9000",
@@ -51,6 +59,15 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				YTDLP:  YTDLP{Binary: "/opt/bin/yt-dlp", MetadataTimeout: 17 * time.Second, SearchTimeout: 41 * time.Second, MaxConcurrent: 5, QueueLimit: 9},
 				Stream: Stream{CacheTTL: -time.Second},
 				Rooms:  Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
+				RoomCreation: RoomCreation{
+					RatePerMinute: 30,
+					Burst:         7,
+					IdentityLimit: 99,
+					TrustedProxyCIDRs: []netip.Prefix{
+						netip.MustParsePrefix("10.0.0.0/8"),
+						netip.MustParsePrefix("2001:db8::/32"),
+					},
+				},
 			},
 		},
 		{
@@ -60,11 +77,12 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				"QMIX_YTDLP_QUEUE_LIMIT":    "8",
 			},
 			want: Config{
-				Address: ":8080",
-				Logging: Logging{Level: slog.LevelWarn, File: "qmix.log"},
-				YTDLP:   YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
-				Stream:  Stream{CacheTTL: 5 * time.Minute},
-				Rooms:   Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
+				Address:      ":8080",
+				Logging:      Logging{Level: slog.LevelWarn, File: "qmix.log"},
+				YTDLP:        YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
+				Stream:       Stream{CacheTTL: 5 * time.Minute},
+				Rooms:        Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
+				RoomCreation: RoomCreation{RatePerMinute: 10, Burst: 5, IdentityLimit: 4096},
 			},
 		},
 	}
@@ -75,7 +93,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got != tc.want {
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("config = %#v, want %#v", got, tc.want)
 			}
 		})
@@ -148,6 +166,94 @@ func TestParseQueueLimitContract(t *testing.T) {
 	}
 }
 
+func TestParseBoundsRoomCreationSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		variable string
+		maximum  int
+		read     func(Config) int
+	}{
+		{
+			name: "rate per minute", variable: "QMIX_ROOM_CREATE_RATE_PER_MINUTE", maximum: 60_000,
+			read: func(cfg Config) int { return cfg.RoomCreation.RatePerMinute },
+		},
+		{
+			name: "burst", variable: "QMIX_ROOM_CREATE_BURST", maximum: 10_000,
+			read: func(cfg Config) int { return cfg.RoomCreation.Burst },
+		},
+		{
+			name: "identity limit", variable: "QMIX_ROOM_CREATE_IDENTITY_LIMIT", maximum: 65_536,
+			read: func(cfg Config) int { return cfg.RoomCreation.IdentityLimit },
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name+" accepts maximum", func(t *testing.T) {
+			cfg, err := Parse(mapEnvironment(map[string]string{tc.variable: strconv.Itoa(tc.maximum)}))
+			if err != nil {
+				t.Fatalf("Parse() error = %v, want nil", err)
+			}
+			if got := tc.read(cfg); got != tc.maximum {
+				t.Fatalf("configured value = %d, want %d", got, tc.maximum)
+			}
+		})
+		t.Run(tc.name+" rejects above maximum safely", func(t *testing.T) {
+			supplied := strconv.Itoa(tc.maximum + 1)
+			_, err := Parse(mapEnvironment(map[string]string{tc.variable: supplied}))
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Parse() error = %v, want ErrInvalid", err)
+			}
+			detail, ok := InvalidDetail(err)
+			if !ok || detail.Variable != tc.variable || !strings.Contains(detail.Guidance, strconv.Itoa(tc.maximum)) {
+				t.Fatalf("InvalidDetail() = %#v, %v, want safe %s maximum guidance", detail, ok, tc.variable)
+			}
+			if strings.Contains(err.Error(), supplied) {
+				t.Fatalf("error echoed supplied value: %q", err)
+			}
+		})
+	}
+}
+
+func TestParseCanonicalizesMappedTrustedProxyCIDRBoundariesAndHostBits(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		supplied string
+		want     string
+	}{
+		{name: "slash 96", supplied: "::ffff:192.0.2.129/96", want: "0.0.0.0/0"},
+		{name: "masked host bits", supplied: "::ffff:192.0.2.129/120", want: "192.0.2.0/24"},
+		{name: "slash 128", supplied: "::ffff:192.0.2.129/128", want: "192.0.2.129/32"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse(mapEnvironment(map[string]string{
+				"QMIX_TRUSTED_PROXY_CIDRS": tc.supplied,
+			}))
+			if err != nil {
+				t.Fatalf("Parse() error = %v, want nil", err)
+			}
+			want := []netip.Prefix{netip.MustParsePrefix(tc.want)}
+			if !reflect.DeepEqual(cfg.RoomCreation.TrustedProxyCIDRs, want) {
+				t.Fatalf("TrustedProxyCIDRs = %v, want %v", cfg.RoomCreation.TrustedProxyCIDRs, want)
+			}
+		})
+	}
+}
+
+func TestParseRejectsNonRepresentableMappedTrustedProxyCIDRSafely(t *testing.T) {
+	supplied := "::ffff:192.0.2.129/80"
+	_, err := Parse(mapEnvironment(map[string]string{"QMIX_TRUSTED_PROXY_CIDRS": supplied}))
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Parse() error = %v, want ErrInvalid", err)
+	}
+	detail, ok := InvalidDetail(err)
+	if !ok || detail.Variable != "QMIX_TRUSTED_PROXY_CIDRS" {
+		t.Fatalf("InvalidDetail() = %#v, %v", detail, ok)
+	}
+	if strings.Contains(err.Error(), supplied) {
+		t.Fatalf("error echoed supplied value: %q", err)
+	}
+}
+
 func TestParseRejectsInvalidValuesWithoutEchoingThem(t *testing.T) {
 	secret := "token=SENTINEL_DO_NOT_LOG"
 	tests := []struct {
@@ -170,6 +276,12 @@ func TestParseRejectsInvalidValuesWithoutEchoingThem(t *testing.T) {
 		{name: "max concurrent overflow", variable: "QMIX_YTDLP_MAX_CONCURRENT", value: "99999999999999999999"},
 		{name: "queue limit malformed", variable: "QMIX_YTDLP_QUEUE_LIMIT", value: secret},
 		{name: "queue limit overflow", variable: "QMIX_YTDLP_QUEUE_LIMIT", value: "99999999999999999999"},
+		{name: "room rate zero", variable: "QMIX_ROOM_CREATE_RATE_PER_MINUTE", value: "0"},
+		{name: "room rate malformed", variable: "QMIX_ROOM_CREATE_RATE_PER_MINUTE", value: secret},
+		{name: "room burst negative", variable: "QMIX_ROOM_CREATE_BURST", value: "-1"},
+		{name: "identity limit overflow", variable: "QMIX_ROOM_CREATE_IDENTITY_LIMIT", value: "99999999999999999999"},
+		{name: "trusted proxy malformed", variable: "QMIX_TRUSTED_PROXY_CIDRS", value: secret},
+		{name: "trusted proxy ambiguous empty member", variable: "QMIX_TRUSTED_PROXY_CIDRS", value: "10.0.0.0/8,,192.0.2.0/24"},
 	}
 
 	for _, tc := range tests {

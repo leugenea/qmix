@@ -13,6 +13,7 @@ import (
 
 	"github.com/leugenea/qmix/internal/config"
 	"github.com/leugenea/qmix/internal/resolver"
+	"github.com/leugenea/qmix/internal/roomcreate"
 	"github.com/leugenea/qmix/internal/stream"
 )
 
@@ -69,6 +70,13 @@ func NewApp(cfg config.Config, logger *slog.Logger, deps Dependencies) (*App, er
 	store.NonEmptyTTL = cfg.Rooms.NonEmptyTTL
 	hub := NewHubWithLogger(logger)
 	server := NewServerWithLogger(store, hub, logger)
+	server.roomCreateLimiter = roomcreate.NewLimiter(
+		cfg.RoomCreation.RatePerMinute,
+		cfg.RoomCreation.Burst,
+		cfg.RoomCreation.IdentityLimit,
+		time.Now,
+	)
+	server.clientIdentities = roomcreate.NewIdentityResolver(cfg.RoomCreation.TrustedProxyCIDRs)
 	server.Resolver = deps.BuildResolver(cfg.ResolverConfig(ytdlpLimiter))
 	server.StreamBackend = deps.BuildStreamBackend(cfg.StreamConfig(ytdlpLimiter))
 

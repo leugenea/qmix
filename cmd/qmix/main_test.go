@@ -253,6 +253,8 @@ func TestWriteStartupErrorReportsOnlySafeInvalidConfigDetails(t *testing.T) {
 		{name: "zero timeout", variable: "QMIX_YTDLP_SEARCH_TIMEOUT", value: "0s", guidance: "must be greater than zero"},
 		{name: "negative timeout", variable: "QMIX_YTDLP_SEARCH_TIMEOUT", value: "-1s", guidance: "must be greater than zero"},
 		{name: "zero cache TTL", variable: "QMIX_STREAM_CACHE_TTL", value: "0s", guidance: "must be non-zero; negative disables caching"},
+		{name: "room create burst", variable: "QMIX_ROOM_CREATE_BURST", value: "token=SENTINEL", guidance: "must be a positive integer"},
+		{name: "trusted proxy CIDRs", variable: "QMIX_TRUSTED_PROXY_CIDRS", value: "token=SENTINEL", guidance: "use a comma-separated list of IPv4 or IPv6 CIDR prefixes"},
 	}
 
 	for _, tc := range tests {
