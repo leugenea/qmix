@@ -1,6 +1,7 @@
 package com.qmix.tv
 
 import android.content.Context
+import android.content.Intent
 import android.view.KeyEvent
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertTextEquals
@@ -14,6 +15,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -229,15 +231,26 @@ class MainActivityInstrumentationTest {
             repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
             playback.emit(playingState())
             scenario = ActivityScenario.launch(MainActivity::class.java)
-            val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val device = UiDevice.getInstance(instrumentation)
 
             device.pressHome()
             device.waitForIdle()
             assertEquals(1, playback.pauseCount)
             assertTrue((createdController.state as HostingState.LiveRoom).foregroundRecoveryPending)
 
-            scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            val targetContext = instrumentation.targetContext
+            val launchIntent = checkNotNull(
+                targetContext.packageManager.getLeanbackLaunchIntentForPackage(targetContext.packageName),
+            )
+            targetContext.startActivity(launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            val expectedRoomTitle = targetContext.getString(R.string.room_title, "ABCD")
+            assertTrue(
+                "MainActivity did not return from the TV launcher",
+                device.wait(Until.hasObject(By.text(expectedRoomTitle)), 30_000),
+            )
+            instrumentation.waitForIdleSync()
+            assertEquals(androidx.lifecycle.Lifecycle.State.RESUMED, scenario.state)
             assertTrue(recovery.get() != null)
             val replacement = initial.copy(
                 current = CurrentTrack("replacement", 0, "playing", "Replacement", "Artist"),
