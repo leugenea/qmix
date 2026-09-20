@@ -50,6 +50,7 @@ class QueueAdvancementCoordinator(
     private var pending: Pending? = null
     private var reconcileRequest: Cancelable? = null
     private var reconcileInFlight = false
+    private var foregroundReady = true
     private var closed = false
 
     @Volatile
@@ -59,12 +60,41 @@ class QueueAdvancementCoordinator(
     fun onAuthoritativeRoom(room: RoomState) {
         if (room.code != roomCode) return
         val retryToken = synchronized(this) {
-            if (closed) return
+            if (closed || !foregroundReady) return
             updateLatestRoomLocked(room)
             val active = pending
             active?.token?.takeIf { active.phase == Phase.RECONCILING && !reconcileInFlight }
         }
         retryToken?.let(::startReconciliation)
+    }
+
+    fun onForegroundLost() {
+        var notification: QueueAdvancementState? = null
+        val request = synchronized(this) {
+            if (closed || !foregroundReady) return
+            foregroundReady = false
+            nextToken++
+            pending = null
+            val active = reconcileRequest
+            reconcileRequest = null
+            reconcileInFlight = false
+            if (state.pending) {
+                state = state.copy(pending = false)
+                notification = state
+            }
+            active
+        }
+        request?.cancel()
+        notification?.let(observer)
+    }
+
+    fun onForegroundReconciled(room: RoomState) {
+        if (room.code != roomCode) return
+        synchronized(this) {
+            if (closed || foregroundReady) return
+            updateLatestRoomLocked(room)
+            foregroundReady = true
+        }
     }
 
     fun requestExplicitAdvance(): Boolean = requestAdvance(endedTrackId = null)
@@ -75,7 +105,7 @@ class QueueAdvancementCoordinator(
         lateinit var nextState: QueueAdvancementState
         val token: Long
         synchronized(this) {
-            if (closed || pending != null) return false
+            if (closed || !foregroundReady || pending != null) return false
             val room = latestRoom ?: return false
             if (room.queue.isEmpty()) return false
             if (endedTrackId != null) {

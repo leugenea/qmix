@@ -514,6 +514,73 @@ class HostSessionControllerTest {
     }
 
     @Test
+    fun returning_to_foreground_requires_its_own_successful_reconciliation_before_commands() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val repository = RecordingRoomRepository()
+        val command = RecordingAdvanceCommand()
+        val reconciler = RecordingReconciler()
+        val engine = HostRecordingPlaybackEngine()
+        val controller = HostSessionController(
+            OkHttpClient(),
+            initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+            roomRepositoryFactory = { repository },
+            foregroundReconcilerFactory = { reconciler },
+            queueCoordinatorFactory = { _, credentials, observer ->
+                QueueAdvancementCoordinator(credentials.code, credentials.hostToken, command, reconciler, observer)
+            },
+            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
+                AuthoritativePlaybackCoordinator(
+                    credentials.code,
+                    "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
+                    engine,
+                    reconciler,
+                    Executor { it.run() },
+                    advanceAfterEnded,
+                    observer,
+                )
+            },
+        )
+        controller.createRoom()
+        controller.enterRoom()
+        val initial = RoomState(
+            "ABCD",
+            CurrentTrack("one", 0, "playing", "One", "Artist"),
+            listOf(QueuedTrack("two", "url", "Two", "Artist", 60, "fixture")),
+        )
+        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+
+        controller.onHostStopped()
+        controller.onStartOrNext()
+        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.onHostStarted()
+
+        assertEquals(1, engine.pauseCount)
+        assertTrue(command.callbacks.isEmpty())
+        assertEquals(listOf("ABCD"), reconciler.calls)
+        reconciler.complete(RoomFetchResult.Failure)
+        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+        assertEquals(listOf("ABCD", "ABCD"), reconciler.calls)
+        val replacement = initial.copy(current = CurrentTrack("other", 0, "playing", "Other", "Artist"))
+        reconciler.complete(RoomFetchResult.Success(replacement))
+
+        repository.publishAt(
+            0,
+            RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED),
+        )
+
+        controller.onStartOrNext()
+        assertEquals(1, command.callbacks.size)
+        assertEquals(listOf("one", "other"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(1, engine.playCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
+    }
+
+    @Test
     fun start_command_followed_by_fresh_selection_starts_local_playback_once() {
         server.enqueue(
             MockResponse().setResponseCode(201)
@@ -807,16 +874,20 @@ class HostSessionControllerTest {
     private class RecordingRoomRepository : RoomRepository {
         var observedCode: String? = null
         var closed = false
-        private var observer: ((RoomSyncState) -> Unit)? = null
+        private val observers = mutableListOf<(RoomSyncState) -> Unit>()
 
         override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
             observedCode = roomCode
-            observer = onUpdate
+            observers += onUpdate
             return AutoCloseable { closed = true }
         }
 
         fun publish(state: RoomSyncState) {
-            observer?.invoke(state)
+            observers.lastOrNull()?.invoke(state)
+        }
+
+        fun publishAt(index: Int, state: RoomSyncState) {
+            observers[index](state)
         }
     }
 }

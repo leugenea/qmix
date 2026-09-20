@@ -18,6 +18,9 @@ class AuthoritativePlaybackCoordinator(
     private var explicitlyPaused = false
     private var retryGeneration = 0L
     private var retryRequest: Cancelable? = null
+    private var foregroundReady = true
+    @Volatile private var requestedLifecycleToken = 0L
+    private var directLifecycleToken = 0L
     private var closed = false
     private val playbackListener: (PlaybackState) -> Unit = { snapshot ->
         dispatcher.execute { onPlaybackState(snapshot) }
@@ -33,7 +36,7 @@ class AuthoritativePlaybackCoordinator(
 
     fun onSynchronization(synchronization: RoomSyncState) {
         dispatcher.execute {
-            if (closed) return@execute
+            if (closed || !foregroundReady) return@execute
             val active = synchronization as? RoomSyncState.Active ?: return@execute
             val room = active.room ?: return@execute
             if (active.roomCode != roomCode || room.code != roomCode ||
@@ -42,6 +45,78 @@ class AuthoritativePlaybackCoordinator(
                 return@execute
             }
             applyAuthoritativeRoom(room)
+        }
+    }
+
+    fun onForegroundLost() {
+        val token = synchronized(this) { ++directLifecycleToken }
+        onForegroundLost(token)
+    }
+
+    fun onForegroundLost(token: Long) {
+        synchronized(this) {
+            if (token > requestedLifecycleToken) requestedLifecycleToken = token
+        }
+        dispatcher.execute {
+            if (closed || token != requestedLifecycleToken || !foregroundReady) return@execute
+            foregroundReady = false
+            retryGeneration++
+            retryRequest?.cancel()
+            retryRequest = null
+            playbackEngine.pause()
+            if (currentTrackId != null && state.status in setOf(
+                    LocalPlaybackStatus.BUFFERING,
+                    LocalPlaybackStatus.PLAYING,
+                    LocalPlaybackStatus.PAUSED,
+                )
+            ) {
+                explicitlyPaused = true
+                publish(state.copy(status = LocalPlaybackStatus.PAUSED, isPlaying = false))
+            }
+        }
+    }
+
+    fun onForegroundReconciled(room: RoomState) {
+        val token = synchronized(this) { directLifecycleToken }
+        onForegroundReconciled(token, room)
+    }
+
+    fun onForegroundReconciled(token: Long, room: RoomState) {
+        synchronized(this) {
+            if (token < requestedLifecycleToken) return
+            requestedLifecycleToken = token
+        }
+        dispatcher.execute {
+            if (closed || token != requestedLifecycleToken || foregroundReady || room.code != roomCode) return@execute
+            latestRoom = room
+            val selectedId = room.current?.trackId
+            if (selectedId == null) {
+                currentTrackId = null
+                endedConsumed = false
+                explicitlyPaused = false
+                foregroundReady = true
+                publish(LocalPlaybackState())
+                return@execute
+            }
+            if (selectedId != currentTrackId) {
+                retryGeneration++
+                currentTrackId = selectedId
+                endedConsumed = false
+                playbackEngine.prepare(PlaybackMedia(selectedId, streamUrl))
+                playbackEngine.pause()
+                publish(LocalPlaybackState(trackId = selectedId, status = LocalPlaybackStatus.PAUSED))
+            } else if (state.status in setOf(LocalPlaybackStatus.COMPLETED, LocalPlaybackStatus.ERROR)) {
+                foregroundReady = true
+                return@execute
+            } else if (playbackEngine.state.status in setOf(PlaybackStatus.ENDED, PlaybackStatus.ERROR)) {
+                foregroundReady = true
+                onPlaybackState(playbackEngine.state)
+                return@execute
+            } else {
+                publish(state.copy(status = LocalPlaybackStatus.PAUSED, isPlaying = false))
+            }
+            explicitlyPaused = true
+            foregroundReady = true
         }
     }
 
@@ -66,7 +141,7 @@ class AuthoritativePlaybackCoordinator(
 
     fun pause() {
         dispatcher.execute {
-            if (closed || currentTrackId == null || endedConsumed ||
+            if (closed || !foregroundReady || currentTrackId == null || endedConsumed ||
                 state.status !in setOf(LocalPlaybackStatus.BUFFERING, LocalPlaybackStatus.PLAYING)
             ) {
                 return@execute
@@ -79,7 +154,7 @@ class AuthoritativePlaybackCoordinator(
 
     fun resume() {
         dispatcher.execute {
-            if (closed || currentTrackId == null || endedConsumed || !explicitlyPaused ||
+            if (closed || !foregroundReady || currentTrackId == null || endedConsumed || !explicitlyPaused ||
                 state.status != LocalPlaybackStatus.PAUSED
             ) {
                 return@execute
@@ -92,7 +167,7 @@ class AuthoritativePlaybackCoordinator(
 
     fun togglePlayPause() {
         dispatcher.execute {
-            if (closed || currentTrackId == null || endedConsumed) return@execute
+            if (closed || !foregroundReady || currentTrackId == null || endedConsumed) return@execute
             when (state.status) {
                 LocalPlaybackStatus.BUFFERING,
                 LocalPlaybackStatus.PLAYING,
@@ -118,7 +193,7 @@ class AuthoritativePlaybackCoordinator(
         dispatcher.execute {
             val snapshot = state
             val duration = snapshot.durationMs
-            if (closed || currentTrackId == null || endedConsumed ||
+            if (closed || !foregroundReady || currentTrackId == null || endedConsumed ||
                 !snapshot.isSeekable || duration == null ||
                 snapshot.status !in setOf(
                     LocalPlaybackStatus.BUFFERING,
@@ -142,7 +217,7 @@ class AuthoritativePlaybackCoordinator(
     fun retryCurrent() {
         dispatcher.execute {
             val expectedTrackId = currentTrackId
-            if (closed || state.status != LocalPlaybackStatus.ERROR || expectedTrackId == null || retryRequest != null) {
+            if (closed || !foregroundReady || state.status != LocalPlaybackStatus.ERROR || expectedTrackId == null || retryRequest != null) {
                 return@execute
             }
             val token = ++retryGeneration
@@ -175,7 +250,7 @@ class AuthoritativePlaybackCoordinator(
     }
 
     private fun onPlaybackState(snapshot: PlaybackState) {
-        if (closed || snapshot.mediaId != currentTrackId || endedConsumed) return
+        if (closed || !foregroundReady || snapshot.mediaId != currentTrackId || endedConsumed) return
         if (snapshot.status == PlaybackStatus.ENDED) {
             endedConsumed = true
             if (latestRoom?.queue?.isNotEmpty() == true) {

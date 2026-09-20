@@ -64,6 +64,13 @@ class QMixApplication : Application() {
                     logger = logger.component(QMixLogComponent.ROOM_SYNC_SSE_RECONNECT),
                 )
             },
+            foregroundReconcilerFactory = { backendUrl ->
+                RoomApiClient(
+                    client,
+                    backendUrl,
+                    logger.component(QMixLogComponent.ROOM_API_CREATION),
+                )
+            },
             queueCoordinatorFactory = { backendUrl, credentials, observer ->
                 val api = RoomApiClient(
                     client,
