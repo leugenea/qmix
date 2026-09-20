@@ -243,7 +243,14 @@ class MainActivityInstrumentationTest {
             val launchIntent = checkNotNull(
                 targetContext.packageManager.getLeanbackLaunchIntentForPackage(targetContext.packageName),
             )
-            targetContext.startActivity(launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            // ActivityScenario starts a standard-mode activity in its own task. A bare
+            // launcher NEW_TASK intent would add a second MainActivity to that task,
+            // so explicitly select the existing instance the user left behind.
+            targetContext.startActivity(
+                launchIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                ),
+            )
             val expectedRoomTitle = targetContext.getString(R.string.room_title, "ABCD")
             assertTrue(
                 "MainActivity did not return from the TV launcher",
