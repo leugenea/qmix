@@ -11,7 +11,9 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/leugenea/qmix/internal/admission"
 	"github.com/leugenea/qmix/internal/resolver"
+	"github.com/leugenea/qmix/internal/roomcreate"
 	"github.com/leugenea/qmix/internal/stream"
 	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
@@ -25,6 +27,9 @@ type Server struct {
 	storeLogger    *slog.Logger
 	resolverLogger *slog.Logger
 	streamLogger   *slog.Logger
+
+	roomCreateLimiter *roomcreate.Limiter
+	clientIdentities  *roomcreate.IdentityResolver
 	// Resolver turns source URLs into track metadata. If nil, tracks are added
 	// with the URL as a stub title (pre-resolver behaviour); NewApp sets the
 	// production resolver.
@@ -89,6 +94,12 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, errorEnvelope{Error: code, Message: msg})
 }
 
+// writeAdmissionError is the shared HTTP boundary for typed admission denials.
+func writeAdmissionError(w http.ResponseWriter, denial *admission.Error) {
+	w.Header().Set("Retry-After", admission.RetryAfterDelta(denial.RetryAfterSeconds()))
+	writeError(w, denial.HTTPStatus(), denial.Code(), denial.Message())
+}
+
 // decodeJSON decodes the request body into v, returning a 400 on failure.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v interface{}) bool {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
@@ -105,6 +116,7 @@ func hostToken(r *http.Request) string {
 
 const maxAddTrackBodyBytes int64 = 4 << 10
 const maxQueueLength = 100
+const unknownClientIdentity = "unknown-peer"
 
 var (
 	errRoomNotFound     = errors.New("room not found")
@@ -136,6 +148,16 @@ func isRequestTooLarge(err error) bool {
 
 // handleCreateRoom creates a room and returns its code, host token and URL.
 func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
+	if s.roomCreateLimiter != nil {
+		identity := unknownClientIdentity
+		if s.clientIdentities != nil {
+			identity = s.clientIdentities.Identity(r)
+		}
+		if denial := s.roomCreateLimiter.Allow(identity); denial != nil {
+			writeAdmissionError(w, denial)
+			return
+		}
+	}
 	credentials, err := s.store.CreateRoom()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "failed to create room")

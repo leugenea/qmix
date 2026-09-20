@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/leugenea/qmix/internal/logging"
 	"github.com/leugenea/qmix/internal/resolver"
+	"github.com/leugenea/qmix/internal/roomcreate"
 	"github.com/leugenea/qmix/internal/stream"
 	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
@@ -66,6 +68,9 @@ const (
 	defaultEmptyRoomTTL        = 12 * time.Hour
 	defaultNonEmptyRoomTTL     = 24 * time.Hour
 	defaultRoomJanitorInterval = time.Minute
+	defaultRoomCreateRate      = 10
+	defaultRoomCreateBurst     = 5
+	defaultRoomIdentityLimit   = 4096
 )
 
 // LookupEnv is the environment lookup shape used by Parse.
@@ -115,14 +120,24 @@ type Rooms struct {
 	JanitorInterval time.Duration
 }
 
+// RoomCreation contains the process-wide admission and proxy trust policy for
+// POST /rooms (qmix#155). TrustedProxyCIDRs is parsed once at startup.
+type RoomCreation struct {
+	RatePerMinute     int
+	Burst             int
+	IdentityLimit     int
+	TrustedProxyCIDRs []netip.Prefix
+}
+
 // Config is the single typed startup configuration for the backend process.
 type Config struct {
-	Address  string
-	Logging  Logging
-	Resolver Resolver
-	YTDLP    YTDLP
-	Stream   Stream
-	Rooms    Rooms
+	Address      string
+	Logging      Logging
+	Resolver     Resolver
+	YTDLP        YTDLP
+	Stream       Stream
+	Rooms        Rooms
+	RoomCreation RoomCreation
 }
 
 // LoggingConfig adapts the startup aggregate to the logging package.
@@ -183,6 +198,11 @@ func Parse(lookup LookupEnv) (Config, error) {
 		},
 		Stream: Stream{CacheTTL: defaultStreamCacheTTL},
 		Rooms:  Rooms{EmptyTTL: defaultEmptyRoomTTL, NonEmptyTTL: defaultNonEmptyRoomTTL, JanitorInterval: defaultRoomJanitorInterval},
+		RoomCreation: RoomCreation{
+			RatePerMinute: defaultRoomCreateRate,
+			Burst:         defaultRoomCreateBurst,
+			IdentityLimit: defaultRoomIdentityLimit,
+		},
 	}
 
 	if v := value(lookup, "QMIX_ADDR"); v != "" {
@@ -221,6 +241,18 @@ func Parse(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.YTDLP.QueueLimit, err = queueLimit(lookup, "QMIX_YTDLP_QUEUE_LIMIT", defaultYTDLPQueueLimit); err != nil {
+		return Config{}, err
+	}
+	if cfg.RoomCreation.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_RATE_PER_MINUTE", defaultRoomCreateRate, roomcreate.MaxRatePerMinute); err != nil {
+		return Config{}, err
+	}
+	if cfg.RoomCreation.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_BURST", defaultRoomCreateBurst, roomcreate.MaxBurst); err != nil {
+		return Config{}, err
+	}
+	if cfg.RoomCreation.IdentityLimit, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_IDENTITY_LIMIT", defaultRoomIdentityLimit, roomcreate.MaxIdentityLimit); err != nil {
+		return Config{}, err
+	}
+	if cfg.RoomCreation.TrustedProxyCIDRs, err = cidrList(lookup, "QMIX_TRUSTED_PROXY_CIDRS"); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -271,6 +303,19 @@ func positiveInt(lookup LookupEnv, name string, fallback int) (int, error) {
 	return parsed, nil
 }
 
+// boundedPositiveInt additionally rejects values above an explicit safe
+// maximum without echoing the supplied value.
+func boundedPositiveInt(lookup LookupEnv, name string, fallback, maximum int) (int, error) {
+	parsed, err := positiveInt(lookup, name, fallback)
+	if err != nil {
+		return 0, err
+	}
+	if parsed > maximum {
+		return 0, invalid(name, fmt.Sprintf("must be at most %d", maximum))
+	}
+	return parsed, nil
+}
+
 // queueLimit parses the bounded-wait queue size. Missing, blank, zero, and
 // negative values use the documented safe default; malformed values fail
 // startup without echoing the supplied value.
@@ -287,6 +332,28 @@ func queueLimit(lookup LookupEnv, name string, fallback int) (int, error) {
 		return fallback, nil
 	}
 	return parsed, nil
+}
+
+func cidrList(lookup LookupEnv, name string) ([]netip.Prefix, error) {
+	raw := value(lookup, name)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	prefixes := make([]netip.Prefix, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		prefix, err := netip.ParsePrefix(part)
+		if err != nil || part == "" {
+			return nil, invalid(name, "use a comma-separated list of IPv4 or IPv6 CIDR prefixes")
+		}
+		canonical, ok := roomcreate.CanonicalTrustedPrefix(prefix)
+		if !ok {
+			return nil, invalid(name, "IPv4-mapped prefixes must use a prefix length from 96 through 128")
+		}
+		prefixes = append(prefixes, canonical)
+	}
+	return prefixes, nil
 }
 
 func logLevel(raw string) (slog.Level, bool) {

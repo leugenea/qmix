@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,6 +124,7 @@ func TestNewAppRejectsUnavailableExecutableSafely(t *testing.T) {
 func TestAppBuildsDependenciesOnceAndIgnoresLaterEnvironmentChanges(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.YTDLP.Binary = "/initial/yt-dlp"
+	cfg.RoomCreation.Burst = 1
 	resolverBuilds, streamBuilds := 0, 0
 	var resolverConfig resolver.Config
 	var streamConfig stream.Config
@@ -145,6 +147,7 @@ func TestAppBuildsDependenciesOnceAndIgnoresLaterEnvironmentChanges(t *testing.T
 	t.Cleanup(app.Close)
 
 	t.Setenv("QMIX_YTDLP_BIN", "/changed/yt-dlp")
+	t.Setenv("QMIX_ROOM_CREATE_BURST", "999")
 	first, second := app.Handler(), app.Handler()
 	if first != second {
 		t.Fatal("Handler returned a reconstructed handler")
@@ -154,6 +157,35 @@ func TestAppBuildsDependenciesOnceAndIgnoresLaterEnvironmentChanges(t *testing.T
 	}
 	if resolverConfig.YTDLPBin != "/initial/yt-dlp" || streamConfig.YtdlpBin != "/initial/yt-dlp" {
 		t.Fatalf("dependencies changed after environment mutation: resolver=%q stream=%q", resolverConfig.YTDLPBin, streamConfig.YtdlpBin)
+	}
+	for want, status := range []int{http.StatusCreated, http.StatusTooManyRequests} {
+		rec := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/rooms", nil))
+		if rec.Code != status {
+			t.Fatalf("room create %d status = %d, want %d; environment was reread", want+1, rec.Code, status)
+		}
+	}
+}
+
+func TestAppAppliesConfiguredTrustedProxyCIDRs(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.RoomCreation.Burst = 1
+	cfg.RoomCreation.TrustedProxyCIDRs = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	app, err := NewApp(cfg, nil, Dependencies{CheckExecutable: func(string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+
+	for index, client := range []string{"198.51.100.1", "198.51.100.2"} {
+		req := httptest.NewRequest(http.MethodPost, "/rooms", nil)
+		req.RemoteAddr = "10.0.0.2:443"
+		req.Header.Set("X-Forwarded-For", client)
+		rec := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("trusted proxy client %d status = %d, want 201", index+1, rec.Code)
+		}
 	}
 }
 

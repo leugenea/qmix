@@ -26,6 +26,14 @@ services:
       # rejected with 503 and Retry-After.
       QMIX_YTDLP_MAX_CONCURRENT: "${QMIX_YTDLP_MAX_CONCURRENT:-2}"
       QMIX_YTDLP_QUEUE_LIMIT: "${QMIX_YTDLP_QUEUE_LIMIT:-8}"
+      # Per-client POST /rooms token bucket (qmix#155). Forwarding headers are
+      # ignored unless the direct peer is listed explicitly as a trusted proxy.
+      # Safe ranges: rate 1..60000/minute, burst 1..10000, and retained
+      # identities 1..65536. Out-of-range values fail startup; none are clamped.
+      QMIX_ROOM_CREATE_RATE_PER_MINUTE: "${QMIX_ROOM_CREATE_RATE_PER_MINUTE:-10}"
+      QMIX_ROOM_CREATE_BURST: "${QMIX_ROOM_CREATE_BURST:-5}"
+      QMIX_ROOM_CREATE_IDENTITY_LIMIT: "${QMIX_ROOM_CREATE_IDENTITY_LIMIT:-4096}"
+      QMIX_TRUSTED_PROXY_CIDRS: "${QMIX_TRUSTED_PROXY_CIDRS:-}"
       # Proxy passthrough for environments where YouTube is reachable only
       # via a proxy: yt-dlp and the audio proxy both honor these. Empty by
       # default.
