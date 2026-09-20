@@ -159,6 +159,12 @@ func integSkip(t *testing.T, base, code, token string) integResp {
 	return integDo(t, http.MethodPost, base+"/rooms/"+code+"/skip", "", token)
 }
 
+func integPlayer(t *testing.T, base, code, token, trackID, state string, posSec int) integResp {
+	t.Helper()
+	body := fmt.Sprintf(`{"track_id":%q,"state":%q,"pos_sec":%d}`, trackID, state, posSec)
+	return integDo(t, http.MethodPatch, base+"/rooms/"+code+"/player", body, token)
+}
+
 // fakeYtdlp writes a fake yt-dlp executable and wires both consumers to the
 // absolute path in QMIX_YTDLP_BIN when the App is built. Metadata requests
 // get canned track JSON; stream requests get the mock upstream URL and append
@@ -425,6 +431,121 @@ func TestIntegrationSSE(t *testing.T) {
 	}
 	if snap2.Current == nil || snap2.Current.TrackID != tr.ID || len(snap2.Queue) != 0 {
 		t.Fatalf("reconnect snapshot = %+v", snap2)
+	}
+}
+
+// qmix#64: host reports traverse a real socket and the full App. The exact
+// player_state payload matches GET and a reconnect snapshot; ended clears only
+// the matching current track and leaves the queue untouched.
+func TestIntegrationPlayerReportsAndReconnect(t *testing.T) {
+	_, _ = fakeYtdlp(t, "http://127.0.0.1:1/never-called")
+	app := integNewApp(t, Dependencies{})
+	t.Cleanup(app.Close)
+	base := integServe(t, app.Handler())
+	code, hostToken := integCreateRoom(t, base)
+	current := integAddTrack(t, base, code, "https://www.youtube.com/watch?v=player1")
+	queued := integAddTrack(t, base, code, "https://www.youtube.com/watch?v=player2")
+	if response := integSkip(t, base, code, hostToken); response.status != http.StatusOK {
+		t.Fatalf("skip status = %d; body=%s", response.status, response.body)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/rooms/"+code+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		t.Fatalf("SSE connect: %v", err)
+	}
+	reader := bufio.NewReader(response.Body)
+	if _, name, _ := readSSE(t, reader); name != "queue_snapshot" {
+		t.Fatalf("initial event = %q, want queue_snapshot", name)
+	}
+
+	for _, report := range []struct {
+		state string
+		pos   int
+	}{{"paused", 7}, {"playing", 19}, {"error", 23}} {
+		result := integPlayer(t, base, code, hostToken, current.ID, report.state, report.pos)
+		if result.status != http.StatusOK {
+			t.Fatalf("%s report status = %d; body=%s", report.state, result.status, result.body)
+		}
+		_, name, data := readSSE(t, reader)
+		if name != "player_state" {
+			t.Fatalf("event = %q, want player_state", name)
+		}
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload) != 3 || payload["track_id"] != current.ID || payload["state"] != report.state || payload["pos_sec"] != float64(report.pos) {
+			t.Fatalf("%s payload = %#v", report.state, payload)
+		}
+	}
+	response.Body.Close()
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel2()
+	reconnect, err := http.NewRequestWithContext(ctx2, http.MethodGet, base+"/rooms/"+code+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnect.Header.Set("Last-Event-ID", "1")
+	reconnected, err := (&http.Client{}).Do(reconnect)
+	if err != nil {
+		t.Fatalf("SSE reconnect: %v", err)
+	}
+	defer reconnected.Body.Close()
+	reconnectReader := bufio.NewReader(reconnected.Body)
+	_, name, data := readSSE(t, reconnectReader)
+	if name != "queue_snapshot" {
+		t.Fatalf("reconnect event = %q, want queue_snapshot", name)
+	}
+	var snapshot integRoomView
+	if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Current == nil || snapshot.Current.TrackID != current.ID || snapshot.Current.State != "error" || snapshot.Current.PosSec != 23 || len(snapshot.Queue) != 1 || snapshot.Queue[0].ID != queued.ID {
+		t.Fatalf("reconnect snapshot = %+v", snapshot)
+	}
+
+	ended := integPlayer(t, base, code, hostToken, current.ID, "ended", 23)
+	if ended.status != http.StatusOK || ended.body != "{\"current\":null}\n" {
+		t.Fatalf("ended response = status %d body %q", ended.status, ended.body)
+	}
+	_, name, data = readSSE(t, reconnectReader)
+	if name != "player_state" || data != fmt.Sprintf(`{"pos_sec":23,"state":"ended","track_id":%q}`, current.ID) {
+		t.Fatalf("ended event = %q data %s", name, data)
+	}
+	_, view := integGetRoom(t, base, code)
+	if view.Current != nil || len(view.Queue) != 1 || view.Queue[0].ID != queued.ID {
+		t.Fatalf("room after ended = %+v", view)
+	}
+	reconnected.Body.Close()
+
+	ctx3, cancel3 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel3()
+	afterEnded, err := http.NewRequestWithContext(ctx3, http.MethodGet, base+"/rooms/"+code+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterEndedResponse, err := (&http.Client{}).Do(afterEnded)
+	if err != nil {
+		t.Fatalf("post-ended SSE reconnect: %v", err)
+	}
+	defer afterEndedResponse.Body.Close()
+	_, name, data = readSSE(t, bufio.NewReader(afterEndedResponse.Body))
+	if name != "queue_snapshot" {
+		t.Fatalf("post-ended reconnect event = %q, want queue_snapshot", name)
+	}
+	var endedSnapshot integRoomView
+	if err := json.Unmarshal([]byte(data), &endedSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if endedSnapshot.Current != nil || len(endedSnapshot.Queue) != 1 || endedSnapshot.Queue[0].ID != queued.ID {
+		t.Fatalf("post-ended reconnect snapshot = %+v", endedSnapshot)
 	}
 }
 

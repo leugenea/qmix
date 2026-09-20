@@ -97,8 +97,8 @@ that cover the complete requirement.
 - `Code` — short room code used in `/r/{code}`
 - `HostToken` — secret authorizing host-only operations
 - `Queue` — ordered list of tracks
-- `Current` — current track (`*Current`, with `State` set to `idle` or `playing`
-  and position in `PosSec`)
+- `Current` — current track (`*Current`, with the last host-reported `State` and
+  position in `PosSec`; the position is not advanced by a server clock)
 - `LastActivity` — last queue or playback mutation time used to expire idle
   rooms
 
@@ -140,6 +140,14 @@ through `StreamBackend` and caches the URL with a TTL
   body is retained; the canonical route retains its historical bare track body
 - `PATCH /rooms/{code}/queue` — reorder the queue with `{"order": [trackID, ...]}` (host only; exact permutation of IDs)
 - `POST /rooms/{code}/skip` — advance to the next track (host only)
+- `PATCH /rooms/{code}/player` — accept the host's exact bounded JSON
+  `{track_id,state,pos_sec}` report (host only). `state` is `playing`, `paused`,
+  `ended`, or `error`; `pos_sec` is a non-negative last-reported position, not a
+  server clock. The report must match the current track atomically. A mismatch
+  or missing current returns 409 without mutation. `playing`, `paused`, and the
+  safe guest-visible `error` state update current and publish `player_state`;
+  `ended` publishes the same exact payload and clears only that matching current
+  while preserving the queue. Accepted reports refresh room activity.
 - `GET /rooms/{code}/current/stream` — stream the current track with Range/seek support: 200 / 206 / 416; 404 when there is no current track; 503 plus `Retry-After` when the shared yt-dlp capacity queue is full (qmix#130)
 - `GET /healthz` — unconditional liveness: `200 {"status":"ok"}`
 - `GET /readyz` — current yt-dlp readiness: `200 {"status":"ready"}` only
@@ -179,15 +187,20 @@ bodies remain unchanged. The guest web client already reads `message`; the
 Android client does not submit queue links, so neither client requires a format
 migration.
 
-Host operations (skip and reorder) require the `X-Host-Token` header issued
-when the room is created.
+Host operations (skip, reorder, and player reports) require the
+`X-Host-Token` header issued when the room is created. Player reports accept at
+most 4 KiB and exactly the three documented keys; unknown, missing, duplicate,
+null, malformed, or trailing JSON is rejected. Player errors carry only the
+allowlisted `error` state: decoder details, upstream content, request values,
+and credentials are never accepted, stored, published, logged, or returned.
 
 **SSE**
 - `GET /rooms/{code}/events` — event stream:
   - `queue_snapshot` — complete state on connection or reconnection (`Last-Event-ID`)
   - `queue_updated` — queue changed (append or reorder)
   - `track_changed` — current track changed
-  - `player_state` — player state changed
+  - `player_state` — exact `{track_id,state,pos_sec}` player report or initial
+    skip state; reconnect snapshots carry the latest accepted current state
 
 ## 7. Plugin interfaces
 

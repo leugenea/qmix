@@ -161,6 +161,8 @@ real socket with the full `App.Handler()`, without network access or secrets:
 - `/healthz`;
 - room lifecycle: create -> get -> add track -> skip/reorder (host token);
 - SSE: snapshot on connection, mutation events, and snapshot on reconnection;
+- host player reports over `PATCH /rooms/{code}/player`, including pause, seek,
+  safe error state, completion, exact SSE payloads, and reconnect consistency;
 - adding a track through a mock resolver (unknown link -> 422);
 - streaming through a fake `yt-dlp` (configured with `QMIX_YTDLP_BIN`) and a
   local mock upstream with Range support: exact YouTube URL selection,
