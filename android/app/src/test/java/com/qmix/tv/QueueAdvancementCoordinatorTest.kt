@@ -185,6 +185,27 @@ class QueueAdvancementCoordinatorTest {
     }
 
     @Test
+    fun synchronous_reconciliation_completion_settles_and_cancels_the_returned_request() {
+        val synchronous = SynchronousReconciler(
+            RoomFetchResult.Success(room(currentId = "next", queueIds = emptyList())),
+        )
+        val guardedCoordinator = QueueAdvancementCoordinator(
+            roomCode = "ABCD",
+            hostToken = "host-secret",
+            command = command,
+            reconciler = synchronous,
+        )
+        guardedCoordinator.onAuthoritativeRoom(room(currentId = "current", queueIds = listOf("next")))
+        guardedCoordinator.requestExplicitAdvance()
+
+        command.complete(QueueAdvanceCommandResult.Success)
+
+        assertEquals(QueueAdvanceOutcome.ADVANCED, guardedCoordinator.state.lastOutcome)
+        assertFalse(guardedCoordinator.state.pending)
+        assertTrue(synchronous.returnedRequestCanceled)
+    }
+
+    @Test
     fun close_cannot_finish_while_reconciliation_dispatch_is_being_registered() {
         val blockingReconciler = BlockingReconciler()
         val guardedCoordinator = QueueAdvancementCoordinator(
@@ -250,6 +271,66 @@ class QueueAdvancementCoordinatorTest {
         assertEquals(0, reconciler.calls)
     }
 
+    @Test
+    fun missing_room_during_reconciliation_rejects_the_command_and_allows_a_later_attempt() {
+        coordinator.onAuthoritativeRoom(room(currentId = "current", queueIds = listOf("next")))
+        assertTrue(coordinator.requestExplicitAdvance())
+        command.complete(QueueAdvanceCommandResult.Success)
+
+        reconciler.complete(RoomFetchResult.Missing)
+
+        assertFalse(coordinator.state.pending)
+        assertEquals(QueueAdvanceOutcome.REJECTED, coordinator.state.lastOutcome)
+        assertTrue(coordinator.requestExplicitAdvance())
+        assertEquals(2, command.calls.size)
+    }
+
+    @Test
+    fun reconciliation_for_another_room_cannot_settle_the_command() {
+        val initial = room(currentId = "current", queueIds = listOf("next"))
+        coordinator.onAuthoritativeRoom(initial)
+        coordinator.requestExplicitAdvance()
+        command.complete(QueueAdvanceCommandResult.Success)
+
+        reconciler.complete(RoomFetchResult.Success(initial.copy(code = "OTHER")))
+
+        assertTrue(coordinator.state.pending)
+        assertEquals(null, coordinator.state.lastOutcome)
+        coordinator.onAuthoritativeRoom(initial)
+        assertEquals(2, reconciler.calls)
+    }
+
+    @Test
+    fun command_dispatch_failure_reconciles_before_permitting_another_advance() {
+        command.failure = IllegalStateException("transport failed before callback")
+        coordinator.onAuthoritativeRoom(room(currentId = "current", queueIds = listOf("next")))
+
+        assertTrue(coordinator.requestExplicitAdvance())
+
+        assertTrue(coordinator.state.pending)
+        assertEquals(1, reconciler.calls)
+        command.failure = null
+        reconciler.complete(RoomFetchResult.Success(room(currentId = "current", queueIds = listOf("next"))))
+        assertEquals(QueueAdvanceOutcome.RECONCILED_NO_ADVANCE, coordinator.state.lastOutcome)
+        assertTrue(coordinator.requestExplicitAdvance())
+    }
+
+    @Test
+    fun foreground_loss_cancels_an_in_flight_reconciliation_and_ignores_its_late_result() {
+        coordinator.onAuthoritativeRoom(room(currentId = "current", queueIds = listOf("next")))
+        coordinator.requestExplicitAdvance()
+        command.complete(QueueAdvanceCommandResult.Success)
+        val stateBeforeLoss = coordinator.state
+
+        coordinator.onForegroundLost()
+        reconciler.complete(RoomFetchResult.Success(room(currentId = "next", queueIds = emptyList())))
+
+        assertTrue(reconciler.canceled.single())
+        assertFalse(coordinator.state.pending)
+        assertEquals(stateBeforeLoss.lastOutcome, coordinator.state.lastOutcome)
+        assertFalse(coordinator.requestExplicitAdvance())
+    }
+
     private fun room(currentId: String?, queueIds: List<String>) = RoomState(
         code = "ABCD",
         current = currentId?.let { CurrentTrack(it, 0, "playing", it, "Artist") },
@@ -264,12 +345,14 @@ class QueueAdvancementCoordinatorTest {
         )
 
         val calls = mutableListOf<Call>()
+        var failure: Throwable? = null
 
         override fun skip(
             roomCode: String,
             hostToken: String,
             callback: (QueueAdvanceCommandResult) -> Unit,
         ) {
+            failure?.let { throw it }
             calls += Call(roomCode, hostToken, callback)
         }
 
@@ -281,6 +364,7 @@ class QueueAdvancementCoordinatorTest {
     private class RecordingReconciler : RoomStateFetcher {
         var calls = 0
         var failure: Throwable? = null
+        val canceled = mutableListOf<Boolean>()
         private val callbacks = mutableListOf<(RoomFetchResult) -> Unit>()
 
         override fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable {
@@ -288,11 +372,26 @@ class QueueAdvancementCoordinatorTest {
             calls++
             failure?.let { throw it }
             callbacks += callback
-            return Cancelable { }
+            canceled += false
+            val index = canceled.lastIndex
+            return Cancelable { canceled[index] = true }
         }
 
         fun complete(result: RoomFetchResult, index: Int = callbacks.lastIndex) {
             callbacks[index](result)
+        }
+    }
+
+    private class SynchronousReconciler(
+        private val result: RoomFetchResult,
+    ) : RoomStateFetcher {
+        var returnedRequestCanceled = false
+            private set
+
+        override fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable {
+            assertEquals("ABCD", roomCode)
+            callback(result)
+            return Cancelable { returnedRequestCanceled = true }
         }
     }
 

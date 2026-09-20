@@ -102,6 +102,61 @@ class AuthoritativePlaybackCoordinatorTest {
     }
 
     @Test
+    fun foreground_reconciliation_with_no_current_resets_to_idle_and_accepts_a_later_selection() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        coordinator.onForegroundLost()
+
+        coordinator.onForegroundReconciled(room(currentId = null))
+
+        assertEquals(LocalPlaybackState(), coordinator.state)
+        coordinator.onSynchronization(fresh(room(currentId = "two")))
+        assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(2, engine.playCount)
+    }
+
+    @Test
+    fun foreground_reconciliation_ignores_a_room_with_the_wrong_code_until_the_expected_room_arrives() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        coordinator.onForegroundLost()
+
+        coordinator.onForegroundReconciled(room(currentId = "other").copy(code = "OTHER"))
+        coordinator.resume()
+
+        assertEquals(1, engine.playCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
+        coordinator.onForegroundReconciled(room(currentId = "one"))
+        coordinator.resume()
+        assertEquals(2, engine.playCount)
+    }
+
+    @Test
+    fun a_fresh_room_without_a_current_track_waits_for_a_later_authoritative_selection() {
+        coordinator.onSynchronization(fresh(room(currentId = null)))
+        assertEquals(LocalPlaybackState(), coordinator.state)
+
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+
+        assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(1, engine.playCount)
+    }
+
+    @Test
+    fun same_active_current_returns_paused_and_requires_an_explicit_resume() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        coordinator.onForegroundLost()
+
+        coordinator.onForegroundReconciled(room(currentId = "one"))
+
+        assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
+        assertEquals(1, engine.playCount)
+        coordinator.resume()
+        assertEquals(2, engine.playCount)
+        assertEquals(LocalPlaybackStatus.BUFFERING, coordinator.state.status)
+    }
+
+    @Test
     fun same_current_foreground_reconciliation_preserves_completed_and_error_states() {
         coordinator.onSynchronization(fresh(room(currentId = "one")))
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED))
@@ -180,6 +235,22 @@ class AuthoritativePlaybackCoordinatorTest {
 
         assertEquals(2, engine.prepared.size)
         assertEquals(2, engine.playCount)
+    }
+
+    @Test
+    fun retry_rejects_a_success_response_for_another_room_and_remains_recoverable() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        val failure = PlaybackError(PlaybackErrorKind.NETWORK, "offline")
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ERROR, error = failure))
+        coordinator.retryCurrent()
+
+        reconciler.complete(RoomFetchResult.Success(room(currentId = "one").copy(code = "OTHER")))
+
+        assertEquals(LocalPlaybackStatus.ERROR, coordinator.state.status)
+        assertEquals(failure, coordinator.state.error)
+        assertEquals(1, engine.prepared.size)
+        coordinator.retryCurrent()
+        assertEquals(2, reconciler.calls.size)
     }
 
     @Test
@@ -330,6 +401,26 @@ class AuthoritativePlaybackCoordinatorTest {
         coordinator.seekBy(10_000)
 
         assertEquals(listOf(0L, 12_000L), engine.seeks)
+    }
+
+    @Test
+    fun relative_seek_moves_within_the_timeline_in_both_directions() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 5_000,
+                durationMs = 12_000,
+                isSeekable = true,
+            ),
+        )
+
+        coordinator.seekBy(2_000)
+        coordinator.seekBy(-2_000)
+
+        assertEquals(listOf(7_000L, 3_000L), engine.seeks)
     }
 
     @Test
