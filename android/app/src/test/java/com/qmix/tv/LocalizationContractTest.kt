@@ -6,6 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Element
 import java.io.File
+import java.nio.file.Files
 import javax.xml.parsers.DocumentBuilderFactory
 
 class LocalizationContractTest {
@@ -87,15 +88,47 @@ class LocalizationContractTest {
     }
 
     @Test
+    fun source_inventory_preserves_duplicate_basenames_and_their_literals() {
+        val sourceRoot = Files.createTempDirectory("qmix-localization-inventory").toFile()
+        try {
+            File(sourceRoot, "feature/Shared.kt").apply {
+                requireNotNull(parentFile).mkdirs()
+                writeText("private const val field = \"current\"\nfun label() = \"Visible label\"")
+            }
+            File(sourceRoot, "network/Shared.kt").apply {
+                requireNotNull(parentFile).mkdirs()
+                writeText("private const val field = \"current\"")
+            }
+            val expected = listOf(
+                LiteralInventoryEntry("feature/Shared.kt", "current", 1, "identifiers and API fields"),
+                LiteralInventoryEntry("network/Shared.kt", "current", 1, "identifiers and API fields"),
+            )
+
+            val sources = sourceInventory(sourceRoot)
+
+            assertEquals(setOf("feature/Shared.kt", "network/Shared.kt"), sources.keys)
+            assertEquals(
+                listOf("feature/Shared.kt: unexpected literal Visible label"),
+                inventoryViolations(sources, expected),
+            )
+        } finally {
+            sourceRoot.deleteRecursively()
+        }
+    }
+
+    @Test
     fun production_kotlin_has_no_unclassified_english_like_literals() {
         val sourceRoot = projectFile("src/main/java/com/qmix/tv")
-        val sources = sourceRoot.walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .associate { it.name to it.readText() }
+        val sources = sourceInventory(sourceRoot)
         val violations = inventoryViolations(sources, INTERNAL_LITERAL_INVENTORY)
 
         assertTrue("unclassified production literals: $violations", violations.isEmpty())
     }
+
+    private fun sourceInventory(sourceRoot: File): Map<String, String> =
+        sourceRoot.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .associate { it.relativeTo(sourceRoot).invariantSeparatorsPath to it.readText() }
 
     private fun unclassifiedEnglishLiterals(source: String): List<String> =
         kotlinStringLiterals(source)

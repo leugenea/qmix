@@ -61,9 +61,13 @@ def is_android_bcp47_locale(qualifier: str) -> bool:
         index += 1
     if index < len(subtags) and re.fullmatch(r"(?:[A-Z]{2}|\d{3})", subtags[index]):
         index += 1
-    return all(
-        re.fullmatch(r"(?:[A-Za-z0-9]{5,8}|\d[A-Za-z0-9]{3})", variant)
-        for variant in subtags[index:]
+    variants = subtags[index:]
+    return (
+        all(
+            re.fullmatch(r"(?:[A-Za-z0-9]{5,8}|\d[A-Za-z0-9]{3})", variant)
+            for variant in variants
+        )
+        and len({variant.casefold() for variant in variants}) == len(variants)
     )
 
 
