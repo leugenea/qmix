@@ -77,6 +77,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /r/{code}", s.observeHTTP(s.handleGuestPage))
 	mux.HandleFunc("POST /r/{code}/queue", s.observeHTTP(s.handleAddTrack))
 	mux.HandleFunc("POST /rooms/{code}/skip", s.observeHTTP(s.handleSkip))
+	mux.HandleFunc("PATCH /rooms/{code}/player", s.observeHTTP(s.handlePlayer))
 	mux.HandleFunc("PATCH /rooms/{code}/queue", s.observeHTTP(s.handleReorder))
 	mux.HandleFunc("GET /rooms/{code}/events", s.observeHTTP(s.handleEvents))
 	mux.HandleFunc("GET /rooms/{code}/current/stream", s.observeHTTP(s.handleStream))
@@ -115,6 +116,7 @@ func hostToken(r *http.Request) string {
 }
 
 const maxAddTrackBodyBytes int64 = 4 << 10
+const maxPlayerBodyBytes int64 = 4 << 10
 const maxQueueLength = 100
 const unknownClientIdentity = "unknown-peer"
 
@@ -124,6 +126,7 @@ var (
 	errQueueEmpty       = errors.New("queue is empty")
 	errInvalidHostToken = errors.New("invalid host token")
 	errInvalidOrder     = errors.New("order must be a permutation of current track ids")
+	errPlayerConflict   = errors.New("player report does not match current track")
 )
 
 func decodeAddTrackJSON(w http.ResponseWriter, r *http.Request, v interface{}) error {
@@ -210,10 +213,14 @@ type curView struct {
 func viewRoom(room *Room) roomView {
 	v := roomView{Code: room.Code, Queue: cloneTracks(room.Queue)}
 	if room.Current != nil {
-		c := *room.Current
-		v.Current = &curView{TrackID: c.TrackID, PosSec: c.PosSec, State: c.State, Title: c.Title, Artist: c.Artist}
+		current := viewCurrent(room.Current)
+		v.Current = &current
 	}
 	return v
+}
+
+func viewCurrent(current *Current) curView {
+	return curView{TrackID: current.TrackID, PosSec: current.PosSec, State: current.State, Title: current.Title, Artist: current.Artist}
 }
 
 // handleAddTrack implements queue submission for both public route aliases. The
@@ -385,6 +392,120 @@ func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"current": payload})
 }
 
+type playerResponse struct {
+	Current *curView `json:"current"`
+}
+
+// handlePlayer accepts one bounded, exact host playback report. Free-form
+// decoder or upstream details are not part of the schema and cannot enter
+// public room state, SSE payloads, responses, or logs.
+func (s *Server) handlePlayer(w http.ResponseWriter, r *http.Request) {
+	token := hostToken(r)
+	ref, err := s.store.PlayerPreflight(r.PathValue("code"), token)
+	if err != nil {
+		writePlayerError(w, err)
+		return
+	}
+
+	report, err := decodePlayerRequest(w, r)
+	if err != nil {
+		writePlayerError(w, err)
+		return
+	}
+	current, err := s.store.ReportPlayer(ref, token, report)
+	if err != nil {
+		writePlayerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, playerResponse{Current: current})
+}
+
+var (
+	errInvalidPlayerJSON     = errors.New("invalid player json body")
+	errInvalidPlayerState    = errors.New("invalid player state")
+	errInvalidPlayerPosition = errors.New("invalid player position")
+)
+
+func decodePlayerRequest(w http.ResponseWriter, r *http.Request) (playerReport, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxPlayerBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	first, err := decoder.Token()
+	if err != nil || first != json.Delim('{') {
+		return playerReport{}, playerDecodeError(err)
+	}
+
+	fields := make(map[string]json.RawMessage, 3)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return playerReport{}, playerDecodeError(err)
+		}
+		key, ok := token.(string)
+		if !ok || (key != "track_id" && key != "state" && key != "pos_sec") {
+			return playerReport{}, errInvalidPlayerJSON
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return playerReport{}, errInvalidPlayerJSON
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return playerReport{}, playerDecodeError(err)
+		}
+		fields[key] = value
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') || len(fields) != 3 {
+		return playerReport{}, playerDecodeError(err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return playerReport{}, playerDecodeError(err)
+	}
+
+	var report playerReport
+	if string(fields["track_id"]) == "null" || json.Unmarshal(fields["track_id"], &report.TrackID) != nil || strings.TrimSpace(report.TrackID) == "" {
+		return playerReport{}, errInvalidPlayerJSON
+	}
+	if string(fields["state"]) == "null" || json.Unmarshal(fields["state"], &report.State) != nil {
+		return playerReport{}, errInvalidPlayerJSON
+	}
+	if string(fields["pos_sec"]) == "null" || json.Unmarshal(fields["pos_sec"], &report.PosSec) != nil {
+		return playerReport{}, errInvalidPlayerJSON
+	}
+	if report.State != "playing" && report.State != "paused" && report.State != "ended" && report.State != "error" {
+		return playerReport{}, errInvalidPlayerState
+	}
+	if report.PosSec < 0 {
+		return playerReport{}, errInvalidPlayerPosition
+	}
+	return report, nil
+}
+
+func playerDecodeError(err error) error {
+	if isRequestTooLarge(err) {
+		return errRequestTooLarge
+	}
+	return errInvalidPlayerJSON
+}
+
+func writePlayerError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errRoomNotFound):
+		writeError(w, http.StatusNotFound, "room_not_found", "room not found")
+	case errors.Is(err, errInvalidHostToken):
+		writeError(w, http.StatusForbidden, "invalid_host_token", "invalid host token")
+	case errors.Is(err, errPlayerConflict):
+		writeError(w, http.StatusConflict, "player_conflict", "player report does not match current track")
+	case errors.Is(err, errRequestTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
+	case errors.Is(err, errInvalidPlayerState):
+		writeError(w, http.StatusBadRequest, "invalid_player_state", "state must be playing, paused, ended, or error")
+	case errors.Is(err, errInvalidPlayerPosition):
+		writeError(w, http.StatusBadRequest, "invalid_player_position", "pos_sec must not be negative")
+	default:
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid json body")
+	}
+}
+
 // handleReorder sets a new queue order. Host-only. The order must be an exact
 // permutation of the current track IDs.
 func (s *Server) handleReorder(w http.ResponseWriter, r *http.Request) {
@@ -471,6 +592,14 @@ func currentPayload(cur *Current) map[string]interface{} {
 		"state":    cur.State,
 		"title":    cur.Title,
 		"artist":   cur.Artist,
+	}
+}
+
+func playerStatePayload(trackID, state string, posSec int) map[string]interface{} {
+	return map[string]interface{}{
+		"track_id": trackID,
+		"state":    state,
+		"pos_sec":  posSec,
 	}
 }
 

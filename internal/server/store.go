@@ -357,9 +357,57 @@ func (s *Store) Skip(code, token string) (map[string]interface{}, error) {
 	s.touch(room)
 	payload := currentPayload(room.Current)
 	s.publishLocked(room, "track_changed", payload)
-	s.publishLocked(room, "player_state", map[string]string{"state": room.Current.State})
+	s.publishLocked(room, "player_state", playerStatePayload(room.Current.TrackID, room.Current.State, room.Current.PosSec))
 	s.publishLocked(room, "queue_updated", queuePayload(room))
 	return cloneMap(payload), nil
+}
+
+// PlayerPreflight authorizes a player report before its bounded body is read
+// and binds the eventual mutation to this exact room incarnation.
+func (s *Store) PlayerPreflight(code, token string) (roomRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	room := s.rooms[code]
+	if room == nil {
+		return roomRef{}, errRoomNotFound
+	}
+	if !hostTokensEqual(token, room.HostToken) {
+		return roomRef{}, errInvalidHostToken
+	}
+	return roomRef{code: code, generation: room.generation}, nil
+}
+
+// ReportPlayer atomically revalidates incarnation, authorization, and the
+// current track before changing playback state. A late report can therefore
+// never mutate or clear a replacement current track.
+func (s *Store) ReportPlayer(ref roomRef, token string, report playerReport) (*curView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	room, err := s.roomLocked(ref)
+	if err != nil {
+		return nil, err
+	}
+	if !hostTokensEqual(token, room.HostToken) {
+		return nil, errInvalidHostToken
+	}
+	if room.Current == nil || room.Current.TrackID != report.TrackID {
+		return nil, errPlayerConflict
+	}
+
+	payload := playerStatePayload(report.TrackID, report.State, report.PosSec)
+	if report.State == "ended" {
+		room.Current = nil
+	} else {
+		room.Current.State = report.State
+		room.Current.PosSec = report.PosSec
+	}
+	s.touch(room)
+	s.publishLocked(room, "player_state", payload)
+	if room.Current == nil {
+		return nil, nil
+	}
+	current := viewCurrent(room.Current)
+	return &current, nil
 }
 
 // ReorderPreflight validates host authorization before the request body is read

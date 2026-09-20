@@ -7,7 +7,7 @@ import (
 )
 
 // Room is a collaborative listening session. HostToken authorizes host-only
-// operations (skip, reorder). Queue holds the ordered list of tracks.
+// operations (skip, reorder, player reports). Queue holds the ordered list of tracks.
 type Room struct {
 	Code               string
 	HostToken          string
@@ -30,10 +30,11 @@ type Track struct {
 	ResolvedBy  string `json:"resolved_by"`  // which resolver produced metadata
 }
 
-// Current is the currently playing track. In M1 PosSec is always 0 and State
-// is either "idle" or "playing". Title/Artist keep the audio metadata of the
-// playing track on the room so the stream endpoint and public room view can
-// expose its metadata. URL and ResolvedBy are retained for internal stream
+// Current is the host-reported current track. PosSec is the last reported
+// position, not a server-side clock. State is playing, paused, or error while a
+// track remains current. Title/Artist keep the audio metadata of the playing
+// track on the room so the stream endpoint and public room view can expose its
+// metadata. URL and ResolvedBy are retained for internal stream
 // source selection and are not exposed through the current-track API.
 type Current struct {
 	TrackID    string
@@ -43,4 +44,12 @@ type Current struct {
 	Title      string
 	Artist     string
 	ResolvedBy string
+}
+
+// playerReport is the validated host playback report applied atomically by the
+// Store. It deliberately contains no free-form error detail.
+type playerReport struct {
+	TrackID string
+	State   string
+	PosSec  int
 }
