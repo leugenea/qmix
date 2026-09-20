@@ -117,8 +117,17 @@ for a known seekable timeline and clamp through the playback engine. Android
 media Play, Pause, and Play/Pause keys route to the same coordinator without
 intercepting D-pad Left/Right globally. Invite remains a reversible presentation
 state, and Back closes Invite before ending the host session and returning an
-explicit `EXIT_ACTIVITY` result to the UI. Foreground recovery and assembled-flow
-verification are outside #122 and remain owned by #123.
+explicit `EXIT_ACTIVITY` result to the UI.
+
+Playback is foreground-only. `MainActivity.onStop` immediately pauses local audio,
+invalidates pending queue/retry work, and closes the command gate. Returning starts
+a token-bound `GET /rooms/{code}` reconciliation for the current in-memory host
+session. Repository updates and stale callbacks cannot reopen that gate; one
+successful matching response must establish the authoritative current first. A
+changed current replaces the prepared media but remains paused, so foreground
+return never auto-resumes. API 36 TV instrumentation exercises this Home/return
+boundary and the branch-level start → next → completed path with bundled decodable
+WebM/Opus media, local media controls, seeking, media time, and wall time.
 
 ## Coverage
 

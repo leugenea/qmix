@@ -36,6 +36,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (::controller.isInitialized) controller.onHostStarted()
+    }
+
+    override fun onStop() {
+        if (::controller.isInitialized) controller.onHostStopped()
+        super.onStop()
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (::controller.isInitialized && dispatchPlaybackMediaKey(event, controller)) return true
         return super.onKeyDown(keyCode, event)

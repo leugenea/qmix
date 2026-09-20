@@ -23,6 +23,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class MainActivityInstrumentationTest {
@@ -190,6 +191,71 @@ class MainActivityInstrumentationTest {
         }
     }
 
+    @Test
+    fun home_and_return_pause_then_require_fresh_reconciliation_without_autoplay() {
+        val server = MockWebServer()
+        var controller: HostSessionController? = null
+        var providerLease: AutoCloseable? = null
+        var scenario: ActivityScenario<MainActivity>? = null
+        try {
+            server.start()
+            server.enqueue(
+                MockResponse().setResponseCode(201).setBody(
+                    """{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""",
+                ),
+            )
+            val repository = RecordingRepository()
+            val playback = RecordingPlaybackEngine()
+            val recovery = AtomicReference<(RoomFetchResult) -> Unit>()
+            val createdController = createController(
+                server,
+                repository,
+                playback,
+                foregroundFetcher = RoomStateFetcher { _, callback ->
+                    recovery.set(callback)
+                    Cancelable { recovery.compareAndSet(callback, null) }
+                },
+            )
+            controller = createdController
+            val application = ApplicationProvider.getApplicationContext<QMixApplication>()
+            providerLease = application.installActivityHostSessionProvider { createdController }
+            assertTrue(createdController.createRoom())
+            createdController.enterRoom()
+            val initial = RoomState(
+                "ABCD",
+                CurrentTrack("current", 0, "playing", "Current", "Artist"),
+                listOf(QueuedTrack("next", "url", "Next", "Artist", 4, "fixture")),
+            )
+            repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+            playback.emit(playingState())
+            scenario = ActivityScenario.launch(MainActivity::class.java)
+            val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+
+            device.pressHome()
+            device.waitForIdle()
+            assertEquals(1, playback.pauseCount)
+            assertTrue((createdController.state as HostingState.LiveRoom).foregroundRecoveryPending)
+
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            assertTrue(recovery.get() != null)
+            val replacement = initial.copy(
+                current = CurrentTrack("replacement", 0, "playing", "Replacement", "Artist"),
+            )
+            checkNotNull(recovery.getAndSet(null))(RoomFetchResult.Success(replacement))
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+
+            assertEquals(listOf("current", "replacement"), playback.prepared)
+            assertEquals(1, playback.playCount)
+            assertEquals(LocalPlaybackStatus.PAUSED, (createdController.state as HostingState.LiveRoom).playback.status)
+        } finally {
+            scenario?.close()
+            controller?.endRoom()
+            providerLease?.close()
+            server.shutdown()
+        }
+    }
+
     private fun assertSetupEndpoints() {
         assertEndpointText("Backend URL", "https://api.example")
         assertEndpointText("Guest origin", "https://guest.example")
@@ -206,12 +272,14 @@ class MainActivityInstrumentationTest {
         server: MockWebServer,
         repository: RecordingRepository,
         playback: RecordingPlaybackEngine,
+        foregroundFetcher: RoomStateFetcher = RoomStateFetcher { _, _ -> Cancelable { } },
     ) = HostSessionController(
         httpClient = OkHttpClient(),
         initialBackendUrl = server.url("/").toString(),
         initialGuestOrigin = "https://guest.example",
         executor = Executor { it.run() },
         roomRepositoryFactory = { repository },
+        foregroundReconcilerFactory = { foregroundFetcher },
         playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
             AuthoritativePlaybackCoordinator(
                 roomCode = credentials.code,
@@ -288,9 +356,11 @@ class MainActivityInstrumentationTest {
             private set
         var playCount = 0
         var pauseCount = 0
+        val prepared = mutableListOf<String>()
         private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
 
         override fun prepare(media: PlaybackMedia) {
+            prepared += media.trackId
             state = PlaybackState(media.trackId, PlaybackStatus.BUFFERING)
             listeners.toList().forEach { it(state) }
         }

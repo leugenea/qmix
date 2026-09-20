@@ -33,6 +33,25 @@ class QueueAdvancementCoordinatorTest {
     }
 
     @Test
+    fun foreground_recovery_blocks_commands_and_invalidates_pre_background_completion() {
+        coordinator.onAuthoritativeRoom(room(currentId = "current", queueIds = listOf("next")))
+        assertTrue(coordinator.requestExplicitAdvance())
+
+        coordinator.onForegroundLost()
+        command.complete(QueueAdvanceCommandResult.Success)
+        coordinator.onAuthoritativeRoom(room(currentId = "stale", queueIds = listOf("next")))
+
+        assertFalse(coordinator.requestExplicitAdvance())
+        assertEquals(0, reconciler.calls)
+        assertFalse(coordinator.state.pending)
+
+        coordinator.onForegroundReconciled(room(currentId = "replacement", queueIds = listOf("next")))
+
+        assertTrue(coordinator.requestExplicitAdvance())
+        assertEquals(2, command.calls.size)
+    }
+
+    @Test
     fun next_and_ended_for_the_same_current_share_one_command() {
         coordinator.onAuthoritativeRoom(room(currentId = "current", queueIds = listOf("next")))
 

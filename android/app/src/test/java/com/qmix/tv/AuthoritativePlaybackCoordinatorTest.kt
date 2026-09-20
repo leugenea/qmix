@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.Executor
+import java.util.ArrayDeque
 
 class AuthoritativePlaybackCoordinatorTest {
     @Test
@@ -39,6 +40,103 @@ class AuthoritativePlaybackCoordinatorTest {
             engine.prepared,
         )
         assertEquals(1, engine.playCount)
+    }
+
+    @Test
+    fun foreground_loss_stops_audio_and_blocks_controls_and_stale_player_signals() {
+        coordinator.onSynchronization(fresh(room(currentId = "one", queueIds = listOf("two"))))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+
+        coordinator.onForegroundLost()
+        coordinator.resume()
+        coordinator.togglePlayPause()
+        coordinator.seekBy(10_000)
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED))
+
+        assertEquals(1, engine.pauseCount)
+        assertEquals(1, engine.playCount)
+        assertTrue(engine.seeks.isEmpty())
+        assertTrue(advances.isEmpty())
+        assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
+    }
+
+    @Test
+    fun later_foreground_loss_invalidates_an_already_queued_reconciliation() {
+        val queued = QueuedExecutor()
+        val guarded = AuthoritativePlaybackCoordinator(
+            roomCode = "ABCD",
+            streamUrl = "https://qmix.test/rooms/ABCD/current/stream",
+            playbackEngine = engine,
+            reconciler = reconciler,
+            dispatcher = queued,
+            advanceAfterEnded = { true },
+        )
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        queued.runAll()
+        guarded.onForegroundLost(1)
+        queued.runAll()
+
+        guarded.onForegroundReconciled(2, room(currentId = "two"))
+        guarded.onForegroundLost(3)
+        queued.runAll()
+        guarded.onSynchronization(fresh(room(currentId = "three")))
+        queued.runAll()
+
+        assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(1, engine.playCount)
+    }
+
+    @Test
+    fun fresh_foreground_reconciliation_replaces_changed_current_without_autoplay() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        coordinator.onForegroundLost()
+
+        coordinator.onSynchronization(fresh(room(currentId = "stale")))
+        coordinator.onForegroundReconciled(room(currentId = "two"))
+
+        assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(1, engine.playCount)
+        assertEquals(2, engine.pauseCount)
+        assertEquals("two", coordinator.state.trackId)
+        assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
+    }
+
+    @Test
+    fun same_current_foreground_reconciliation_preserves_completed_and_error_states() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED))
+        coordinator.onForegroundLost()
+        coordinator.onForegroundReconciled(room(currentId = "one"))
+        assertEquals(LocalPlaybackStatus.COMPLETED, coordinator.state.status)
+
+        coordinator.onSynchronization(fresh(room(currentId = "two")))
+        engine.emit(
+            PlaybackState(
+                mediaId = "two",
+                status = PlaybackStatus.ERROR,
+                error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
+            ),
+        )
+        coordinator.onForegroundLost()
+        coordinator.onForegroundReconciled(room(currentId = "two"))
+
+        assertEquals(LocalPlaybackStatus.ERROR, coordinator.state.status)
+        coordinator.retryCurrent()
+        assertEquals(1, reconciler.calls.size)
+    }
+
+    @Test
+    fun player_error_arriving_in_background_is_published_only_after_fresh_reconciliation() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        coordinator.onForegroundLost()
+        val failure = PlaybackError(PlaybackErrorKind.DECODE, "bad stream")
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ERROR, error = failure))
+
+        assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
+        coordinator.onForegroundReconciled(room(currentId = "one"))
+
+        assertEquals(LocalPlaybackStatus.ERROR, coordinator.state.status)
+        assertEquals(failure, coordinator.state.error)
     }
 
     @Test
@@ -422,6 +520,18 @@ class AuthoritativePlaybackCoordinatorTest {
         private fun publish(next: PlaybackState) {
             state = next
             listeners.toList().forEach { it(next) }
+        }
+    }
+
+    private class QueuedExecutor : Executor {
+        private val commands = ArrayDeque<Runnable>()
+
+        override fun execute(command: Runnable) {
+            commands.addLast(command)
+        }
+
+        fun runAll() {
+            while (commands.isNotEmpty()) commands.removeFirst().run()
         }
     }
 

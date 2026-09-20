@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
+import android.os.Looper
 import android.os.SystemClock
 import androidx.test.core.app.ActivityScenario
 import androidx.test.filters.SdkSuppress
@@ -93,6 +94,82 @@ class Media3PlaybackInstrumentationTest {
         await { playback.state.positionMs > target + 200 }
         await {
             server.requestsSnapshot().drop(requestsBeforeSeek).any { request -> request.rangeStart != null && request.rangeStart > 0 }
+        }
+    }
+
+    @Test
+    fun branch_coordinators_start_next_complete_and_honor_local_controls_with_decodable_audio() {
+        val playback = createEngine()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val mainExecutor = java.util.concurrent.Executor { command ->
+            if (Looper.myLooper() === Looper.getMainLooper()) command.run() else instrumentation.runOnMainSync(command)
+        }
+        var authoritative = acceptanceRoom(currentId = null, queueIds = listOf("one", "two"))
+        val commandCallbacks = ArrayDeque<(QueueAdvanceCommandResult) -> Unit>()
+        val fetcher = RoomStateFetcher { _, callback ->
+            callback(RoomFetchResult.Success(authoritative))
+            Cancelable { }
+        }
+        val advancement = QueueAdvancementCoordinator(
+            "ABCD",
+            "host-secret",
+            QueueAdvanceCommand { _, _, callback -> commandCallbacks.addLast(callback) },
+            fetcher,
+        )
+        val coordinatorRef = AtomicReference<AuthoritativePlaybackCoordinator>()
+        onMain {
+            coordinatorRef.set(
+                AuthoritativePlaybackCoordinator(
+                    roomCode = "ABCD",
+                    streamUrl = server.url("tone.webm"),
+                    playbackEngine = playback,
+                    reconciler = fetcher,
+                    dispatcher = mainExecutor,
+                    advanceAfterEnded = advancement::onPlaybackEnded,
+                ),
+            )
+        }
+        val coordinator = coordinatorRef.get()
+        try {
+            advancement.onAuthoritativeRoom(authoritative)
+            assertTrue(advancement.requestExplicitAdvance())
+            authoritative = acceptanceRoom(currentId = "one", queueIds = listOf("two"))
+            commandCallbacks.removeFirst()(QueueAdvanceCommandResult.Success)
+            coordinator.onSynchronization(freshAcceptance(authoritative))
+
+            await { playback.state.isPlaying && playback.state.positionMs > 0 }
+            val mediaBeforePause = playback.state.positionMs
+            coordinator.pause()
+            await { coordinator.state.status == LocalPlaybackStatus.PAUSED && !playback.state.isPlaying }
+            coordinator.resume()
+            await { playback.state.isPlaying && playback.state.positionMs > mediaBeforePause }
+
+            coordinator.pause()
+            await { coordinator.state.status == LocalPlaybackStatus.PAUSED && !playback.state.isPlaying }
+            val mediaBeforeSeek = playback.state.positionMs
+            val seekTarget = mediaBeforeSeek + 1_000
+            coordinator.seekBy(1_000)
+            await { !playback.state.isPlaying && playback.state.positionMs >= seekTarget - 100 }
+            assertTrue("seek must advance paused media time", playback.state.positionMs > mediaBeforeSeek)
+            coordinator.resume()
+            await { playback.state.isPlaying }
+
+            assertTrue(advancement.requestExplicitAdvance())
+            authoritative = acceptanceRoom(currentId = "two", queueIds = emptyList())
+            commandCallbacks.removeFirst()(QueueAdvanceCommandResult.Success)
+            coordinator.onSynchronization(freshAcceptance(authoritative))
+            val secondWallStart = SystemClock.elapsedRealtime()
+            await { playback.state.mediaId == "two" && playback.state.isPlaying }
+            await(timeoutMs = 15_000) { coordinator.state.status == LocalPlaybackStatus.COMPLETED }
+            val secondWallElapsed = SystemClock.elapsedRealtime() - secondWallStart
+
+            assertTrue("completion must consume real wall time", secondWallElapsed >= 1_000)
+            assertTrue("completion must report decoded media time", playback.state.positionMs >= 3_000)
+            assertTrue(server.requestsSnapshot().count { it.path == "tone.webm" } >= 2)
+            assertTrue(commandCallbacks.isEmpty())
+        } finally {
+            coordinator.close()
+            advancement.close()
         }
     }
 
@@ -192,6 +269,19 @@ class Media3PlaybackInstrumentationTest {
         onMain { ref.set(PlaybackEngines.create(targetContext)) }
         return ref.get().also { engine = it }
     }
+
+    private fun acceptanceRoom(currentId: String?, queueIds: List<String>) = RoomState(
+        code = "ABCD",
+        current = currentId?.let { CurrentTrack(it, 0, "playing", it, "Artist") },
+        queue = queueIds.map { QueuedTrack(it, "https://example/$it", it, "Artist", 4, "fixture") },
+    )
+
+    private fun freshAcceptance(room: RoomState) = RoomSyncState.Active(
+        roomCode = room.code,
+        room = room,
+        freshness = Freshness.FRESH,
+        connection = LiveConnection.CONNECTED,
+    )
 
     private fun prepare(playback: PlaybackEngine, id: String, url: String) =
         onMain { playback.prepare(PlaybackMedia(id, url)) }
