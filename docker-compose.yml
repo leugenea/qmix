@@ -38,6 +38,8 @@ services:
       # (qmix#156). Safe ranges match the bounded rate and burst domains above.
       QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE: "${QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE:-30}"
       QMIX_ROOM_SUBMISSION_BURST: "${QMIX_ROOM_SUBMISSION_BURST:-10}"
+      # Process-wide live-room bound (qmix#157). Expiry releases slots.
+      QMIX_MAX_LIVE_ROOMS: "${QMIX_MAX_LIVE_ROOMS:-256}"
       # Proxy passthrough for environments where YouTube is reachable only
       # via a proxy: yt-dlp and the audio proxy both honor these. Empty by
       # default.

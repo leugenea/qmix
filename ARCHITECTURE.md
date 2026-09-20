@@ -126,7 +126,9 @@ through `StreamBackend` and caches the URL with a TTL
 **REST**
 - `POST /rooms` — create a room → `{code, host_token, url}` (`url` = `/r/{code}`).
   Creation is admitted by a per-client token bucket before allocation; rejection
-  is `429` with `Retry-After` and the public `rate_limited` envelope
+  is `429` with `Retry-After` and the public `rate_limited` envelope. When the
+  process-wide live-room bound is full, it returns `503`, `Retry-After`, and the
+  public `room_capacity_exhausted` envelope
 - `GET /rooms/{code}` — get public room state (`code`, `current`, and `queue`; no `host_token`)
 - `POST /rooms/{code}/queue` — append a track with `{url}`; the request body is
   limited to 4 KiB and each room holds at most 100 queued tracks. When the
@@ -349,6 +351,18 @@ yt-dlp concurrency and wait-queue limiter can still return 503 after room
 admission has been consumed. Alias-specific successful response bodies remain
 unchanged.
 
+**Live-room capacity** (qmix#157). The Store admits at most 256 live rooms by
+default (`QMIX_MAX_LIVE_ROOMS`). `CreateRoom` checks room-map cardinality under
+the Store mutex, so concurrent creation cannot oversubscribe and no separate
+counter or semaphore can drift. Capacity rejection is a typed admission error
+mapped only by `POST /rooms` to `503`, `room_capacity_exhausted`, the fixed
+message `room capacity is temporarily exhausted`, and a positive integer
+`Retry-After`. That delay is the configured janitor cadence rounded up to at
+least one second and is advisory, not a guaranteed expiry time. Existing-room
+operations remain usable while full. The existing empty/non-empty expiry path
+deletes rooms and releases slots while preserving incarnation, stale-reference,
+and subscriber invalidation behavior.
+
 ## 8. State management
 
 - All state is held **in memory** in one process, without a database.
@@ -400,10 +414,10 @@ unchanged.
   `QMIX_YTDLP_SEARCH_TIMEOUT`, `QMIX_YTDLP_MAX_CONCURRENT`,
   `QMIX_YTDLP_QUEUE_LIMIT`, `QMIX_ROOM_CREATE_RATE_PER_MINUTE`,
   `QMIX_ROOM_CREATE_BURST`, `QMIX_ROOM_CREATE_IDENTITY_LIMIT`,
-  `QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE`, `QMIX_ROOM_SUBMISSION_BURST`, and
-  `QMIX_TRUSTED_PROXY_CIDRS`. Defaults are respectively `:8080`, `warn`,
+  `QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE`, `QMIX_ROOM_SUBMISSION_BURST`,
+  `QMIX_MAX_LIVE_ROOMS`, and `QMIX_TRUSTED_PROXY_CIDRS`. Defaults are respectively `:8080`, `warn`,
   `qmix.log`, empty credentials, `yt-dlp`, `5m`, `30s`, `60s`, `2`, `8`, `10`,
-  `5`, `4096`, `30`, `10`, and an empty trusted-proxy list.
+  `5`, `4096`, `30`, `10`, `256`, and an empty trusted-proxy list.
   Build and Compose orchestration variables are outside this runtime contract.
 - Missing or blank runtime values use their defaults. Explicit malformed
   levels/durations fail startup with one secret-safe JSON record. It retains
@@ -419,6 +433,7 @@ unchanged.
   submission rates must be in `1..60000`; their bursts must be in `1..10000`,
   and the room-creation identity limit must be in `1..65536`. Values outside
   those bounded domains fail startup rather than being clamped. The
+  maximum live-room setting must be a strictly positive integer. The
   trusted-proxy setting must be empty or a comma-separated list of valid
   IPv4/IPv6 CIDRs. Those failures use
   the same safe diagnostic fields and never echo supplied values. Startup also

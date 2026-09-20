@@ -24,7 +24,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				Logging:        Logging{Level: slog.LevelWarn, File: "qmix.log"},
 				YTDLP:          YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
 				Stream:         Stream{CacheTTL: 5 * time.Minute},
-				Rooms:          Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
+				Rooms:          Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute, MaxLiveRooms: 256},
 				RoomCreation:   RoomCreation{RatePerMinute: 10, Burst: 5, IdentityLimit: 4096},
 				RoomSubmission: RoomSubmission{RatePerMinute: 30, Burst: 10},
 			},
@@ -50,6 +50,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				"QMIX_ROOM_CREATE_IDENTITY_LIMIT":      "99",
 				"QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE": "45",
 				"QMIX_ROOM_SUBMISSION_BURST":           "12",
+				"QMIX_MAX_LIVE_ROOMS":                  "17",
 				"QMIX_TRUSTED_PROXY_CIDRS":             "10.0.0.0/8, 2001:db8::/32",
 			},
 			want: Config{
@@ -61,7 +62,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				},
 				YTDLP:  YTDLP{Binary: "/opt/bin/yt-dlp", MetadataTimeout: 17 * time.Second, SearchTimeout: 41 * time.Second, MaxConcurrent: 5, QueueLimit: 9},
 				Stream: Stream{CacheTTL: -time.Second},
-				Rooms:  Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
+				Rooms:  Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute, MaxLiveRooms: 17},
 				RoomCreation: RoomCreation{
 					RatePerMinute: 30,
 					Burst:         7,
@@ -85,7 +86,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				Logging:        Logging{Level: slog.LevelWarn, File: "qmix.log"},
 				YTDLP:          YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
 				Stream:         Stream{CacheTTL: 5 * time.Minute},
-				Rooms:          Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute},
+				Rooms:          Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute, MaxLiveRooms: 256},
 				RoomCreation:   RoomCreation{RatePerMinute: 10, Burst: 5, IdentityLimit: 4096},
 				RoomSubmission: RoomSubmission{RatePerMinute: 30, Burst: 10},
 			},
@@ -227,6 +228,32 @@ func TestParseBoundsRoomCreationSettings(t *testing.T) {
 	}
 }
 
+func TestParseMaxLiveRoomsRequiresPositiveInteger(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{name: "zero", value: "0"},
+		{name: "negative", value: "-1"},
+		{name: "malformed", value: "not-an-integer"},
+		{name: "overflow", value: "99999999999999999999"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse(mapEnvironment(map[string]string{"QMIX_MAX_LIVE_ROOMS": tc.value}))
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Parse() error = %v, want ErrInvalid", err)
+			}
+			detail, ok := InvalidDetail(err)
+			if !ok || detail != (ValidationDetail{Variable: "QMIX_MAX_LIVE_ROOMS", Guidance: "must be a positive integer"}) {
+				t.Fatalf("InvalidDetail() = %#v, %v", detail, ok)
+			}
+			if strings.Contains(err.Error(), tc.value) {
+				t.Fatalf("error echoed supplied value: %q", err)
+			}
+		})
+	}
+}
+
 func TestParseCanonicalizesMappedTrustedProxyCIDRBoundariesAndHostBits(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -297,6 +324,8 @@ func TestParseRejectsInvalidValuesWithoutEchoingThem(t *testing.T) {
 		{name: "submission rate malformed", variable: "QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE", value: secret},
 		{name: "submission burst negative", variable: "QMIX_ROOM_SUBMISSION_BURST", value: "-1"},
 		{name: "submission burst overflow", variable: "QMIX_ROOM_SUBMISSION_BURST", value: "99999999999999999999"},
+		{name: "max live rooms zero", variable: "QMIX_MAX_LIVE_ROOMS", value: "0"},
+		{name: "max live rooms malformed", variable: "QMIX_MAX_LIVE_ROOMS", value: secret},
 		{name: "trusted proxy malformed", variable: "QMIX_TRUSTED_PROXY_CIDRS", value: secret},
 		{name: "trusted proxy ambiguous empty member", variable: "QMIX_TRUSTED_PROXY_CIDRS", value: "10.0.0.0/8,,192.0.2.0/24"},
 	}

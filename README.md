@@ -141,6 +141,18 @@ rejects the URL or fails upstream. This admission limit is separate from the
 limit: queue-full remains `409`, while exhausted yt-dlp capacity remains `503`
 after room admission has been consumed.
 
+## Live room capacity
+
+The in-memory Store admits at most `QMIX_MAX_LIVE_ROOMS` live rooms (default
+`256`) in one process. Capacity is checked atomically against the room map.
+When full, `POST /rooms` returns `503`, a positive integer `Retry-After`, and
+`{"error":"room_capacity_exhausted","message":"room capacity is temporarily exhausted"}`.
+The retry delay is advisory and derived from the room janitor cadence; it does
+not guarantee that a room will expire at that time. Existing-room REST, SSE,
+queue, and streaming operations remain available at capacity. The ordinary
+empty/non-empty expiry sweep releases slots; there is no separate capacity
+lifecycle.
+
 ## Integration tests
 
 The required test tier is `make test-integration`: HTTP scenarios run against a
@@ -227,9 +239,12 @@ application configuration.
 | `QMIX_ROOM_CREATE_IDENTITY_LIMIT` | `4096` | Integer from `1` through `65536`; hard cap on retained client-identity buckets; unseen identities fail closed with `429` when no inactive full bucket can be reclaimed |
 | `QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE` | `30` | Integer from `1` through `60000`; per-room-incarnation queue-submission token replenishment shared by canonical and guest aliases |
 | `QMIX_ROOM_SUBMISSION_BURST` | `10` | Integer from `1` through `10000`; maximum admitted queue-submission burst per room incarnation |
+| `QMIX_MAX_LIVE_ROOMS` | `256` | Strictly positive integer; maximum live rooms in this process. Expiry releases capacity |
 | `QMIX_TRUSTED_PROXY_CIDRS` | empty | Comma-separated IPv4/IPv6 CIDRs for immediate reverse proxies trusted to supply one `X-Forwarded-For` field; empty means all forwarding headers are ignored |
 
-Missing or blank values use the listed defaults. For
+Missing or blank values use the listed defaults. `QMIX_MAX_LIVE_ROOMS` must be
+a strictly positive integer; malformed, zero, negative, and overflowing values
+fail startup. For
 `QMIX_YTDLP_QUEUE_LIMIT`, explicit zero or any negative integer also uses the
 listed default; malformed or overflowing integers are invalid. Room creation
 rate must be from 1 through 60000, burst from 1 through 10000, and identity
