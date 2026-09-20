@@ -165,6 +165,7 @@ this mapping:
 | Unsupported service | 422 | `unsupported_service` | `unsupported track service` |
 | Anonymous resolution unavailable | 422 | `unsupported_service` | `track is not publicly available` |
 | Queue at capacity | 409 | `queue_full` | `queue is full` |
+| Room submission rate exhausted | 429 | `rate_limited` | `room submission rate limit exceeded` |
 | Resolver capacity exhausted | 503 | `overloaded` | `track resolver is temporarily overloaded` |
 | Resolver/upstream failure | 502 | `upstream_failure` | `track service is temporarily unavailable` |
 
@@ -322,15 +323,41 @@ consulted. This prevents an Internet
 client from selecting a new rate-limit identity by spoofing proxy headers;
 operators must list only reverse proxies that overwrite/sanitize XFF.
 
+**Room submission admission** (qmix#156). Every room incarnation owns one
+non-blocking token bucket shared by the canonical
+`POST /rooms/{code}/queue` route and guest compatibility
+`POST /r/{code}/queue` alias. The default burst is 10, replenished at 30 tokens
+per minute. Reusing an expired room code creates a new incarnation and therefore
+a fresh bucket. Exhaustion fails immediately with HTTP 429, a positive integer
+`Retry-After`, and the same `rate_limited` envelope on both aliases; resolver
+work does not start and queue, activity, and SSE state do not change.
+
+The Store validates incarnation existence before body parsing and queue capacity
+after parsing. Only a nonblank, bounded, syntactically valid request with room
+capacity consumes a token, immediately before resolver work and outside
+`Store.mu`; resolver rejection or failure does not refund it. Admission reserves
+one queue slot under `Store.mu` before consulting the limiter, and revalidates
+both incarnation and limiter identity afterward. In-flight reservations count
+against the 100-track capacity, including for direct Store appends. They are
+released on admission denial, stale incarnation, resolver failure, and every
+append outcome. Expired work cannot inherit or charge a replacement bucket;
+an old limiter result is discarded before resolver work starts. Every Store
+constructor creates an explicit per-incarnation bucket; nil and invalid
+limiters fail closed with the fixed room-submission denial. The 100-track
+queue limit therefore retains 409 precedence, while the separate process-wide
+yt-dlp concurrency and wait-queue limiter can still return 503 after room
+admission has been consumed. Alias-specific successful response bodies remain
+unchanged.
+
 ## 8. State management
 
 - All state is held **in memory** in one process, without a database.
 - One `Store` supports multiple rooms.
 - The `Store` exclusively owns mutable room records, room incarnation identity,
-  host authorization, queue limits, expiry checks, activity timestamps, and
-  mutation ordering. HTTP handlers pass room codes plus immutable operation
-  references/results; they never retain live room pointers or access the room
-  map or Store mutex.
+  per-incarnation submission limiters, host authorization, queue limits, expiry
+  checks, activity timestamps, and mutation ordering. HTTP handlers pass room
+  codes plus immutable operation references/results; they never retain live room
+  pointers or access the room map or Store mutex.
 - Public room views, append/reorder results, SSE payloads, event snapshots, and
   current-stream inputs are copied values with no mutable aliases into stored
   room state. `CreateRoom` returns only immutable code/token credentials.
@@ -372,10 +399,11 @@ operators must list only reverse proxies that overwrite/sanitize XFF.
   `QMIX_STREAM_CACHE_TTL`, `QMIX_YTDLP_METADATA_TIMEOUT`,
   `QMIX_YTDLP_SEARCH_TIMEOUT`, `QMIX_YTDLP_MAX_CONCURRENT`,
   `QMIX_YTDLP_QUEUE_LIMIT`, `QMIX_ROOM_CREATE_RATE_PER_MINUTE`,
-  `QMIX_ROOM_CREATE_BURST`, `QMIX_ROOM_CREATE_IDENTITY_LIMIT`, and
+  `QMIX_ROOM_CREATE_BURST`, `QMIX_ROOM_CREATE_IDENTITY_LIMIT`,
+  `QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE`, `QMIX_ROOM_SUBMISSION_BURST`, and
   `QMIX_TRUSTED_PROXY_CIDRS`. Defaults are respectively `:8080`, `warn`,
   `qmix.log`, empty credentials, `yt-dlp`, `5m`, `30s`, `60s`, `2`, `8`, `10`,
-  `5`, `4096`, and an empty trusted-proxy list.
+  `5`, `4096`, `30`, `10`, and an empty trusted-proxy list.
   Build and Compose orchestration variables are outside this runtime contract.
 - Missing or blank runtime values use their defaults. Explicit malformed
   levels/durations fail startup with one secret-safe JSON record. It retains
@@ -387,9 +415,10 @@ operators must list only reverse proxies that overwrite/sanitize XFF.
   `QMIX_YTDLP_MAX_CONCURRENT` must be a strictly positive integer. For
   `QMIX_YTDLP_QUEUE_LIMIT`, a positive integer sets the limit, while missing,
   blank, zero, or negative values use the documented default of 8. Malformed
-  or overflowing capacity integers fail startup. Room creation rate must be in
-  `1..60000`, burst in `1..10000`, and identity limit in `1..65536`; values
-  outside those bounded domains fail startup rather than being clamped. The
+  or overflowing capacity integers fail startup. Room creation and room
+  submission rates must be in `1..60000`; their bursts must be in `1..10000`,
+  and the room-creation identity limit must be in `1..65536`. Values outside
+  those bounded domains fail startup rather than being clamped. The
   trusted-proxy setting must be empty or a comma-separated list of valid
   IPv4/IPv6 CIDRs. Those failures use
   the same safe diagnostic fields and never echo supplied values. Startup also

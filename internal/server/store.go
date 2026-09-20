@@ -5,6 +5,9 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/leugenea/qmix/internal/admission"
+	"github.com/leugenea/qmix/internal/roomsubmission"
 )
 
 const defaultNonEmptyRoomTTL = 24 * time.Hour
@@ -24,6 +27,10 @@ type Store struct {
 	tokenRandom io.Reader
 	nextGen     uint64
 	hubs        map[*Hub]struct{}
+
+	submissionRate  int
+	submissionBurst int
+	submissionNow   func() time.Time
 }
 
 // RoomCredentials is the immutable result of room creation.
@@ -54,17 +61,26 @@ type currentStreamView struct {
 }
 
 func NewStore(ttl, tick time.Duration, gen CodeGenerator) *Store {
+	return NewStoreWithSubmissionLimit(ttl, tick, gen, 30, 10, nil)
+}
+
+// NewStoreWithSubmissionLimit constructs a Store whose fresh room incarnations
+// each receive an independent submission bucket.
+func NewStoreWithSubmissionLimit(ttl, tick time.Duration, gen CodeGenerator, ratePerMinute, burst int, now func() time.Time) *Store {
 	if gen == nil {
 		gen = NewRandomCodeGenerator(nil)
 	}
 	return &Store{
-		rooms:       make(map[string]*Room),
-		TTL:         ttl,
-		NonEmptyTTL: defaultNonEmptyRoomTTL,
-		Tick:        tick,
-		gen:         gen,
-		tokenRandom: rand.Reader,
-		hubs:        make(map[*Hub]struct{}),
+		rooms:           make(map[string]*Room),
+		TTL:             ttl,
+		NonEmptyTTL:     defaultNonEmptyRoomTTL,
+		Tick:            tick,
+		gen:             gen,
+		tokenRandom:     rand.Reader,
+		hubs:            make(map[*Hub]struct{}),
+		submissionRate:  ratePerMinute,
+		submissionBurst: burst,
+		submissionNow:   now,
 	}
 }
 
@@ -86,6 +102,7 @@ func (s *Store) CreateRoom() (RoomCredentials, error) {
 	if err != nil {
 		return RoomCredentials{}, err
 	}
+	submissionLimiter := roomsubmission.NewLimiter(s.submissionRate, s.submissionBurst, s.submissionNow)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,10 +115,11 @@ func (s *Store) CreateRoom() (RoomCredentials, error) {
 	}
 	s.nextGen++
 	s.rooms[code] = &Room{
-		Code:         code,
-		HostToken:    token,
-		LastActivity: time.Now(),
-		generation:   s.nextGen,
+		Code:              code,
+		HostToken:         token,
+		LastActivity:      time.Now(),
+		generation:        s.nextGen,
+		submissionLimiter: submissionLimiter,
 	}
 	return RoomCredentials{Code: code, HostToken: token}, nil
 }
@@ -145,10 +163,83 @@ func (s *Store) CheckAppend(ref roomRef) error {
 	if err != nil {
 		return err
 	}
-	if len(room.Queue) >= maxQueueLength {
+	if len(room.Queue)+room.appendReservations >= maxQueueLength {
 		return errQueueFull
 	}
 	return nil
+}
+
+// appendReservation owns one queue slot until append or release. Its mutable
+// accounting is guarded by its Store's mutex, including after room expiry.
+type appendReservation struct {
+	store   *Store
+	room    *Room
+	ref     roomRef
+	limiter *roomsubmission.Limiter
+	active  bool
+}
+
+// AdmitAppend reserves capacity before charging a token outside Store.mu.
+// Revalidation after limiter work prevents an expired incarnation's result
+// (including a denial) from reaching the resolver or its replacement room.
+func (s *Store) AdmitAppend(ref roomRef) (*appendReservation, *admission.Error, error) {
+	s.mu.Lock()
+	room, err := s.roomLocked(ref)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, nil, err
+	}
+	if len(room.Queue)+room.appendReservations >= maxQueueLength {
+		s.mu.Unlock()
+		return nil, nil, errQueueFull
+	}
+	limiter := room.submissionLimiter
+	reservation := &appendReservation{store: s, room: room, ref: ref, limiter: limiter, active: true}
+	room.appendReservations++
+	s.mu.Unlock()
+	denial := limiter.Allow()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, err := s.roomLocked(ref)
+	if err != nil || current != room || current.submissionLimiter != limiter {
+		reservation.releaseLocked()
+		return nil, nil, errRoomNotFound
+	}
+	if denial != nil {
+		reservation.releaseLocked()
+		return nil, denial, nil
+	}
+	return reservation, nil, nil
+}
+
+// Release abandons capacity, never refunds a token, and is idempotent so the
+// handler can defer it across resolver errors and every append outcome.
+func (r *appendReservation) Release() {
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
+	r.releaseLocked()
+}
+
+func (r *appendReservation) releaseLocked() {
+	if r.active {
+		r.active = false
+		r.room.appendReservations--
+	}
+}
+
+func (r *appendReservation) Append(track Track) (Track, error) {
+	s := r.store
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !r.active {
+		return Track{}, errRoomNotFound
+	}
+	r.releaseLocked()
+	room, err := s.roomLocked(r.ref)
+	if err != nil || room != r.room || room.submissionLimiter != r.limiter {
+		return Track{}, errRoomNotFound
+	}
+	return s.appendLocked(r.ref, track)
 }
 
 // Append commits a resolved track and its queue_updated event in one ordered
@@ -156,11 +247,15 @@ func (s *Store) CheckAppend(ref roomRef) error {
 func (s *Store) Append(ref roomRef, track Track) (Track, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.appendLocked(ref, track)
+}
+
+func (s *Store) appendLocked(ref roomRef, track Track) (Track, error) {
 	room, err := s.roomLocked(ref)
 	if err != nil {
 		return Track{}, err
 	}
-	if len(room.Queue) >= maxQueueLength {
+	if len(room.Queue)+room.appendReservations >= maxQueueLength {
 		return Track{}, errQueueFull
 	}
 	room.Queue = append(room.Queue, track)
@@ -331,9 +426,12 @@ func (s *Store) Janitor(stop <-chan struct{}) {
 }
 
 func (s *Store) sweep() {
+	s.sweepAt(time.Now())
+}
+
+func (s *Store) sweepAt(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
 	for code, room := range s.rooms {
 		idle := now.Sub(room.LastActivity)
 		if (room.isEmpty() && idle > s.TTL) || (!room.isEmpty() && idle > s.NonEmptyTTL) {

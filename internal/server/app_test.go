@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -186,6 +187,41 @@ func TestAppAppliesConfiguredTrustedProxyCIDRs(t *testing.T) {
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("trusted proxy client %d status = %d, want 201", index+1, rec.Code)
 		}
+	}
+}
+
+func TestNewAppAppliesRoomSubmissionConfiguration(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.RoomSubmission.RatePerMinute = 30
+	cfg.RoomSubmission.Burst = 1
+	trackResolver := &submissionCountingResolver{err: resolver.ErrUnsupported}
+	app, err := NewApp(cfg, nil, Dependencies{
+		CheckExecutable: func(string) bool { return true },
+		BuildResolver:   func(resolver.Config) resolver.Resolver { return trackResolver },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+
+	create := httptest.NewRecorder()
+	app.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/rooms", nil))
+	var credentials struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &credentials); err != nil {
+		t.Fatal(err)
+	}
+	for attempt, want := range []int{http.StatusUnprocessableEntity, http.StatusTooManyRequests} {
+		rec := httptest.NewRecorder()
+		path := "/rooms/" + credentials.Code + "/queue"
+		app.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"url":"https://example.test/track"}`)))
+		if rec.Code != want {
+			t.Fatalf("attempt %d status = %d, want %d; body=%s", attempt+1, rec.Code, want, rec.Body.String())
+		}
+	}
+	if trackResolver.count() != 1 {
+		t.Fatalf("resolver calls = %d, want 1", trackResolver.count())
 	}
 }
 

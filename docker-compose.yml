@@ -34,6 +34,10 @@ services:
       QMIX_ROOM_CREATE_BURST: "${QMIX_ROOM_CREATE_BURST:-5}"
       QMIX_ROOM_CREATE_IDENTITY_LIMIT: "${QMIX_ROOM_CREATE_IDENTITY_LIMIT:-4096}"
       QMIX_TRUSTED_PROXY_CIDRS: "${QMIX_TRUSTED_PROXY_CIDRS:-}"
+      # One token bucket per room incarnation, shared by both queue aliases
+      # (qmix#156). Safe ranges match the bounded rate and burst domains above.
+      QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE: "${QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE:-30}"
+      QMIX_ROOM_SUBMISSION_BURST: "${QMIX_ROOM_SUBMISSION_BURST:-10}"
       # Proxy passthrough for environments where YouTube is reachable only
       # via a proxy: yt-dlp and the audio proxy both honor these. Empty by
       # default.

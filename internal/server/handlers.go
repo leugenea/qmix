@@ -234,6 +234,17 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 		writeQueueSubmissionError(w, err)
 		return
 	}
+	reservation, denial, err := s.store.AdmitAppend(ref)
+	if err != nil {
+		writeQueueSubmissionError(w, err)
+		return
+	}
+	if denial != nil {
+		writeAdmissionError(w, denial)
+		return
+	}
+
+	defer reservation.Release()
 
 	track, err := s.trackFromRequest(r.Context(), req.URL)
 	if err != nil {
@@ -242,7 +253,7 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	track, err = s.store.Append(ref, track)
+	track, err = reservation.Append(track)
 	if err != nil {
 		writeQueueSubmissionError(w, err)
 		return

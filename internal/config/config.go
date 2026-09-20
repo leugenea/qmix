@@ -14,6 +14,7 @@ import (
 	"github.com/leugenea/qmix/internal/logging"
 	"github.com/leugenea/qmix/internal/resolver"
 	"github.com/leugenea/qmix/internal/roomcreate"
+	"github.com/leugenea/qmix/internal/roomsubmission"
 	"github.com/leugenea/qmix/internal/stream"
 	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
@@ -71,6 +72,8 @@ const (
 	defaultRoomCreateRate      = 10
 	defaultRoomCreateBurst     = 5
 	defaultRoomIdentityLimit   = 4096
+	defaultRoomSubmissionRate  = 30
+	defaultRoomSubmissionBurst = 10
 )
 
 // LookupEnv is the environment lookup shape used by Parse.
@@ -129,15 +132,22 @@ type RoomCreation struct {
 	TrustedProxyCIDRs []netip.Prefix
 }
 
+// RoomSubmission contains per-room queue-submission token-bucket settings.
+type RoomSubmission struct {
+	RatePerMinute int
+	Burst         int
+}
+
 // Config is the single typed startup configuration for the backend process.
 type Config struct {
-	Address      string
-	Logging      Logging
-	Resolver     Resolver
-	YTDLP        YTDLP
-	Stream       Stream
-	Rooms        Rooms
-	RoomCreation RoomCreation
+	Address        string
+	Logging        Logging
+	Resolver       Resolver
+	YTDLP          YTDLP
+	Stream         Stream
+	Rooms          Rooms
+	RoomCreation   RoomCreation
+	RoomSubmission RoomSubmission
 }
 
 // LoggingConfig adapts the startup aggregate to the logging package.
@@ -203,6 +213,10 @@ func Parse(lookup LookupEnv) (Config, error) {
 			Burst:         defaultRoomCreateBurst,
 			IdentityLimit: defaultRoomIdentityLimit,
 		},
+		RoomSubmission: RoomSubmission{
+			RatePerMinute: defaultRoomSubmissionRate,
+			Burst:         defaultRoomSubmissionBurst,
+		},
 	}
 
 	if v := value(lookup, "QMIX_ADDR"); v != "" {
@@ -250,6 +264,12 @@ func Parse(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.RoomCreation.IdentityLimit, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_IDENTITY_LIMIT", defaultRoomIdentityLimit, roomcreate.MaxIdentityLimit); err != nil {
+		return Config{}, err
+	}
+	if cfg.RoomSubmission.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE", defaultRoomSubmissionRate, roomsubmission.MaxRatePerMinute); err != nil {
+		return Config{}, err
+	}
+	if cfg.RoomSubmission.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_BURST", defaultRoomSubmissionBurst, roomsubmission.MaxBurst); err != nil {
 		return Config{}, err
 	}
 	if cfg.RoomCreation.TrustedProxyCIDRs, err = cidrList(lookup, "QMIX_TRUSTED_PROXY_CIDRS"); err != nil {
