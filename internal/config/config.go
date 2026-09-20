@@ -69,6 +69,7 @@ const (
 	defaultEmptyRoomTTL        = 12 * time.Hour
 	defaultNonEmptyRoomTTL     = 24 * time.Hour
 	defaultRoomJanitorInterval = time.Minute
+	defaultMaxLiveRooms        = 256
 	defaultRoomCreateRate      = 10
 	defaultRoomCreateBurst     = 5
 	defaultRoomIdentityLimit   = 4096
@@ -121,6 +122,7 @@ type Rooms struct {
 	EmptyTTL        time.Duration
 	NonEmptyTTL     time.Duration
 	JanitorInterval time.Duration
+	MaxLiveRooms    int
 }
 
 // RoomCreation contains the process-wide admission and proxy trust policy for
@@ -207,7 +209,7 @@ func Parse(lookup LookupEnv) (Config, error) {
 			QueueLimit:      defaultYTDLPQueueLimit,
 		},
 		Stream: Stream{CacheTTL: defaultStreamCacheTTL},
-		Rooms:  Rooms{EmptyTTL: defaultEmptyRoomTTL, NonEmptyTTL: defaultNonEmptyRoomTTL, JanitorInterval: defaultRoomJanitorInterval},
+		Rooms:  Rooms{EmptyTTL: defaultEmptyRoomTTL, NonEmptyTTL: defaultNonEmptyRoomTTL, JanitorInterval: defaultRoomJanitorInterval, MaxLiveRooms: defaultMaxLiveRooms},
 		RoomCreation: RoomCreation{
 			RatePerMinute: defaultRoomCreateRate,
 			Burst:         defaultRoomCreateBurst,
@@ -270,6 +272,9 @@ func Parse(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.RoomSubmission.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_BURST", defaultRoomSubmissionBurst, roomsubmission.MaxBurst); err != nil {
+		return Config{}, err
+	}
+	if cfg.Rooms.MaxLiveRooms, err = positiveInt(lookup, "QMIX_MAX_LIVE_ROOMS", defaultMaxLiveRooms); err != nil {
 		return Config{}, err
 	}
 	if cfg.RoomCreation.TrustedProxyCIDRs, err = cidrList(lookup, "QMIX_TRUSTED_PROXY_CIDRS"); err != nil {

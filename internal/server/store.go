@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -10,23 +12,32 @@ import (
 	"github.com/leugenea/qmix/internal/roomsubmission"
 )
 
-const defaultNonEmptyRoomTTL = 24 * time.Hour
+const (
+	defaultNonEmptyRoomTTL = 24 * time.Hour
+	defaultMaxLiveRooms    = 256
+)
+
+// ErrInvalidMaxLiveRooms rejects direct construction that would disable or
+// invert the process-wide live-room bound.
+var ErrInvalidMaxLiveRooms = errors.New("maximum live rooms must be positive")
 
 // Store owns all room identity, authorization, lifecycle, queue mutation, and
 // event snapshot boundaries. Callers receive values and immutable snapshots;
 // mutable Room pointers never leave Store operations in production code.
 type Store struct {
-	mu    sync.Mutex
-	rooms map[string]*Room
+	mu       sync.Mutex
+	createMu sync.Mutex
+	rooms    map[string]*Room
 
 	TTL         time.Duration
 	NonEmptyTTL time.Duration
 	Tick        time.Duration
 
-	gen         CodeGenerator
-	tokenRandom io.Reader
-	nextGen     uint64
-	hubs        map[*Hub]struct{}
+	gen          CodeGenerator
+	tokenRandom  io.Reader
+	nextGen      uint64
+	maxLiveRooms int
+	hubs         map[*Hub]struct{}
 
 	submissionRate  int
 	submissionBurst int
@@ -67,6 +78,17 @@ func NewStore(ttl, tick time.Duration, gen CodeGenerator) *Store {
 // NewStoreWithSubmissionLimit constructs a Store whose fresh room incarnations
 // each receive an independent submission bucket.
 func NewStoreWithSubmissionLimit(ttl, tick time.Duration, gen CodeGenerator, ratePerMinute, burst int, now func() time.Time) *Store {
+	store, _ := NewStoreWithLimits(ttl, tick, gen, defaultMaxLiveRooms, ratePerMinute, burst, now)
+	return store
+}
+
+// NewStoreWithLimits constructs a Store with explicit live-room and per-room
+// submission bounds. A non-positive live-room maximum is rejected at this
+// direct construction boundary.
+func NewStoreWithLimits(ttl, tick time.Duration, gen CodeGenerator, maxLiveRooms, ratePerMinute, burst int, now func() time.Time) (*Store, error) {
+	if maxLiveRooms <= 0 {
+		return nil, ErrInvalidMaxLiveRooms
+	}
 	if gen == nil {
 		gen = NewRandomCodeGenerator(nil)
 	}
@@ -77,11 +99,12 @@ func NewStoreWithSubmissionLimit(ttl, tick time.Duration, gen CodeGenerator, rat
 		Tick:            tick,
 		gen:             gen,
 		tokenRandom:     rand.Reader,
+		maxLiveRooms:    maxLiveRooms,
 		hubs:            make(map[*Hub]struct{}),
 		submissionRate:  ratePerMinute,
 		submissionBurst: burst,
 		submissionNow:   now,
-	}
+	}, nil
 }
 
 // bindEvents registers a Hub for Store mutation fanout. Registration is
@@ -97,15 +120,50 @@ func (s *Store) bindEvents(hub *Hub) {
 
 // CreateRoom allocates a fresh room and returns only immutable credentials.
 func (s *Store) CreateRoom() (RoomCredentials, error) {
-	// Entropy reads are outside the Store lock.
+	return s.CreateRoomContext(context.Background())
+}
+
+// CreateRoomContext allocates a room unless creation is canceled. Cancellation
+// can never publish a room or advance its code/incarnation state.
+func (s *Store) CreateRoomContext(ctx context.Context) (RoomCredentials, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Serialize creators without blocking existing-room operations. This lets us
+	// reject from room-map cardinality before generating credentials while all
+	// entropy I/O remains outside Store.mu.
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return RoomCredentials{}, err
+	}
+	s.mu.Lock()
+	if len(s.rooms) >= s.maxLiveRooms {
+		s.mu.Unlock()
+		return RoomCredentials{}, admission.NewRoomCapacity(retryAfterSeconds(s.Tick))
+	}
+	s.mu.Unlock()
+
 	token, err := newHostToken(s.tokenRandom)
 	if err != nil {
+		return RoomCredentials{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return RoomCredentials{}, err
 	}
 	submissionLimiter := roomsubmission.NewLimiter(s.submissionRate, s.submissionBurst, s.submissionNow)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return RoomCredentials{}, err
+	}
+	// Expiry can only reduce cardinality while createMu serializes creators, but
+	// retain the insertion-boundary check so capacity is enforced atomically by
+	// the room map itself.
+	if len(s.rooms) >= s.maxLiveRooms {
+		return RoomCredentials{}, admission.NewRoomCapacity(retryAfterSeconds(s.Tick))
+	}
 	var code string
 	for {
 		code = s.gen.Generate()
@@ -122,6 +180,20 @@ func (s *Store) CreateRoom() (RoomCredentials, error) {
 		submissionLimiter: submissionLimiter,
 	}
 	return RoomCredentials{Code: code, HostToken: token}, nil
+}
+
+func retryAfterSeconds(interval time.Duration) int {
+	if interval <= 0 {
+		return 1
+	}
+	seconds := interval / time.Second
+	if interval%time.Second != 0 {
+		seconds++
+	}
+	if seconds < 1 {
+		return 1
+	}
+	return int(seconds)
 }
 
 // View returns an immutable public snapshot of a room.

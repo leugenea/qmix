@@ -521,6 +521,55 @@ func TestIntegrationRoomSubmissionRateLimitSharedAcrossAliases(t *testing.T) {
 	}
 }
 
+func TestIntegrationLiveRoomCapacityExpiryAndReplacement(t *testing.T) {
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Rooms.MaxLiveRooms = 1
+	app, err := NewApp(cfg, nil, Dependencies{
+		CheckExecutable: func(string) bool { return true },
+		BuildResolver: func(resolver.Config) resolver.Resolver {
+			return stubResolver{meta: &resolver.Track{Title: "Capacity Track", Artist: "QMix", ResolvedBy: "test"}}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	base := integServe(t, app.Handler())
+
+	code, token := integCreateRoom(t, base)
+	limited := integDo(t, http.MethodPost, base+"/rooms", "", "")
+	if limited.status != http.StatusServiceUnavailable || limited.header.Get("Content-Type") != "application/json" || limited.header.Get("Retry-After") != "60" {
+		t.Fatalf("capacity response = status %d content-type %q retry %q body=%s", limited.status, limited.header.Get("Content-Type"), limited.header.Get("Retry-After"), limited.body)
+	}
+	var envelope map[string]string
+	integJSON(t, limited, &envelope)
+	want := map[string]string{"error": "room_capacity_exhausted", "message": "room capacity is temporarily exhausted"}
+	if len(envelope) != 2 || envelope["error"] != want["error"] || envelope["message"] != want["message"] {
+		t.Fatalf("capacity envelope = %#v, want %#v", envelope, want)
+	}
+	integAddTrack(t, base, code, "https://example.test/capacity")
+	if got := integSkip(t, base, code, token); got.status != http.StatusOK {
+		t.Fatalf("existing-room skip status = %d; body=%s", got.status, got.body)
+	}
+	if got, view := integGetRoom(t, base, code); got.status != http.StatusOK || view.Current == nil {
+		t.Fatalf("existing-room get = status %d view %+v", got.status, view)
+	}
+
+	app.Store.mu.Lock()
+	app.Store.rooms[code].LastActivity = time.Unix(0, 0).Add(-app.Store.NonEmptyTTL - time.Second)
+	app.Store.mu.Unlock()
+	app.Store.sweepAt(time.Unix(0, 0))
+	if got, _ := integGetRoom(t, base, code); got.status != http.StatusNotFound {
+		t.Fatalf("expired room status = %d, want 404", got.status)
+	}
+	if replacement, _ := integCreateRoom(t, base); replacement == "" {
+		t.Fatal("replacement room code is empty")
+	}
+}
+
 // Scenario 5: streaming through a fake yt-dlp binary. The stream backend is
 // configured via QMIX_YTDLP_BIN when the App is built and streams from a local
 // mock upstream with Range support.

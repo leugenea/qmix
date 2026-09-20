@@ -148,6 +148,9 @@ func isRequestTooLarge(err error) bool {
 
 // handleCreateRoom creates a room and returns its code, host token and URL.
 func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
+	if r.Context().Err() != nil {
+		return
+	}
 	if s.roomCreateLimiter != nil {
 		identity := unknownClientIdentity
 		if s.clientIdentities != nil {
@@ -158,8 +161,16 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	credentials, err := s.store.CreateRoom()
+	credentials, err := s.store.CreateRoomContext(r.Context())
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		var denial *admission.Error
+		if errors.As(err, &denial) && denial.Code() == "room_capacity_exhausted" {
+			writeAdmissionError(w, denial)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "internal_error", "failed to create room")
 		return
 	}

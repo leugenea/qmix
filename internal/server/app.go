@@ -66,14 +66,18 @@ func NewApp(cfg config.Config, logger *slog.Logger, deps Dependencies) (*App, er
 	// once (qmix#130). Both builders receive the same instance.
 	ytdlpLimiter := cfg.YTDLPCapacityLimiter()
 
-	store := NewStoreWithSubmissionLimit(
+	store, err := NewStoreWithLimits(
 		cfg.Rooms.EmptyTTL,
 		cfg.Rooms.JanitorInterval,
 		nil,
+		cfg.Rooms.MaxLiveRooms,
 		cfg.RoomSubmission.RatePerMinute,
 		cfg.RoomSubmission.Burst,
 		time.Now,
 	)
+	if err != nil {
+		return nil, err
+	}
 	store.NonEmptyTTL = cfg.Rooms.NonEmptyTTL
 	hub := NewHubWithLogger(logger)
 	server := NewServerWithLogger(store, hub, logger)
