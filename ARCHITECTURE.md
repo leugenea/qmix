@@ -86,7 +86,10 @@ that cover the complete requirement.
 - **TV app** — the host player. The current implementation includes the Android
   TV scaffold, room creation, a QR invitation, live room synchronization, queue
   advancement, authoritative Media3 playback coordination, focused local playback
-  controls, and token-bound foreground recovery. Returning from the background
+  controls, token-bound foreground recovery, and serialized player-state publishing.
+  Playback transitions are reported immediately and progress every 7.5 seconds;
+  reporting failure leaves local playback independent and observably unsynchronized.
+  Returning from the background
   cannot resume audio or issue queue commands until a fresh matching room read
   establishes the authoritative current; replacement selections remain paused.
 - **PWA** — the guest page for submitting supported links and viewing the queue
@@ -409,6 +412,13 @@ and subscriber invalidation behavior.
   bounding memory retained by abandoned queues.
 - SSE clients can reconnect; on connection they receive a `queue_snapshot`
   containing the complete state.
+- The Android host publishes actual playback through one serialized request
+  pipeline. Immediate transitions supersede queued progress, old-track callbacks
+  are generation-discarded, and 409 responses force a GET reconciliation without
+  retrying the rejected report. GET/SSE echoes for the same `track_id` update
+  presentation only and never command Media3. During network loss the server
+  deliberately retains the last accepted state and position; local playback
+  continues and marks reporting unsynchronized until a later accepted report.
 - State loss on backend restart is acceptable because MVP rooms are ephemeral.
 
 ## 9. Deployment

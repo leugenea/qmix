@@ -381,13 +381,11 @@ internal class SerialExecutor(private val delegate: Executor) : Executor {
     private enum class WorkerState { IDLE, SUBMITTING, RUNNING }
 
     private val lock = ReentrantLock()
-    private val submissionResolved = lock.newCondition()
     private val tasks = ArrayDeque<Runnable>()
     private var state = WorkerState.IDLE
 
     override fun execute(command: Runnable) {
         val submitWorker = lock.withLock {
-            while (state == WorkerState.SUBMITTING) submissionResolved.awaitUninterruptibly()
             tasks.addLast(command)
             if (state == WorkerState.IDLE) {
                 state = WorkerState.SUBMITTING
@@ -400,10 +398,23 @@ internal class SerialExecutor(private val delegate: Executor) : Executor {
         try {
             delegate.execute(::drain)
         } catch (rejection: Throwable) {
-            lock.withLock {
+            val resubmit = lock.withLock {
                 tasks.remove(command)
                 state = WorkerState.IDLE
-                submissionResolved.signalAll()
+                if (tasks.isNotEmpty()) {
+                    state = WorkerState.SUBMITTING
+                    true
+                } else {
+                    false
+                }
+            }
+            if (resubmit) {
+                try {
+                    delegate.execute(::drain)
+                } catch (resubmissionFailure: Throwable) {
+                    lock.withLock { state = WorkerState.IDLE }
+                    rejection.addSuppressed(resubmissionFailure)
+                }
             }
             throw rejection
         }
@@ -412,7 +423,6 @@ internal class SerialExecutor(private val delegate: Executor) : Executor {
     private fun drain() {
         lock.withLock {
             state = WorkerState.RUNNING
-            submissionResolved.signalAll()
         }
         while (true) {
             val command = lock.withLock {

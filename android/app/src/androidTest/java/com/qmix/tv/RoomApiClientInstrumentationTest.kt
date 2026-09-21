@@ -227,6 +227,56 @@ class RoomApiClientInstrumentationTest {
         )
     }
 
+    @Test
+    fun player_reports_use_the_exact_authenticated_wire_contract_and_classify_every_response() {
+        val cases = listOf(
+            Triple(200, PlayerReportState.PLAYING, PlayerReportResult.ACCEPTED),
+            Triple(403, PlayerReportState.PAUSED, PlayerReportResult.FORBIDDEN),
+            Triple(404, PlayerReportState.ERROR, PlayerReportResult.MISSING),
+            Triple(409, PlayerReportState.ENDED, PlayerReportResult.CONFLICT),
+            Triple(429, PlayerReportState.PLAYING, PlayerReportResult.FAILED),
+        )
+
+        cases.forEachIndexed { index, (status, state, expected) ->
+            server.enqueue(MockResponse().setResponseCode(status))
+            val actual = report(PlayerReport("track-$index", state, index + 7))
+
+            assertEquals(expected, actual)
+            server.takeRequest().also { request ->
+                assertEquals("PATCH", request.method)
+                assertEquals("/rooms/AB%20CD/player", request.path)
+                assertEquals("host-secret", request.headers["X-Host-Token"])
+                assertEquals(
+                    """{"track_id":"track-$index","state":"${state.wireValue}","pos_sec":${index + 7}}""",
+                    request.body.readUtf8(),
+                )
+            }
+        }
+        assertEquals(cases.size, server.requestCount)
+    }
+
+    @Test
+    fun player_report_transport_failure_completes_once_without_retry() {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+
+        assertEquals(
+            PlayerReportResult.FAILED,
+            report(PlayerReport("track", PlayerReportState.PLAYING, 11)),
+        )
+        assertEquals(1, server.requestCount)
+    }
+
+    private fun report(playerReport: PlayerReport): PlayerReportResult {
+        val completed = CountDownLatch(1)
+        var result: PlayerReportResult? = null
+        api.reportPlayer("AB CD", "host-secret", playerReport) {
+            result = it
+            completed.countDown()
+        }
+        assertTrue(completed.await(5, TimeUnit.SECONDS))
+        return requireNotNull(result)
+    }
+
     private fun assertInvalid(block: () -> Unit) {
         val error = assertThrows(RoomApiException::class.java, block)
         assertEquals(UserMessage.INVALID_RESPONSE, error.userMessage)

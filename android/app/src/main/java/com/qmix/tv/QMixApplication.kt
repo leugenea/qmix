@@ -103,6 +103,13 @@ class QMixApplication : Application() {
                         dispatcher = playbackDispatcher,
                         advanceAfterEnded = advanceAfterEnded,
                         observer = observer,
+                        statePublisher = PlayerStatePublisher(
+                            roomCode = credentials.code,
+                            hostToken = credentials.hostToken,
+                            client = api,
+                            scheduler = ExecutorRoomSyncScheduler(syncExecutor),
+                            dispatcher = syncExecutor,
+                        ),
                     )
                 }
             },

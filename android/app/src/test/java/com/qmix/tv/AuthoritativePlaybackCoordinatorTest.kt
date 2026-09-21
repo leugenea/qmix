@@ -4,8 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.concurrent.Executor
 import java.util.ArrayDeque
+import java.util.PriorityQueue
+import java.util.concurrent.Executor
 
 class AuthoritativePlaybackCoordinatorTest {
     @Test
@@ -139,6 +140,27 @@ class AuthoritativePlaybackCoordinatorTest {
 
         assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
         assertEquals(1, engine.playCount)
+    }
+
+    @Test
+    fun authoritative_current_removal_stops_active_playback_and_resets_local_state() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 12_000,
+            ),
+        )
+
+        coordinator.onSynchronization(fresh(room(currentId = null)))
+
+        assertEquals(1, engine.pauseCount)
+        assertEquals(LocalPlaybackState(), coordinator.state)
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED, positionMs = 13_000))
+        assertTrue(advances.isEmpty())
+        assertEquals(LocalPlaybackState(), coordinator.state)
     }
 
     @Test
@@ -571,6 +593,247 @@ class AuthoritativePlaybackCoordinatorTest {
         assertEquals(LocalPlaybackStatus.IDLE, coordinator.state.status)
     }
 
+    @Test
+    fun media3_transitions_publish_immediately_and_self_refresh_never_restarts_or_seeks_media() {
+        val reportClient = CoordinatorReportClient()
+        val reporting = PlayerStatePublisher(
+            "ABCD",
+            "host-secret",
+            reportClient,
+            RoomSyncScheduler { _, _ -> Cancelable { } },
+            Executor { it.run() },
+        )
+        val reportingCoordinator = AuthoritativePlaybackCoordinator(
+            roomCode = "ABCD",
+            streamUrl = "https://qmix.test/rooms/ABCD/current/stream",
+            playbackEngine = engine,
+            reconciler = reconciler,
+            dispatcher = Executor { it.run() },
+            advanceAfterEnded = { true },
+            statePublisher = reporting,
+        )
+        val selected = fresh(room(currentId = "one"))
+        reportingCoordinator.onSynchronization(selected)
+
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 5_000,
+                durationMs = 30_000,
+                isSeekable = true,
+            ),
+        )
+        assertEquals(PlayerReport("one", PlayerReportState.PLAYING, 5), reportClient.calls.last().report)
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+
+        reportingCoordinator.pause()
+        assertEquals(PlayerReportState.PAUSED, reportClient.calls.last().report.state)
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+        reportingCoordinator.seekBy(10_000)
+        assertEquals(PlayerReport("one", PlayerReportState.PAUSED, 15), reportClient.calls.last().report)
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+
+        reportingCoordinator.onSynchronization(
+            fresh(room(currentId = "one").copy(current = CurrentTrack("one", 15, "paused", "one", "Artist"))),
+        )
+        assertEquals(1, engine.prepared.size)
+        assertEquals(listOf(15_000L), engine.seeks)
+
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.ERROR,
+                positionMs = 15_000,
+                error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
+            ),
+        )
+        assertEquals(PlayerReportState.ERROR, reportClient.calls.last().report.state)
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED, positionMs = 30_000))
+        assertEquals(PlayerReport("one", PlayerReportState.ENDED, 30), reportClient.calls.last().report)
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+        reportingCoordinator.onSynchronization(fresh(room(currentId = null)))
+        assertEquals(LocalPlaybackStatus.COMPLETED, reportingCoordinator.state.status)
+
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "two")))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED, positionMs = 30_000))
+        assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(1, reportClient.calls.count { it.report.trackId == "one" && it.report.state == PlayerReportState.ENDED })
+    }
+
+    @Test
+    fun non_playing_buffering_stops_periodic_progress_until_fresh_playing_state() {
+        val reportClient = CoordinatorReportClient()
+        val scheduler = CoordinatorVirtualScheduler()
+        val reporting = PlayerStatePublisher(
+            "ABCD",
+            "host-secret",
+            reportClient,
+            scheduler,
+            Executor { it.run() },
+        )
+        val reportingCoordinator = AuthoritativePlaybackCoordinator(
+            "ABCD",
+            "https://qmix.test/rooms/ABCD/current/stream",
+            engine,
+            reconciler,
+            Executor { it.run() },
+            { true },
+            statePublisher = reporting,
+        )
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 5_000,
+            ),
+        )
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.BUFFERING,
+                isPlaying = false,
+                positionMs = 6_000,
+                durationMs = 30_000,
+                isSeekable = true,
+            ),
+        )
+        scheduler.advanceBy(15_000)
+
+        assertEquals(listOf(5), reportClient.calls.map { it.report.positionSeconds })
+
+        reportingCoordinator.seekBy(1_000)
+        assertEquals(listOf(5, 7), reportClient.calls.map { it.report.positionSeconds })
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+        scheduler.advanceBy(7_500)
+        assertEquals(listOf(5, 7), reportClient.calls.map { it.report.positionSeconds })
+
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 8_000,
+            ),
+        )
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+        scheduler.advanceBy(7_500)
+
+        assertEquals(listOf(5, 7, 8, 8), reportClient.calls.map { it.report.positionSeconds })
+    }
+
+    @Test
+    fun foreground_loss_cancels_retry_report_reconciliation_and_publishing_then_rebinds_all() {
+        val reportClient = CoordinatorReportClient()
+        val reporting = PlayerStatePublisher(
+            "ABCD",
+            "host-secret",
+            reportClient,
+            RoomSyncScheduler { _, _ -> Cancelable { } },
+            Executor { it.run() },
+        )
+        val reportingCoordinator = AuthoritativePlaybackCoordinator(
+            "ABCD",
+            "https://qmix.test/rooms/ABCD/current/stream",
+            engine,
+            reconciler,
+            Executor { it.run() },
+            { true },
+            statePublisher = reporting,
+        )
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        reportClient.complete(PlayerReportResult.CONFLICT)
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.ERROR,
+                error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
+            ),
+        )
+        reportingCoordinator.retryCurrent()
+        assertEquals(2, reconciler.calls.size)
+
+        reportingCoordinator.onForegroundLost()
+
+        assertTrue(reconciler.calls.all { it.canceled })
+        reportingCoordinator.onForegroundReconciled(room(currentId = "one"))
+        assertEquals(LocalPlaybackStatus.ERROR, reportingCoordinator.state.status)
+    }
+
+    @Test
+    fun report_conflict_fetches_authority_once_without_feedback_on_the_same_track() {
+        val reportClient = CoordinatorReportClient()
+        val reporting = PlayerStatePublisher(
+            "ABCD",
+            "host-secret",
+            reportClient,
+            RoomSyncScheduler { _, _ -> Cancelable { } },
+            Executor { it.run() },
+        )
+        val reportingCoordinator = AuthoritativePlaybackCoordinator(
+            "ABCD",
+            "https://qmix.test/rooms/ABCD/current/stream",
+            engine,
+            reconciler,
+            Executor { it.run() },
+            { true },
+            statePublisher = reporting,
+        )
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+
+        reportClient.complete(PlayerReportResult.CONFLICT)
+        assertEquals(1, reconciler.calls.size)
+        reconciler.complete(RoomFetchResult.Success(room(currentId = "one")))
+
+        assertEquals(1, engine.prepared.size)
+        assertTrue(engine.seeks.isEmpty())
+        assertFalse(reportingCoordinator.state.reportSynchronized)
+    }
+
+    @Test
+    fun stale_conflict_reconciliation_cannot_replace_or_disable_reporting_for_a_newer_track() {
+        val reportClient = CoordinatorReportClient()
+        val reporting = PlayerStatePublisher(
+            "ABCD",
+            "host-secret",
+            reportClient,
+            RoomSyncScheduler { _, _ -> Cancelable { } },
+            Executor { it.run() },
+        )
+        val reportingCoordinator = AuthoritativePlaybackCoordinator(
+            "ABCD",
+            "https://qmix.test/rooms/ABCD/current/stream",
+            engine,
+            reconciler,
+            Executor { it.run() },
+            { true },
+            statePublisher = reporting,
+        )
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        reportClient.complete(PlayerReportResult.CONFLICT)
+
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "two")))
+        engine.emit(PlaybackState(mediaId = "two", status = PlaybackStatus.READY, isPlaying = true))
+        assertFalse(reportingCoordinator.state.reportSynchronized)
+        reconciler.complete(RoomFetchResult.Success(room(currentId = "one")))
+        reportingCoordinator.pause()
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+
+        assertEquals(listOf("one", "two", "two"), reportClient.calls.map { it.report.trackId })
+        assertEquals(PlayerReportState.PAUSED, reportClient.calls.last().report.state)
+        assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
+    }
+
     private fun fresh(room: RoomState) = RoomSyncState.Active(
         roomCode = room.code,
         room = room,
@@ -583,6 +846,31 @@ class AuthoritativePlaybackCoordinatorTest {
         current = currentId?.let { CurrentTrack(it, 0, "playing", it, "Artist") },
         queue = queueIds.map { QueuedTrack(it, "https://example/$it", it, "Artist", 60, "fixture") },
     )
+
+    private class CoordinatorReportClient : PlayerReportClient {
+        data class Call(
+            val report: PlayerReport,
+            val callback: (PlayerReportResult) -> Unit,
+            var canceled: Boolean = false,
+        )
+
+        val calls = mutableListOf<Call>()
+
+        override fun reportPlayer(
+            roomCode: String,
+            hostToken: String,
+            report: PlayerReport,
+            callback: (PlayerReportResult) -> Unit,
+        ): Cancelable {
+            val call = Call(report, callback)
+            calls += call
+            return Cancelable { call.canceled = true }
+        }
+
+        fun complete(result: PlayerReportResult, index: Int = calls.lastIndex) {
+            calls[index].callback(result)
+        }
+    }
 
     private class RecordingPlaybackEngine : PlaybackEngine {
         override var state = PlaybackState()
@@ -611,6 +899,37 @@ class AuthoritativePlaybackCoordinatorTest {
         private fun publish(next: PlaybackState) {
             state = next
             listeners.toList().forEach { it(next) }
+        }
+    }
+
+    private class CoordinatorVirtualScheduler : RoomSyncScheduler {
+        private data class Task(
+            val at: Long,
+            val order: Long,
+            val action: () -> Unit,
+            var canceled: Boolean = false,
+        ) : Comparable<Task> {
+            override fun compareTo(other: Task): Int = compareValuesBy(this, other, Task::at, Task::order)
+        }
+
+        private val tasks = PriorityQueue<Task>()
+        private var now = 0L
+        private var order = 0L
+
+        override fun schedule(delayMillis: Long, action: () -> Unit): Cancelable {
+            val task = Task(now + delayMillis, order++, action)
+            tasks += task
+            return Cancelable { task.canceled = true }
+        }
+
+        fun advanceBy(millis: Long) {
+            val target = now + millis
+            while (tasks.peek()?.at?.let { it <= target } == true) {
+                val task = tasks.remove()
+                now = task.at
+                if (!task.canceled) task.action()
+            }
+            now = target
         }
     }
 

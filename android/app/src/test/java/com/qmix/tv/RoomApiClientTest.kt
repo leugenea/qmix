@@ -9,11 +9,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -94,6 +96,62 @@ class RoomApiClientTest {
         assertEquals("/rooms/AB%20CD/skip", request.path)
         assertEquals("host-secret", request.headers["X-Host-Token"])
         assertEquals(0L, request.bodySize)
+    }
+
+    @Test
+    fun reportPlayer_patches_exact_bounded_schema_with_host_token() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        var result: PlayerReportResult? = null
+        val completed = CountDownLatch(1)
+
+        api.reportPlayer(
+            "AB CD",
+            "host-secret",
+            PlayerReport("track-1", PlayerReportState.PAUSED, 17),
+        ) {
+            result = it
+            completed.countDown()
+        }
+
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("PATCH", request.method)
+        assertEquals("/rooms/AB%20CD/player", request.path)
+        assertEquals("host-secret", request.headers["X-Host-Token"])
+        assertEquals(
+            """{"track_id":"track-1","state":"paused","pos_sec":17}""",
+            request.body.readUtf8(),
+        )
+        assertTrue(completed.await(5, TimeUnit.SECONDS))
+        assertEquals(PlayerReportResult.ACCEPTED, result)
+    }
+
+    @Test
+    fun reportPlayer_maps_conflict_authorization_missing_and_all_other_failures_without_retry() {
+        listOf(
+            409 to PlayerReportResult.CONFLICT,
+            403 to PlayerReportResult.FORBIDDEN,
+            404 to PlayerReportResult.MISSING,
+            400 to PlayerReportResult.FAILED,
+            413 to PlayerReportResult.FAILED,
+            503 to PlayerReportResult.FAILED,
+        ).forEach { (status, expected) ->
+            server.enqueue(MockResponse().setResponseCode(status))
+            val completed = CountDownLatch(1)
+            var actual: PlayerReportResult? = null
+
+            api.reportPlayer(
+                "ABCD",
+                "host-secret",
+                PlayerReport("track", PlayerReportState.ERROR, 2),
+            ) {
+                actual = it
+                completed.countDown()
+            }
+
+            assertTrue(completed.await(5, TimeUnit.SECONDS))
+            assertEquals(expected, actual)
+        }
+        assertEquals(6, server.requestCount)
     }
 
     @Test
