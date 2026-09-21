@@ -339,14 +339,14 @@ class LocalizationContractTest {
             addInventory(
                 "RoomApiClient.kt",
                 "identifiers and API fields",
-                "rooms" to 3,
+                "rooms" to 4,
                 "code" to 2,
                 "host_token" to 1,
                 "url" to 2,
                 "current" to 3,
-                "track_id" to 2,
-                "pos_sec" to 2,
-                "state" to 2,
+                "track_id" to 3,
+                "pos_sec" to 3,
+                "state" to 3,
                 "title" to 3,
                 "artist" to 3,
                 "queue" to 1,
@@ -354,7 +354,17 @@ class LocalizationContractTest {
                 "duration_sec" to 1,
                 "resolved_by" to 1,
                 "skip" to 1,
-                "X-Host-Token" to 1,
+                "player" to 1,
+                "X-Host-Token" to 2,
+            )
+            addInventory(
+                "RoomApiClient.kt",
+                "protocol values",
+                "application/json; charset=utf-8" to 1,
+                "playing" to 1,
+                "paused" to 1,
+                "error" to 1,
+                "ended" to 1,
             )
             addInventory("HostSessionController.kt", "identifiers", "qmix-room-request" to 1)
             addInventory(

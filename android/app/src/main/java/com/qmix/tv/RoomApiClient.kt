@@ -3,6 +3,7 @@ package com.qmix.tv
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -35,6 +36,30 @@ data class RoomState(
     val queue: List<QueuedTrack>,
 )
 
+enum class PlayerReportState(val wireValue: String) {
+    PLAYING("playing"),
+    PAUSED("paused"),
+    ERROR("error"),
+    ENDED("ended"),
+}
+
+data class PlayerReport(
+    val trackId: String,
+    val state: PlayerReportState,
+    val positionSeconds: Int,
+)
+
+enum class PlayerReportResult { ACCEPTED, FORBIDDEN, MISSING, CONFLICT, FAILED }
+
+fun interface PlayerReportClient {
+    fun reportPlayer(
+        roomCode: String,
+        hostToken: String,
+        report: PlayerReport,
+        callback: (PlayerReportResult) -> Unit,
+    ): Cancelable
+}
+
 /** Credentials returned once by POST /rooms. Never include [hostToken] in presentation objects. */
 data class RoomCredentials(
     val code: String,
@@ -49,7 +74,11 @@ class RoomApiClient(
     httpClient: OkHttpClient,
     backendUrl: String,
     private val logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.ROOM_API_CREATION),
-) : RoomStateFetcher {
+) : RoomStateFetcher, PlayerReportClient {
+    private companion object {
+        val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+    }
+
     private val httpClient = httpClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
@@ -102,6 +131,51 @@ class RoomApiClient(
                     RoomFetchResult.Failure
                 } catch (_: RoomApiException) {
                     RoomFetchResult.Failure
+                }
+                callback(result)
+            }
+        })
+        return Cancelable(call::cancel)
+    }
+
+    override fun reportPlayer(
+        roomCode: String,
+        hostToken: String,
+        report: PlayerReport,
+        callback: (PlayerReportResult) -> Unit,
+    ): Cancelable {
+        val body = JSONObject()
+            .put("track_id", report.trackId)
+            .put("state", report.state.wireValue)
+            .put("pos_sec", report.positionSeconds)
+            .toString()
+            .toRequestBody(JSON_MEDIA_TYPE)
+        val request = Request.Builder()
+            .url(
+                backend.newBuilder()
+                    .addPathSegment("rooms")
+                    .addPathSegment(roomCode)
+                    .addPathSegment("player")
+                    .build(),
+            )
+            .header("X-Host-Token", hostToken)
+            .patch(body)
+            .build()
+        val call = httpClient.newCall(request)
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                callback(PlayerReportResult.FAILED)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val result = response.use {
+                    when (it.code) {
+                        200 -> PlayerReportResult.ACCEPTED
+                        403 -> PlayerReportResult.FORBIDDEN
+                        404 -> PlayerReportResult.MISSING
+                        409 -> PlayerReportResult.CONFLICT
+                        else -> PlayerReportResult.FAILED
+                    }
                 }
                 callback(result)
             }

@@ -23,7 +23,7 @@ Completed:
 
 In progress / next:
 
-- **M4** — the single-module Kotlin/Compose for TV scaffold, Media3 playback engine, room creation/QR flow, live room synchronization, queue advancement, authoritative local playback coordination, focused local playback controls, and foreground recovery are implemented via #71, #72, #73, #101, #124, #121, #122, and #123 (see [`android/README.md`](android/README.md)). Published-artifact and target-hardware acceptance remain in #62.
+- **M4** — the single-module Kotlin/Compose for TV scaffold, Media3 playback engine, room creation/QR flow, live room synchronization, queue advancement, authoritative local playback coordination, player-state publishing, focused local playback controls, and foreground recovery are implemented via #71, #72, #73, #101, #124, #121, #122, #123, and #65 (see [`android/README.md`](android/README.md)). Published-artifact and target-hardware acceptance remain in #62.
 - **M6** — Definition of Done (E2E + v0.1.0).
 - Automatic Yandex token refresh through `QMIX_YM_REFRESH_TOKEN` (`goym` does not provide built-in refresh support, so this is a separate task).
 
@@ -553,5 +553,5 @@ database extraction is undocumented and not recommended.
 ## Stack
 
 - Backend: Go, REST + SSE, in-memory state
-- TV host: Kotlin + Compose for TV + Media3; scaffold, room creation/QR, live synchronization, queue advancement, authoritative local playback coordination, focused local playback controls, and foreground-only recovery are implemented; published-artifact and target-hardware acceptance remain owned by #62
+- TV host: Kotlin + Compose for TV + Media3; scaffold, room creation/QR, live synchronization, queue advancement, authoritative local playback coordination, player-state publishing, focused local playback controls, and foreground-only recovery are implemented; published-artifact and target-hardware acceptance remain owned by #62
 - Guests: login-free PWA (completed in #55)

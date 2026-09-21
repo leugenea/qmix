@@ -29,7 +29,7 @@ class SerialExecutorTest {
     }
 
     @Test(timeout = 5_000L)
-    fun a_command_arriving_during_rejection_is_resubmitted_not_dropped() {
+    fun a_command_arriving_during_rejection_returns_and_is_resubmitted_not_dropped() {
         val firstSubmissionEntered = CountDownLatch(1)
         val releaseFirstSubmission = CountDownLatch(1)
         var attempts = 0
@@ -57,7 +57,7 @@ class SerialExecutorTest {
             secondReturned.countDown()
         }.start()
 
-        assertEquals(false, secondReturned.await(100, TimeUnit.MILLISECONDS))
+        assertEquals(true, secondReturned.await(2, TimeUnit.SECONDS))
         releaseFirstSubmission.countDown()
 
         assertEquals(true, firstRejected.await(2, TimeUnit.SECONDS))

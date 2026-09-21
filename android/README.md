@@ -104,9 +104,23 @@ session cancels the request, event stream, retry, and periodic timers.
 state, queue-command pending input, and local playback state used by the TV
 presentation. Start/Next is serialized by `QueueAdvancementCoordinator`. Only a
 fresh, connected authoritative snapshot may select playback media; selection
-identity is `track_id`, so repeated snapshots preserve position, pause,
-completion, and errors. A new selection uses `/rooms/{code}/current/stream` and
-prepares/plays once. Final completion is local, while ENDED with queued work
+identity is `track_id`, so repeated snapshots—including refreshes caused by the
+host's own player report—preserve position, pause, completion, and errors without
+restarting or seeking Media3. A new selection uses
+`/rooms/{code}/current/stream` and prepares/plays once. Local pause, resume,
+seek, completion, and error transitions are published immediately through
+`PATCH /rooms/{code}/player`; playing position is also published every 7.5
+seconds. Reports are serialized with at most one request in flight, queued
+positions are coalesced, and changing `track_id` cancels and generation-discards
+old reports. A 409 causes a fresh authoritative room read rather than replaying
+the rejected operation. Reporting failures never block local controls or audio;
+the local playback model exposes `reportSynchronized=false` until a later
+accepted report, while the server and guests retain the last successfully
+reported state and position during network loss. 403/404 stop that track's
+reporting, and foreground loss cancels reporting together with playback work.
+Final completion reports `ended`, allowing the server to clear only the matching
+current; a concurrent Next either follows that clear or makes the old report
+conflict, so it cannot clear the replacement. Final completion is local, while ENDED with queued work
 requests one coordinated advance. Retry Current performs a token-bound GET and
 re-prepares only when the authoritative current still matches. Stale snapshots,
 reconnecting snapshots, replaced-media callbacks, and stale retry callbacks
