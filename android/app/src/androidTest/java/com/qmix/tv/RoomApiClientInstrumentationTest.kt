@@ -1,6 +1,13 @@
 package com.qmix.tv
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -14,11 +21,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class RoomApiClientInstrumentationTest {
+    private val adapterScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var server: MockWebServer
     private lateinit var api: RoomApiClient
 
@@ -31,6 +37,7 @@ class RoomApiClientInstrumentationTest {
 
     @After
     fun tearDown() {
+        adapterScope.cancel()
         server.shutdown()
     }
 
@@ -40,7 +47,7 @@ class RoomApiClientInstrumentationTest {
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
         )
-        val credentials = api.createRoom()
+        val credentials = runBlocking { api.createRoom() }
         assertEquals("ABCD", credentials.code)
         assertEquals("host-secret", credentials.hostToken)
         assertEquals("/r/ABCD", credentials.relativeGuestUrl)
@@ -57,7 +64,7 @@ class RoomApiClientInstrumentationTest {
                 """{"code":"ABCD","current":{"track_id":"now","pos_sec":12,"state":"playing","title":"Now","artist":""},"queue":[{"id":"next","url":"https://music.example/next","title":"Next","artist":"Other","duration_sec":180,"resolved_by":"test"}]}""",
             ),
         )
-        val room = api.getRoom("AB CD")
+        val room = runBlocking { api.getRoom("AB CD") }
         assertEquals("ABCD", room.code)
         val current = requireNotNull(room.current)
         assertEquals("now", current.trackId)
@@ -88,7 +95,7 @@ class RoomApiClientInstrumentationTest {
                 """{"current":{"track_id":"next","pos_sec":0,"state":"paused","title":"Next","artist":"Artist"}}""",
             ),
         )
-        assertEquals(CurrentTrack("next", 0, "paused", "Next", "Artist"), api.skip("AB CD", "host-secret"))
+        assertEquals(CurrentTrack("next", 0, "paused", "Next", "Artist"), runBlocking { api.skip("AB CD", "host-secret") })
         server.takeRequest().also { request ->
             assertEquals("POST", request.method)
             assertEquals("/rooms/AB%20CD/skip", request.path)
@@ -106,7 +113,7 @@ class RoomApiClientInstrumentationTest {
             ),
         )
 
-        val room = api.getRoom("ABCD")
+        val room = runBlocking { api.getRoom("ABCD") }
 
         assertNull(room.current)
         assertEquals(Int.MAX_VALUE, room.queue.single().durationSeconds)
@@ -121,7 +128,7 @@ class RoomApiClientInstrumentationTest {
             418 to UserMessage.REQUEST_REJECTED,
         ).forEach { (status, expected) ->
             server.enqueue(MockResponse().setResponseCode(status))
-            val error = assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }
+            val error = assertThrows(RoomApiException::class.java) { runBlocking { api.getRoom("ABCD") } }
             assertEquals(expected, error.userMessage)
         }
     }
@@ -145,7 +152,7 @@ class RoomApiClientInstrumentationTest {
         )
         getBodies.forEach { body ->
             server.enqueue(MockResponse().setBody(body))
-            assertInvalid { api.getRoom("ABCD") }
+            assertInvalid { runBlocking { api.getRoom("ABCD") } }
         }
 
         listOf(
@@ -153,7 +160,7 @@ class RoomApiClientInstrumentationTest {
             """{"code":"ABCD","host_token":"","url":"/r/ABCD"}""",
         ).forEach { body ->
             server.enqueue(MockResponse().setResponseCode(201).setBody(body))
-            assertInvalid { api.createRoom() }
+            assertInvalid { runBlocking { api.createRoom() } }
         }
 
         listOf(
@@ -162,7 +169,7 @@ class RoomApiClientInstrumentationTest {
             """{"current":{"track_id":"x","pos_sec":0,"state":"playing","title":"X"}}""",
         ).forEach { body ->
             server.enqueue(MockResponse().setBody(body))
-            assertInvalid { api.skip("ABCD", "secret") }
+            assertInvalid { runBlocking { api.skip("ABCD", "secret") } }
         }
     }
 
@@ -175,13 +182,13 @@ class RoomApiClientInstrumentationTest {
         )
         assertEquals(
             UserMessage.SERVER_TIMEOUT,
-            assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }.userMessage,
+            assertThrows(RoomApiException::class.java) { runBlocking { api.getRoom("ABCD") } }.userMessage,
         )
 
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
         assertEquals(
             UserMessage.SERVER_UNREACHABLE,
-            assertThrows(RoomApiException::class.java) { api.getRoom("ABCD") }.userMessage,
+            assertThrows(RoomApiException::class.java) { runBlocking { api.getRoom("ABCD") } }.userMessage,
         )
 
         val otherOrigin = MockWebServer()
@@ -193,7 +200,7 @@ class RoomApiClientInstrumentationTest {
             )
             assertEquals(
                 UserMessage.REQUEST_REJECTED,
-                assertThrows(RoomApiException::class.java) { api.skip("ABCD", "host-secret") }.userMessage,
+                assertThrows(RoomApiException::class.java) { runBlocking { api.skip("ABCD", "host-secret") } }.userMessage,
             )
             assertEquals(0, otherOrigin.requestCount)
         } finally {
@@ -207,7 +214,7 @@ class RoomApiClientInstrumentationTest {
             server.enqueue(response)
             val completed = CountDownLatch(1)
             var result: RoomFetchResult? = null
-            api.fetch("ABCD") {
+            api.roomFetcher(adapterScope).fetch("ABCD") {
                 result = it
                 completed.countDown()
             }
@@ -269,7 +276,7 @@ class RoomApiClientInstrumentationTest {
     private fun report(playerReport: PlayerReport): PlayerReportResult {
         val completed = CountDownLatch(1)
         var result: PlayerReportResult? = null
-        api.reportPlayer("AB CD", "host-secret", playerReport) {
+        api.playerReporter(adapterScope).reportPlayer("AB CD", "host-secret", playerReport) {
             result = it
             completed.countDown()
         }

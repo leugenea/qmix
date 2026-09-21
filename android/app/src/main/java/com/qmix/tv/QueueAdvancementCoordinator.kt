@@ -1,6 +1,15 @@
 package com.qmix.tv
 
-import java.util.concurrent.Executor
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 sealed interface QueueAdvanceCommandResult {
     data object Success : QueueAdvanceCommandResult
@@ -9,269 +18,181 @@ sealed interface QueueAdvanceCommandResult {
 }
 
 fun interface QueueAdvanceCommand {
-    fun skip(
-        roomCode: String,
-        hostToken: String,
-        callback: (QueueAdvanceCommandResult) -> Unit,
-    )
+    suspend fun skip(roomCode: String, hostToken: String): QueueAdvanceCommandResult
 }
 
-enum class QueueAdvanceOutcome {
-    ADVANCED,
-    RECONCILED_NO_ADVANCE,
-    REJECTED,
+fun interface QueueRoomReconciler {
+    suspend fun fetch(roomCode: String): RoomFetchResult
 }
+
+/** Synchronous admission and coroutine resumptions share the injected immediate mutation context.
+ * The host's temporary callback callers may enter from another thread until qmix#182.
+ */
+class QueueMutationContext(
+    val dispatcher: CoroutineDispatcher,
+    private val isCurrent: () -> Boolean,
+) {
+    fun <T> run(action: () -> T): T =
+        if (isCurrent()) action() else runBlocking(dispatcher) { action() }
+}
+
+enum class QueueAdvanceOutcome { ADVANCED, RECONCILED_NO_ADVANCE, REJECTED }
 
 data class QueueAdvancementState(
     val pending: Boolean = false,
     val lastOutcome: QueueAdvanceOutcome? = null,
 )
 
+/** qmix#178: unresolved business state outlives a failed GET, never its foreground/session owner. */
 class QueueAdvancementCoordinator(
     private val roomCode: String,
     private val hostToken: String,
     private val command: QueueAdvanceCommand,
-    private val reconciler: RoomStateFetcher,
+    private val reconciler: QueueRoomReconciler,
     private val observer: (QueueAdvancementState) -> Unit = {},
+    parentScope: CoroutineScope,
+    private val mutationContext: QueueMutationContext,
 ) : AutoCloseable {
-    private enum class Phase { COMMAND, RECONCILING }
+    private class Pending(val previousCurrentId: String?, var needsReconciliation: Boolean = false)
+    private class Selection(val trackId: String?, var endedConsumed: Boolean = false)
 
-    private data class Pending(
-        val token: Long,
-        val previousCurrentId: String?,
-        var phase: Phase,
-    )
-
+    private val sessionJob = SupervisorJob(requireNotNull(parentScope.coroutineContext[Job]))
+    private val scope = CoroutineScope(parentScope.coroutineContext + sessionJob + mutationContext.dispatcher)
     private var latestRoom: RoomState? = null
-    private var currentInitialized = false
-    private var currentGeneration = 0L
-    private var endedConsumedGeneration: Long? = null
-    private var nextToken = 0L
+    private var selection: Selection? = null
     private var pending: Pending? = null
-    private var reconcileRequest: Cancelable? = null
-    private var reconcileInFlight = false
+    private var operation: Job? = null
     private var foregroundReady = true
-    private var closed = false
 
     @Volatile
-    var state: QueueAdvancementState = QueueAdvancementState()
+    var state = QueueAdvancementState()
         private set
 
-    fun onAuthoritativeRoom(room: RoomState) {
-        if (room.code != roomCode) return
-        val retryToken = synchronized(this) {
-            if (closed || !foregroundReady) return
-            updateLatestRoomLocked(room)
-            val active = pending
-            active?.token?.takeIf { active.phase == Phase.RECONCILING && !reconcileInFlight }
-        }
-        retryToken?.let(::startReconciliation)
+    fun onAuthoritativeRoom(room: RoomState): Unit = mutationContext.run {
+        if (!sessionJob.isActive || !foregroundReady || room.code != roomCode) return@run
+        updateRoom(room)
+        if (pending?.needsReconciliation == true && operation?.isActive != true) startOperation(commandRequired = false)
     }
 
-    fun onForegroundLost() {
-        var notification: QueueAdvancementState? = null
-        val request = synchronized(this) {
-            if (closed || !foregroundReady) return
-            foregroundReady = false
-            nextToken++
-            pending = null
-            val active = reconcileRequest
-            reconcileRequest = null
-            reconcileInFlight = false
-            if (state.pending) {
-                state = state.copy(pending = false)
-                notification = state
-            }
-            active
-        }
-        request?.cancel()
-        notification?.let(observer)
+    fun onForegroundLost(): Unit = mutationContext.run {
+        if (!sessionJob.isActive || !foregroundReady) return@run
+        foregroundReady = false
+        pending = null
+        operation?.cancel()
+        operation = null
+        if (state.pending) publish(state.copy(pending = false))
     }
 
-    fun onForegroundReconciled(room: RoomState) {
-        if (room.code != roomCode) return
-        synchronized(this) {
-            if (closed || foregroundReady) return
-            updateLatestRoomLocked(room)
-            foregroundReady = true
-        }
+    fun onForegroundReconciled(room: RoomState): Unit = mutationContext.run {
+        if (!sessionJob.isActive || foregroundReady || room.code != roomCode) return@run
+        updateRoom(room)
+        foregroundReady = true
     }
 
-    fun requestExplicitAdvance(): Boolean = requestAdvance(endedTrackId = null)
-
-    fun onPlaybackEnded(trackId: String): Boolean = requestAdvance(endedTrackId = trackId)
+    fun requestExplicitAdvance(): Boolean = mutationContext.run { requestAdvance(null) }
+    fun onPlaybackEnded(trackId: String): Boolean = mutationContext.run { requestAdvance(trackId) }
 
     private fun requestAdvance(endedTrackId: String?): Boolean {
-        lateinit var nextState: QueueAdvancementState
-        val token: Long
-        synchronized(this) {
-            if (closed || !foregroundReady || pending != null) return false
-            val room = latestRoom ?: return false
-            if (room.queue.isEmpty()) return false
-            if (endedTrackId != null) {
-                if (room.current?.trackId != endedTrackId) return false
-                if (endedConsumedGeneration == currentGeneration) return false
-                endedConsumedGeneration = currentGeneration
-            }
-            token = ++nextToken
-            pending = Pending(token, room.current?.trackId, Phase.COMMAND)
-            nextState = QueueAdvancementState(pending = true, lastOutcome = state.lastOutcome)
-            state = nextState
+        if (!sessionJob.isActive || !foregroundReady || pending != null) return false
+        val room = latestRoom ?: return false
+        if (room.queue.isEmpty()) return false
+        if (endedTrackId != null) {
+            val current = selection ?: return false
+            if (current.trackId != endedTrackId || current.endedConsumed) return false
+            current.endedConsumed = true
         }
-        observer(nextState)
-        var dispatchFailure = false
-        val dispatched = synchronized(this) {
-            val active = pending
-            if (closed || active?.token != token || active.phase != Phase.COMMAND) {
-                false
-            } else {
-                try {
-                    command.skip(roomCode, hostToken) { result -> onCommandResult(token, result) }
-                } catch (_: Throwable) {
-                    dispatchFailure = true
+        val unresolved = Pending(room.current?.trackId)
+        pending = unresolved
+        val job = createOperation(unresolved, commandRequired = true)
+        operation = job
+        publish(state.copy(pending = true))
+        // Reentrant lifecycle observers cancel this admission's owned Job before it can dispatch.
+        return job.start()
+    }
+
+    private fun startOperation(commandRequired: Boolean) {
+        val unresolved = pending ?: return
+        // Assign before starting: immediate completion/reentrant observers cannot overwrite a newer Job.
+        val job = createOperation(unresolved, commandRequired)
+        operation = job
+        job.start()
+    }
+
+    private fun createOperation(unresolved: Pending, commandRequired: Boolean): Job =
+        scope.launch(start = CoroutineStart.LAZY) {
+            if (commandRequired) {
+                val result = try {
+                    command.skip(roomCode, hostToken)
+                } catch (canceled: CancellationException) {
+                    throw canceled
+                } catch (_: Exception) {
+                    QueueAdvanceCommandResult.Indeterminate
                 }
-                true
-            }
-        }
-        if (dispatchFailure) {
-            onCommandResult(token, QueueAdvanceCommandResult.Indeterminate)
-        }
-        return dispatched
-    }
-
-    private fun onCommandResult(token: Long, result: QueueAdvanceCommandResult) {
-        var rejectedState: QueueAdvancementState? = null
-        val reconcile = synchronized(this) {
-            val active = pending
-            if (closed || active?.token != token || active.phase != Phase.COMMAND) return
-            if (result == QueueAdvanceCommandResult.Rejected) {
-                pending = null
-                val rejected = QueueAdvancementState(pending = false, lastOutcome = QueueAdvanceOutcome.REJECTED)
-                rejectedState = rejected
-                state = rejected
-                false
-            } else {
-                active.phase = Phase.RECONCILING
-                true
-            }
-        }
-        rejectedState?.let(observer)
-        if (!reconcile) return
-
-        startReconciliation(token)
-    }
-
-    private fun startReconciliation(token: Long) {
-        val request = synchronized(this) {
-            val active = pending
-            if (closed || active?.token != token || active.phase != Phase.RECONCILING || reconcileInFlight) {
-                null
-            } else {
-                reconcileInFlight = true
-                try {
-                    reconciler.fetch(roomCode) { result -> onReconciliationResult(token, result) }
-                } catch (_: Throwable) {
-                    reconcileInFlight = false
-                    reconcileRequest = null
-                    null
+                coroutineContext.ensureActive()
+                if (result == QueueAdvanceCommandResult.Rejected) {
+                    settle(QueueAdvanceOutcome.REJECTED)
+                    return@launch
                 }
+                unresolved.needsReconciliation = true
             }
-        }
-        if (request == null) return
-        val cancel = synchronized(this) {
-            val active = pending
-            if (closed || active?.token != token || active.phase != Phase.RECONCILING || !reconcileInFlight) {
-                true
-            } else {
-                reconcileRequest = request
-                false
+            val result = try {
+                reconciler.fetch(roomCode)
+            } catch (canceled: CancellationException) {
+                throw canceled
+            } catch (_: Exception) {
+                RoomFetchResult.Failure
             }
-        }
-        if (cancel) request.cancel()
-    }
-
-    private fun onReconciliationResult(token: Long, result: RoomFetchResult) {
-        var notification: QueueAdvancementState? = null
-        synchronized(this) {
-            val active = pending
-            if (closed || active?.token != token || active.phase != Phase.RECONCILING) return
-            reconcileInFlight = false
-            reconcileRequest = null
+            coroutineContext.ensureActive()
             when (result) {
-                is RoomFetchResult.Success -> {
-                    if (result.room.code != roomCode) return
-                    updateLatestRoomLocked(result.room)
-                    val outcome = if (active.previousCurrentId != result.room.current?.trackId) {
+                is RoomFetchResult.Success -> if (result.room.code == roomCode) {
+                    updateRoom(result.room)
+                    settle(if (unresolved.previousCurrentId != result.room.current?.trackId) {
                         QueueAdvanceOutcome.ADVANCED
                     } else {
                         QueueAdvanceOutcome.RECONCILED_NO_ADVANCE
-                    }
-                    pending = null
-                    val settled = QueueAdvancementState(pending = false, lastOutcome = outcome)
-                    notification = settled
-                    state = settled
+                    })
                 }
-                RoomFetchResult.Missing -> {
-                    pending = null
-                    val rejected = QueueAdvancementState(pending = false, lastOutcome = QueueAdvanceOutcome.REJECTED)
-                    notification = rejected
-                    state = rejected
-                }
+                RoomFetchResult.Missing -> settle(QueueAdvanceOutcome.REJECTED)
                 RoomFetchResult.Failure -> Unit
             }
+            // Keep a completed Job rather than cleanup that could clear a newer operation.
         }
-        notification?.let(observer)
+
+    private fun settle(outcome: QueueAdvanceOutcome) {
+        pending = null
+        publish(QueueAdvancementState(lastOutcome = outcome))
     }
 
-    private fun updateLatestRoomLocked(room: RoomState) {
-        val previousCurrentId = latestRoom?.current?.trackId
-        val nextCurrentId = room.current?.trackId
-        if (!currentInitialized || previousCurrentId != nextCurrentId) {
-            currentInitialized = true
-            currentGeneration++
-            endedConsumedGeneration = null
+    private fun publish(next: QueueAdvancementState) {
+        state = next
+        observer(next)
+    }
+
+    private fun updateRoom(room: RoomState) {
+        if (selection == null || selection?.trackId != room.current?.trackId) {
+            selection = Selection(room.current?.trackId)
         }
         latestRoom = room
     }
 
-    override fun close() {
-        val request = synchronized(this) {
-            if (closed) return
-            closed = true
-            nextToken++
-            pending = null
-            val active = reconcileRequest
-            reconcileRequest = null
-            reconcileInFlight = false
-            active
-        }
-        request?.cancel()
+    override fun close(): Unit = mutationContext.run {
+        sessionJob.cancel()
+        pending = null
+        operation = null
     }
 }
 
-class AsyncRoomAdvanceCommand(
-    private val api: RoomApiClient,
-    private val executor: Executor,
-) : QueueAdvanceCommand {
-    override fun skip(
-        roomCode: String,
-        hostToken: String,
-        callback: (QueueAdvanceCommandResult) -> Unit,
-    ) {
-        executor.execute {
-            val result = try {
-                api.skip(roomCode, hostToken)
-                QueueAdvanceCommandResult.Success
-            } catch (failure: RoomApiException) {
-                if (failure.logCause == QMixLogCause.HTTP_STATUS) {
-                    QueueAdvanceCommandResult.Rejected
-                } else {
-                    QueueAdvanceCommandResult.Indeterminate
-                }
-            } catch (_: Exception) {
-                QueueAdvanceCommandResult.Rejected
-            }
-            callback(result)
-        }
+class RoomAdvanceCommand(private val api: RoomApiClient) : QueueAdvanceCommand {
+    override suspend fun skip(roomCode: String, hostToken: String): QueueAdvanceCommandResult = try {
+        api.skip(roomCode, hostToken)
+        QueueAdvanceCommandResult.Success
+    } catch (canceled: CancellationException) {
+        throw canceled
+    } catch (failure: RoomApiException) {
+        if (failure.logCause == QMixLogCause.HTTP_STATUS) QueueAdvanceCommandResult.Rejected
+        else QueueAdvanceCommandResult.Indeterminate
+    } catch (_: IllegalArgumentException) {
+        // Invalid request construction cannot have sent the POST.
+        QueueAdvanceCommandResult.Rejected
     }
 }

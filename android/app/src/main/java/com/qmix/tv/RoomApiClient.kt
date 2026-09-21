@@ -1,5 +1,14 @@
 package com.qmix.tv
 
+import java.io.IOException
+import java.net.SocketTimeoutException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -10,8 +19,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONException
 import org.json.JSONObject
-import java.io.IOException
-import java.net.SocketTimeoutException
 
 data class CurrentTrack(
     val trackId: String,
@@ -74,7 +81,7 @@ class RoomApiClient(
     httpClient: OkHttpClient,
     backendUrl: String,
     private val logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.ROOM_API_CREATION),
-) : RoomStateFetcher, PlayerReportClient {
+) {
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
@@ -86,7 +93,10 @@ class RoomApiClient(
         .build()
     private val backend = backendUrl.trimEnd('/').toHttpUrl()
 
-    fun createRoom(): RoomCredentials {
+    /** Temporary synchronous caller owned by qmix#182; all transport uses the suspend primitive. */
+    fun createRoomBlocking(): RoomCredentials = runBlocking { createRoom() }
+
+    suspend fun createRoom(): RoomCredentials {
         val request = Request.Builder()
             .url(backend.newBuilder().addPathSegment("rooms").build())
             .post(ByteArray(0).toRequestBody(null))
@@ -106,44 +116,42 @@ class RoomApiClient(
         }
     }
 
-    fun getRoom(code: String): RoomState {
+    suspend fun getRoom(code: String): RoomState {
         val request = roomRequest(code)
         return execute(request, 200, ::decodeRoom)
     }
 
-    override fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable {
-        val call = httpClient.newCall(roomRequest(roomCode))
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                callback(RoomFetchResult.Failure)
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                val result = try {
-                    response.use {
-                        when (it.code) {
-                            200 -> RoomFetchResult.Success(decodeRoom(it.body.string()))
-                            404 -> RoomFetchResult.Missing
-                            else -> RoomFetchResult.Failure
-                        }
-                    }
-                } catch (_: IOException) {
-                    RoomFetchResult.Failure
-                } catch (_: RoomApiException) {
-                    RoomFetchResult.Failure
-                }
-                callback(result)
-            }
-        })
-        return Cancelable(call::cancel)
+    suspend fun fetchRoom(roomCode: String): RoomFetchResult = try {
+        RoomFetchResult.Success(getRoom(roomCode))
+    } catch (failure: RoomApiException) {
+        if (failure.userMessage == UserMessage.ROOM_NOT_FOUND) RoomFetchResult.Missing else RoomFetchResult.Failure
     }
 
-    override fun reportPlayer(
+    /** Temporary repository/foreground adapter; removal owner qmix#181 (repository migrates in #179). */
+    fun roomFetcher(parentScope: CoroutineScope): RoomStateFetcher = RoomStateFetcher { code, callback ->
+        val job = parentScope.launch {
+            val result = fetchRoom(code)
+            coroutineContext.ensureActive()
+            callback(result)
+        }
+        Cancelable { job.cancel() }
+    }
+
+    /** Temporary player-report adapter; removal owner qmix#180. */
+    fun playerReporter(parentScope: CoroutineScope): PlayerReportClient = PlayerReportClient { code, token, report, callback ->
+        val job = parentScope.launch {
+            val result = reportPlayer(code, token, report)
+            coroutineContext.ensureActive()
+            callback(result)
+        }
+        Cancelable { job.cancel() }
+    }
+
+    suspend fun reportPlayer(
         roomCode: String,
         hostToken: String,
         report: PlayerReport,
-        callback: (PlayerReportResult) -> Unit,
-    ): Cancelable {
+    ): PlayerReportResult = try {
         val body = JSONObject()
             .put("track_id", report.trackId)
             .put("state", report.state.wireValue)
@@ -161,26 +169,20 @@ class RoomApiClient(
             .header("X-Host-Token", hostToken)
             .patch(body)
             .build()
-        val call = httpClient.newCall(request)
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                callback(PlayerReportResult.FAILED)
+        httpClient.newCall(request).awaitDecoded { response ->
+            when (response.code) {
+                200 -> PlayerReportResult.ACCEPTED
+                403 -> PlayerReportResult.FORBIDDEN
+                404 -> PlayerReportResult.MISSING
+                409 -> PlayerReportResult.CONFLICT
+                else -> PlayerReportResult.FAILED
             }
-
-            override fun onResponse(call: Call, response: Response) {
-                val result = response.use {
-                    when (it.code) {
-                        200 -> PlayerReportResult.ACCEPTED
-                        403 -> PlayerReportResult.FORBIDDEN
-                        404 -> PlayerReportResult.MISSING
-                        409 -> PlayerReportResult.CONFLICT
-                        else -> PlayerReportResult.FAILED
-                    }
-                }
-                callback(result)
-            }
-        })
-        return Cancelable(call::cancel)
+        }
+    } catch (_: IOException) {
+        PlayerReportResult.FAILED
+    } catch (_: IllegalArgumentException) {
+        // Invalid server-issued header data must not escape a coroutine with credential-bearing diagnostics.
+        PlayerReportResult.FAILED
     }
 
     private fun roomRequest(code: String): Request = Request.Builder().url(
@@ -220,7 +222,7 @@ class RoomApiClient(
         return RoomState(json.requiredString("code"), current, queue)
     }
 
-    fun skip(code: String, hostToken: String): CurrentTrack {
+    suspend fun skip(code: String, hostToken: String): CurrentTrack {
         val url = backend.newBuilder()
             .addPathSegment("rooms")
             .addPathSegment(code)
@@ -244,8 +246,8 @@ class RoomApiClient(
         }
     }
 
-    private fun <T> execute(request: Request, expectedStatus: Int, decode: (String) -> T): T = try {
-        httpClient.newCall(request).execute().use { response ->
+    private suspend fun <T> execute(request: Request, expectedStatus: Int, decode: (String) -> T): T = try {
+        httpClient.newCall(request).awaitDecoded { response ->
             if (response.code != expectedStatus) throw RoomApiException.forStatus(response.code)
             decode(response.body.string())
         }
@@ -292,4 +294,28 @@ class RoomApiException(
             else -> RoomApiException(UserMessage.REQUEST_REJECTED, QMixLogCause.HTTP_STATUS)
         }
     }
+}
+
+/** qmix#178: decode under response ownership, never transfer an open response to a continuation. */
+internal suspend fun <T> Call.awaitDecoded(decode: (Response) -> T): T = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    if (!continuation.isActive) return@suspendCancellableCoroutine
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            continuation.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            val result = try {
+                response.use {
+                    continuation.context.ensureActive()
+                    decode(it)
+                }
+            } catch (failure: Exception) {
+                continuation.resumeWithException(failure)
+                return
+            }
+            continuation.resume(result)
+        }
+    })
 }

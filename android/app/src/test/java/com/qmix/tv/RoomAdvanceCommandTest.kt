@@ -1,5 +1,7 @@
 package com.qmix.tv
 
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -11,21 +13,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.util.ArrayDeque
-import java.util.concurrent.Executor
-import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
-class AsyncRoomAdvanceCommandTest {
+class RoomAdvanceCommandTest {
     private lateinit var server: MockWebServer
-    private lateinit var executor: QueuedExecutor
 
     @Before
     fun setUp() {
         server = MockWebServer()
         server.start()
-        executor = QueuedExecutor()
     }
 
     @After
@@ -41,11 +38,9 @@ class AsyncRoomAdvanceCommandTest {
             ),
         )
         val observed = mutableListOf<QueueAdvanceCommandResult>()
-        val command = AsyncRoomAdvanceCommand(api(), executor)
+        val command = RoomAdvanceCommand(api())
 
-        command.skip("ABCD", "host-secret", observed::add)
-        assertEquals(emptyList<QueueAdvanceCommandResult>(), observed)
-        executor.runNext()
+        observed += runBlocking { command.skip("ABCD", "host-secret") }
 
         assertEquals(listOf(QueueAdvanceCommandResult.Success), observed)
         assertEquals(1, server.requestCount)
@@ -55,10 +50,9 @@ class AsyncRoomAdvanceCommandTest {
     fun network_failure_is_indeterminate() {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
         val observed = mutableListOf<QueueAdvanceCommandResult>()
-        val command = AsyncRoomAdvanceCommand(api(), executor)
+        val command = RoomAdvanceCommand(api())
 
-        command.skip("ABCD", "host-secret", observed::add)
-        executor.runNext()
+        observed += runBlocking { command.skip("ABCD", "host-secret") }
 
         assertEquals(listOf(QueueAdvanceCommandResult.Indeterminate), observed)
         assertEquals(1, server.requestCount)
@@ -68,10 +62,9 @@ class AsyncRoomAdvanceCommandTest {
     fun http_rejection_is_determinate() {
         server.enqueue(MockResponse().setResponseCode(403))
         val observed = mutableListOf<QueueAdvanceCommandResult>()
-        val command = AsyncRoomAdvanceCommand(api(), executor)
+        val command = RoomAdvanceCommand(api())
 
-        command.skip("ABCD", "host-secret", observed::add)
-        executor.runNext()
+        observed += runBlocking { command.skip("ABCD", "host-secret") }
 
         assertEquals(listOf(QueueAdvanceCommandResult.Rejected), observed)
     }
@@ -80,10 +73,9 @@ class AsyncRoomAdvanceCommandTest {
     fun malformed_success_response_is_indeterminate_because_post_may_have_committed() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("not json"))
         val observed = mutableListOf<QueueAdvanceCommandResult>()
-        val command = AsyncRoomAdvanceCommand(api(), executor)
+        val command = RoomAdvanceCommand(api())
 
-        command.skip("ABCD", "host-secret", observed::add)
-        executor.runNext()
+        observed += runBlocking { command.skip("ABCD", "host-secret") }
 
         assertEquals(listOf(QueueAdvanceCommandResult.Indeterminate), observed)
         assertEquals(1, server.requestCount)
@@ -92,10 +84,9 @@ class AsyncRoomAdvanceCommandTest {
     @Test
     fun malformed_server_issued_host_token_still_completes_the_command() {
         val observed = mutableListOf<QueueAdvanceCommandResult>()
-        val command = AsyncRoomAdvanceCommand(api(), executor)
+        val command = RoomAdvanceCommand(api())
 
-        command.skip("ABCD", "malformed\nheader", observed::add)
-        executor.runNext()
+        observed += runBlocking { command.skip("ABCD", "malformed\nheader") }
 
         assertEquals(listOf(QueueAdvanceCommandResult.Rejected), observed)
         assertEquals(0, server.requestCount)
@@ -106,15 +97,4 @@ class AsyncRoomAdvanceCommandTest {
         server.url("/").toString(),
     )
 
-    private class QueuedExecutor : Executor {
-        private val tasks = ArrayDeque<Runnable>()
-
-        override fun execute(command: Runnable) {
-            tasks += command
-        }
-
-        fun runNext() {
-            tasks.removeFirst().run()
-        }
-    }
 }

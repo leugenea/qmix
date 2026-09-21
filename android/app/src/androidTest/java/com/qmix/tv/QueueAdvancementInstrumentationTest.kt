@@ -2,6 +2,14 @@ package com.qmix.tv
 
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -12,12 +20,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executor
-import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class QueueAdvancementInstrumentationTest {
+    private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+    @org.junit.After
+    fun cancelQueueScope() { queueScope.cancel() }
+
     private lateinit var server: MockWebServer
 
     @Before
@@ -67,9 +77,8 @@ class QueueAdvancementInstrumentationTest {
 
     @Test
     fun asynchronous_http_command_reports_success_rejection_and_decode_uncertainty() {
-        val command = AsyncRoomAdvanceCommand(
+        val command = RoomAdvanceCommand(
             RoomApiClient(OkHttpClient(), server.url("/").toString()),
-            Executor { it.run() },
         )
         val observed = mutableListOf<QueueAdvanceCommandResult>()
         server.enqueue(
@@ -80,10 +89,10 @@ class QueueAdvancementInstrumentationTest {
         server.enqueue(MockResponse().setResponseCode(403))
         server.enqueue(MockResponse().setResponseCode(200).setBody("not json"))
 
-        command.skip("ABCD", "host-secret", observed::add)
-        command.skip("ABCD", "host-secret", observed::add)
-        command.skip("ABCD", "host-secret", observed::add)
-        command.skip("ABCD", "malformed\nheader", observed::add)
+        observed += runBlocking { command.skip("ABCD", "host-secret") }
+        observed += runBlocking { command.skip("ABCD", "host-secret") }
+        observed += runBlocking { command.skip("ABCD", "host-secret") }
+        observed += runBlocking { command.skip("ABCD", "malformed\nheader") }
 
         assertEquals(
             listOf(
@@ -105,10 +114,11 @@ class QueueAdvancementInstrumentationTest {
             queue = listOf(QueuedTrack("next", "https://example/next", "Next", "Artist", 60, "fixture")),
         )
         var fetchCallback: ((RoomFetchResult) -> Unit)? = null
-        val dispatchFailure = QueueAdvancementCoordinator(
+        val dispatchFailure = testQueueCoordinator(
+        queueScope,
             roomCode = "ABCD",
             hostToken = "host-secret",
-            command = QueueAdvanceCommand { _, _, _ -> throw IllegalStateException("dispatch") },
+            command = testQueueCommand { _, _, _ -> throw IllegalStateException("dispatch") },
             reconciler = RoomStateFetcher { _, callback ->
                 fetchCallback = callback
                 Cancelable { }
@@ -124,10 +134,11 @@ class QueueAdvancementInstrumentationTest {
 
         var dispatched = false
         lateinit var closing: QueueAdvancementCoordinator
-        closing = QueueAdvancementCoordinator(
+        closing = testQueueCoordinator(
+        queueScope,
             roomCode = "ABCD",
             hostToken = "host-secret",
-            command = QueueAdvanceCommand { _, _, _ -> dispatched = true },
+            command = testQueueCommand { _, _, _ -> dispatched = true },
             reconciler = RoomStateFetcher { _, _ -> Cancelable { } },
             observer = { if (it.pending) closing.close() },
         )
@@ -153,10 +164,11 @@ class QueueAdvancementInstrumentationTest {
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
             queueCoordinatorFactory = { _, credentials, observer ->
-                QueueAdvancementCoordinator(
+                testQueueCoordinator(
+        queueScope,
                     credentials.code,
                     credentials.hostToken,
-                    QueueAdvanceCommand { _, _, callback -> commands += callback },
+                    testQueueCommand { _, _, callback -> commands += callback },
                     RoomStateFetcher { _, _ -> Cancelable { } },
                     observer,
                 )
@@ -210,10 +222,11 @@ class QueueAdvancementInstrumentationTest {
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
             queueCoordinatorFactory = { _, credentials, observer ->
-                QueueAdvancementCoordinator(
+                testQueueCoordinator(
+        queueScope,
                     credentials.code,
                     credentials.hostToken,
-                    QueueAdvanceCommand { _, _, callback -> commands += callback },
+                    testQueueCommand { _, _, callback -> commands += callback },
                     RoomStateFetcher { _, _ -> Cancelable { } },
                     observer,
                 )
@@ -298,6 +311,38 @@ class QueueAdvancementInstrumentationTest {
         assertEquals(1, commands.size)
         controller.endRoom()
         assertEquals(2, playback.pauseCount)
+    }
+
+    /** qmix#178: the same application factory used by the host owns HTTP command and GET Jobs. */
+    @Test
+    fun production_queue_wiring_serializes_commands_and_reconciles_on_main() {
+        server.enqueue(MockResponse().setBody(
+            """{"current":{"track_id":"two","pos_sec":0,"state":"playing","title":"Two","artist":""}}""",
+        ))
+        server.enqueue(MockResponse().setBody(
+            """{"code":"ABCD","current":{"track_id":"two","pos_sec":0,"state":"playing","title":"Two","artist":""},"queue":[]}""",
+        ))
+        val settled = CountDownLatch(1)
+        val application = ApplicationProvider.getApplicationContext<QMixApplication>()
+        val coordinator = application.createQueueCoordinator(
+            OkHttpClient(), server.url("/").toString(), RoomCredentials("ABCD", "fixture", "/r/ABCD"),
+        ) { state ->
+            assertEquals(android.os.Looper.getMainLooper(), android.os.Looper.myLooper())
+            if (state.lastOutcome == QueueAdvanceOutcome.ADVANCED) settled.countDown()
+        }
+        try {
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                coordinator.onAuthoritativeRoom(RoomState("ABCD", null,
+                    listOf(QueuedTrack("two", "https://example/two", "Two", "", 1, "fixture"))))
+                assertTrue(coordinator.requestExplicitAdvance())
+                assertFalse(coordinator.requestExplicitAdvance())
+                assertFalse(coordinator.onPlaybackEnded("two"))
+            }
+            assertTrue(settled.await(5, TimeUnit.SECONDS))
+            assertEquals("/rooms/ABCD/skip", server.takeRequest().path)
+            assertEquals("/rooms/ABCD", server.takeRequest().path)
+            assertEquals(2, server.requestCount)
+        } finally { coordinator.close() }
     }
 
     private class RecordingRepository : RoomRepository {
