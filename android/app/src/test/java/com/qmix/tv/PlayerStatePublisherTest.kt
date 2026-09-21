@@ -423,6 +423,76 @@ class PlayerStatePublisherTest {
         assertEquals(PlayerReportState.PAUSED, client.calls.last().report.state)
     }
 
+    @Test
+    fun suspending_progress_drops_a_queued_playing_report_behind_an_in_flight_transition() {
+        val client = RecordingPlayerReportClient()
+        val scheduler = VirtualScheduler()
+        val publisher = PlayerStatePublisher(
+            "ABCD",
+            "host-secret",
+            client,
+            scheduler,
+            Executor { it.run() },
+        )
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PAUSED, 4), immediate = true)
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 5), immediate = true)
+
+        publisher.suspendPlayingProgress()
+        client.complete(PlayerReportResult.ACCEPTED)
+        scheduler.advanceBy(30_000)
+
+        assertEquals(listOf(4), client.calls.map { it.report.positionSeconds })
+    }
+
+    @Test
+    fun backgrounding_cancels_an_active_report_and_never_replays_its_pending_progress() {
+        val client = RecordingPlayerReportClient()
+        val scheduler = VirtualScheduler()
+        val publisher = PlayerStatePublisher(
+            "ABCD",
+            "host-secret",
+            client,
+            scheduler,
+            Executor { it.run() },
+        )
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 4), immediate = true)
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 5), immediate = true)
+
+        publisher.setForeground(false)
+        assertTrue(client.calls.single().canceled)
+        client.complete(PlayerReportResult.ACCEPTED)
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        scheduler.advanceBy(30_000)
+
+        assertEquals(listOf(4), client.calls.map { it.report.positionSeconds })
+    }
+
+    @Test
+    fun default_listener_handles_conflict_recovery_and_room_loss_without_callbacks() {
+        val client = RecordingPlayerReportClient()
+        val publisher = PlayerStatePublisher(
+            "ABCD",
+            "host-secret",
+            client,
+            VirtualScheduler(),
+            Executor { it.run() },
+        )
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PAUSED, 1), immediate = true)
+        client.complete(PlayerReportResult.CONFLICT)
+
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PAUSED, 2), immediate = true)
+        client.complete(PlayerReportResult.ACCEPTED)
+        publisher.update(PlayerReport("one", PlayerReportState.PAUSED, 3), immediate = true)
+        client.complete(PlayerReportResult.MISSING)
+
+        assertEquals(listOf(1, 2, 3), client.calls.map { it.report.positionSeconds })
+    }
+
     private fun listener(synchronization: MutableList<Boolean>) = object : PlayerStatePublisher.Listener {
         override fun onSynchronizationChanged(synchronized: Boolean) {
             synchronization += synchronized

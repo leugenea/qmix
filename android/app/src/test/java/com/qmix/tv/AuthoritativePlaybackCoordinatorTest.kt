@@ -143,6 +143,27 @@ class AuthoritativePlaybackCoordinatorTest {
     }
 
     @Test
+    fun authoritative_current_removal_stops_active_playback_and_resets_local_state() {
+        coordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.READY,
+                isPlaying = true,
+                positionMs = 12_000,
+            ),
+        )
+
+        coordinator.onSynchronization(fresh(room(currentId = null)))
+
+        assertEquals(1, engine.pauseCount)
+        assertEquals(LocalPlaybackState(), coordinator.state)
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED, positionMs = 13_000))
+        assertTrue(advances.isEmpty())
+        assertEquals(LocalPlaybackState(), coordinator.state)
+    }
+
+    @Test
     fun same_active_current_returns_paused_and_requires_an_explicit_resume() {
         coordinator.onSynchronization(fresh(room(currentId = "one")))
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
@@ -706,6 +727,45 @@ class AuthoritativePlaybackCoordinatorTest {
         scheduler.advanceBy(7_500)
 
         assertEquals(listOf(5, 7, 8, 8), reportClient.calls.map { it.report.positionSeconds })
+    }
+
+    @Test
+    fun foreground_loss_cancels_retry_report_reconciliation_and_publishing_then_rebinds_all() {
+        val reportClient = CoordinatorReportClient()
+        val reporting = PlayerStatePublisher(
+            "ABCD",
+            "host-secret",
+            reportClient,
+            RoomSyncScheduler { _, _ -> Cancelable { } },
+            Executor { it.run() },
+        )
+        val reportingCoordinator = AuthoritativePlaybackCoordinator(
+            "ABCD",
+            "https://qmix.test/rooms/ABCD/current/stream",
+            engine,
+            reconciler,
+            Executor { it.run() },
+            { true },
+            statePublisher = reporting,
+        )
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        reportClient.complete(PlayerReportResult.CONFLICT)
+        engine.emit(
+            PlaybackState(
+                mediaId = "one",
+                status = PlaybackStatus.ERROR,
+                error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
+            ),
+        )
+        reportingCoordinator.retryCurrent()
+        assertEquals(2, reconciler.calls.size)
+
+        reportingCoordinator.onForegroundLost()
+
+        assertTrue(reconciler.calls.all { it.canceled })
+        reportingCoordinator.onForegroundReconciled(room(currentId = "one"))
+        assertEquals(LocalPlaybackStatus.ERROR, reportingCoordinator.state.status)
     }
 
     @Test
