@@ -1,17 +1,25 @@
 package com.qmix.tv
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 class QueueAdvancementCoordinatorTest {
+    private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+    @org.junit.After
+    fun cancelQueueScope() { queueScope.cancel() }
+
     private val command = RecordingAdvanceCommand()
     private val reconciler = RecordingReconciler()
     private val observed = mutableListOf<QueueAdvancementState>()
-    private val coordinator = QueueAdvancementCoordinator(
+    private val coordinator = testQueueCoordinator(
+        queueScope,
         roomCode = "ABCD",
         hostToken = "host-secret",
         command = command,
@@ -62,7 +70,7 @@ class QueueAdvancementCoordinatorTest {
     }
 
     @Test
-    fun ended_is_consumed_once_per_current_generation() {
+    fun ended_is_consumed_once_per_authoritative_selection() {
         coordinator.onAuthoritativeRoom(room(currentId = "current", queueIds = listOf("next")))
 
         assertTrue(coordinator.onPlaybackEnded("current"))
@@ -154,7 +162,8 @@ class QueueAdvancementCoordinatorTest {
     fun closing_from_the_pending_observer_prevents_command_dispatch() {
         val recordedCommand = RecordingAdvanceCommand()
         lateinit var closingCoordinator: QueueAdvancementCoordinator
-        closingCoordinator = QueueAdvancementCoordinator(
+        closingCoordinator = testQueueCoordinator(
+        queueScope,
             roomCode = "ABCD",
             hostToken = "host-secret",
             command = recordedCommand,
@@ -170,7 +179,8 @@ class QueueAdvancementCoordinatorTest {
     @Test
     fun synchronous_reconciler_failure_remains_pending_without_escaping() {
         val throwingReconciler = RecordingReconciler().apply { failure = IllegalStateException("rejected") }
-        val safeCoordinator = QueueAdvancementCoordinator(
+        val safeCoordinator = testQueueCoordinator(
+        queueScope,
             roomCode = "ABCD",
             hostToken = "host-secret",
             command = command,
@@ -189,7 +199,8 @@ class QueueAdvancementCoordinatorTest {
         val synchronous = SynchronousReconciler(
             RoomFetchResult.Success(room(currentId = "next", queueIds = emptyList())),
         )
-        val guardedCoordinator = QueueAdvancementCoordinator(
+        val guardedCoordinator = testQueueCoordinator(
+        queueScope,
             roomCode = "ABCD",
             hostToken = "host-secret",
             command = command,
@@ -203,37 +214,6 @@ class QueueAdvancementCoordinatorTest {
         assertEquals(QueueAdvanceOutcome.ADVANCED, guardedCoordinator.state.lastOutcome)
         assertFalse(guardedCoordinator.state.pending)
         assertTrue(synchronous.returnedRequestCanceled)
-    }
-
-    @Test
-    fun close_cannot_finish_while_reconciliation_dispatch_is_being_registered() {
-        val blockingReconciler = BlockingReconciler()
-        val guardedCoordinator = QueueAdvancementCoordinator(
-            roomCode = "ABCD",
-            hostToken = "host-secret",
-            command = command,
-            reconciler = blockingReconciler,
-        )
-        guardedCoordinator.onAuthoritativeRoom(room(currentId = "current", queueIds = listOf("next")))
-        guardedCoordinator.requestExplicitAdvance()
-        val completion = Thread {
-            command.complete(QueueAdvanceCommandResult.Indeterminate)
-        }.apply { start() }
-        assertTrue(blockingReconciler.entered.await(5, TimeUnit.SECONDS))
-        val closeReturned = CountDownLatch(1)
-        val closing = Thread {
-            guardedCoordinator.close()
-            closeReturned.countDown()
-        }.apply { start() }
-
-        assertFalse(closeReturned.await(100, TimeUnit.MILLISECONDS))
-        blockingReconciler.allowReturn.countDown()
-        completion.join(5_000)
-        closing.join(5_000)
-
-        assertFalse(completion.isAlive)
-        assertFalse(closing.isAlive)
-        assertTrue(closeReturned.await(0, TimeUnit.MILLISECONDS))
     }
 
     @Test
@@ -331,13 +311,31 @@ class QueueAdvancementCoordinatorTest {
         assertFalse(coordinator.requestExplicitAdvance())
     }
 
+    /** qmix#178: a failed GET cannot later settle the retry owned by a later signal. */
+    @Test
+    fun failed_reconciliation_delivery_cannot_settle_a_new_reconciliation() {
+        val initial = room(currentId = "current", queueIds = listOf("next"))
+        coordinator.onAuthoritativeRoom(initial)
+        coordinator.requestExplicitAdvance()
+        command.complete(QueueAdvanceCommandResult.Success)
+        reconciler.complete(RoomFetchResult.Failure, index = 0)
+        coordinator.onAuthoritativeRoom(initial)
+        assertEquals(2, reconciler.calls)
+
+        reconciler.complete(RoomFetchResult.Success(initial), index = 0)
+
+        assertTrue(coordinator.state.pending)
+        reconciler.complete(RoomFetchResult.Success(initial), index = 1)
+        assertFalse(coordinator.state.pending)
+    }
+
     private fun room(currentId: String?, queueIds: List<String>) = RoomState(
         code = "ABCD",
         current = currentId?.let { CurrentTrack(it, 0, "playing", it, "Artist") },
         queue = queueIds.map { QueuedTrack(it, "https://example/$it", it, "Artist", 60, "fixture") },
     )
 
-    private class RecordingAdvanceCommand : QueueAdvanceCommand {
+    private class RecordingAdvanceCommand : TestQueueCommand {
         data class Call(
             val roomCode: String,
             val hostToken: String,
@@ -395,14 +393,4 @@ class QueueAdvancementCoordinatorTest {
         }
     }
 
-    private class BlockingReconciler : RoomStateFetcher {
-        val entered = CountDownLatch(1)
-        val allowReturn = CountDownLatch(1)
-
-        override fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable {
-            entered.countDown()
-            assertTrue(allowReturn.await(5, TimeUnit.SECONDS))
-            return Cancelable { }
-        }
-    }
 }

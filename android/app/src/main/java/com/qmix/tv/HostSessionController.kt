@@ -1,8 +1,8 @@
 package com.qmix.tv
 
-import okhttp3.OkHttpClient
 import java.util.ArrayDeque
 import java.util.concurrent.Executor
+import okhttp3.OkHttpClient
 
 sealed interface HostingState {
     data class Setup(val backendUrl: String, val guestOrigin: String) : HostingState
@@ -77,6 +77,7 @@ class HostSessionController(
     ),
     private val roomRepositoryFactory: ((String) -> RoomRepository)? = null,
     private val foregroundReconcilerFactory: ((String) -> RoomStateFetcher)? = null,
+    private val queueMutationContext: QueueMutationContext? = null,
     private val queueCoordinatorFactory: QueueCoordinatorFactory? = null,
     private val playbackCoordinatorFactory: PlaybackCoordinatorFactory? = null,
     private val primaryActionHandler: () -> Unit = {},
@@ -219,7 +220,7 @@ class HostSessionController(
     private fun executeCreate(settings: EndpointSettings, generation: Long) {
         executor.execute {
             try {
-                val created = RoomApiClient(httpClient, settings.backendUrl, roomApiLogger).createRoom()
+                val created = RoomApiClient(httpClient, settings.backendUrl, roomApiLogger).createRoomBlocking()
                 val invite = GuestInvite.create(created, settings.guestOrigin)
                 val changed = synchronized(this) {
                     if (generation != createGeneration) {
@@ -460,7 +461,9 @@ class HostSessionController(
         if (changed) drainNotifications()
     }
 
-    fun onHostStopped(): Unit = synchronized(foregroundTransitionLock) {
+    fun onHostStopped() = onQueueMutationContext { stopHostOnMutationContext() }
+
+    private fun stopHostOnMutationContext(): Unit = synchronized(foregroundTransitionLock) {
         var queue: QueueAdvancementCoordinator? = null
         var playback: AuthoritativePlaybackCoordinator? = null
         var request: Cancelable? = null
@@ -489,7 +492,9 @@ class HostSessionController(
         if (changed) drainNotifications()
     }
 
-    fun onHostStarted(): Unit = synchronized(foregroundTransitionLock) {
+    fun onHostStarted() = onQueueMutationContext { startHostOnMutationContext() }
+
+    private fun startHostOnMutationContext(): Unit = synchronized(foregroundTransitionLock) {
         val shouldRecover = synchronized(this) {
             if (foreground) return
             foreground = true
@@ -530,7 +535,15 @@ class HostSessionController(
         if (cancel) request.cancel()
     }
 
-    private fun completeForegroundRecovery(token: Long, code: String, result: RoomFetchResult): Unit =
+    private fun onQueueMutationContext(action: () -> Unit) {
+        val context = queueMutationContext
+        if (context == null) action() else context.run(action)
+    }
+
+    private fun completeForegroundRecovery(token: Long, code: String, result: RoomFetchResult) =
+        onQueueMutationContext { completeForegroundRecoveryOnMutationContext(token, code, result) }
+
+    private fun completeForegroundRecoveryOnMutationContext(token: Long, code: String, result: RoomFetchResult): Unit =
         synchronized(foregroundTransitionLock) {
             var queue: QueueAdvancementCoordinator? = null
             var playback: AuthoritativePlaybackCoordinator? = null

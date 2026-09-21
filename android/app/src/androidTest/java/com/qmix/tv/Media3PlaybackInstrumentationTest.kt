@@ -23,6 +23,10 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -31,6 +35,11 @@ import org.junit.Test
 
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.N)
 class Media3PlaybackInstrumentationTest {
+    private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+    @org.junit.After
+    fun cancelQueueScope() { queueScope.cancel() }
+
     private lateinit var targetContext: Context
     private lateinit var fixtureContext: Context
     private lateinit var server: RangeAssetServer
@@ -110,10 +119,11 @@ class Media3PlaybackInstrumentationTest {
             callback(RoomFetchResult.Success(authoritative))
             Cancelable { }
         }
-        val advancement = QueueAdvancementCoordinator(
+        val advancement = testQueueCoordinator(
+        queueScope,
             "ABCD",
             "host-secret",
-            QueueAdvanceCommand { _, _, callback -> commandCallbacks.addLast(callback) },
+            testQueueCommand { _, _, callback -> commandCallbacks.addLast(callback) },
             fetcher,
         )
         val coordinatorRef = AtomicReference<AuthoritativePlaybackCoordinator>()

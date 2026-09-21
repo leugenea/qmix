@@ -25,7 +25,8 @@ licensed under Apache License 2.0:
 
 - `androidx.*` — Android Open Source Project and AndroidX contributors;
 - `org.jetbrains.kotlin*` and `org.jetbrains.kotlinx*` — JetBrains and Kotlin
-  contributors;
+  contributors; kotlinx-coroutines-core and kotlinx-coroutines-android are
+  explicitly pinned to 1.9.0 for structured host queue operations (qmix#178);
 - `com.squareup.okhttp3*` (including OkHttp and OkHttp SSE) and
   `com.squareup.okio*` — Square and contributors;
 - `com.google.guava*` — Google and Guava contributors;

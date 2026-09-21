@@ -2,6 +2,15 @@ package com.qmix.tv
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -15,15 +24,15 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executor
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class HostSessionControllerTest {
+    private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+    @org.junit.After
+    fun cancelQueueScope() { queueScope.cancel() }
+
     private lateinit var server: MockWebServer
 
     @Before
@@ -35,6 +44,71 @@ class HostSessionControllerTest {
     @After
     fun tearDown() {
         server.shutdown()
+    }
+
+    /** qmix#178: off-main recovery must not hold the foreground lock while waiting for main. */
+    @Test
+    fun foreground_stop_can_overtake_queued_recovery_without_lock_inversion() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val owner = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val mutationExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "test-mutation").apply { isDaemon = true; owner.set(this) }
+        }
+        val recoveryExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "test-recovery-delivery").apply { isDaemon = true }
+        }
+        val recoveryQueued = CountDownLatch(1)
+        val dispatcher = object : kotlinx.coroutines.CoroutineDispatcher() {
+            override fun isDispatchNeeded(context: kotlin.coroutines.CoroutineContext) =
+                Thread.currentThread() !== owner.get()
+            override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+                mutationExecutor.execute(block)
+                if (Thread.currentThread().name == "test-recovery-delivery") recoveryQueued.countDown()
+            }
+        }
+        val mutation = QueueMutationContext(dispatcher) { Thread.currentThread() === owner.get() }
+        val initial = RoomState("ABCD", null,
+            listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+        val repository = RecordingRoomRepository()
+        val reconciler = RecordingReconciler()
+        var commands = 0
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            roomRepositoryFactory = { repository }, foregroundReconcilerFactory = { reconciler },
+            queueMutationContext = mutation,
+            queueCoordinatorFactory = { _, credentials, observer ->
+                QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
+                    QueueAdvanceCommand { _, _ -> commands++; QueueAdvanceCommandResult.Success },
+                    QueueRoomReconciler { RoomFetchResult.Success(initial) }, observer, queueScope, mutation)
+            },
+        )
+        val unblockMutation = CountDownLatch(1)
+        try {
+            assertTrue(controller.createRoom())
+            controller.enterRoom()
+            repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+            controller.onHostStopped()
+            controller.onHostStarted()
+            val blocked = CountDownLatch(1)
+            mutationExecutor.execute { blocked.countDown(); check(unblockMutation.await(5, TimeUnit.SECONDS)) }
+            assertTrue(blocked.await(5, TimeUnit.SECONDS))
+            val stop = mutationExecutor.submit { controller.onHostStopped() }
+            val recovery = recoveryExecutor.submit { reconciler.complete(RoomFetchResult.Success(initial)) }
+            assertTrue(recoveryQueued.await(5, TimeUnit.SECONDS))
+            unblockMutation.countDown()
+            stop.get(5, TimeUnit.SECONDS)
+            recovery.get(5, TimeUnit.SECONDS)
+            assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+            controller.onStartOrNext()
+            assertEquals(0, commands)
+            controller.endRoom()
+        } finally {
+            unblockMutation.countDown()
+            mutationExecutor.shutdownNow()
+            recoveryExecutor.shutdownNow()
+        }
     }
 
     @Test
@@ -486,7 +560,8 @@ class HostSessionControllerTest {
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
             queueCoordinatorFactory = { _, credentials, observer ->
-                QueueAdvancementCoordinator(
+                testQueueCoordinator(
+        queueScope,
                     credentials.code,
                     credentials.hostToken,
                     command,
@@ -531,7 +606,7 @@ class HostSessionControllerTest {
             roomRepositoryFactory = { repository },
             foregroundReconcilerFactory = { reconciler },
             queueCoordinatorFactory = { _, credentials, observer ->
-                QueueAdvancementCoordinator(credentials.code, credentials.hostToken, command, reconciler, observer)
+                testQueueCoordinator(queueScope, credentials.code, credentials.hostToken, command, reconciler, observer)
             },
             playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
                 AuthoritativePlaybackCoordinator(
@@ -597,7 +672,7 @@ class HostSessionControllerTest {
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
             queueCoordinatorFactory = { _, credentials, observer ->
-                QueueAdvancementCoordinator(credentials.code, credentials.hostToken, command, reconciler, observer)
+                testQueueCoordinator(queueScope, credentials.code, credentials.hostToken, command, reconciler, observer)
             },
             playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
                 AuthoritativePlaybackCoordinator(
@@ -837,7 +912,7 @@ class HostSessionControllerTest {
         }
     }
 
-    private class RecordingAdvanceCommand : QueueAdvanceCommand {
+    private class RecordingAdvanceCommand : TestQueueCommand {
         val callbacks = mutableListOf<(QueueAdvanceCommandResult) -> Unit>()
 
         override fun skip(

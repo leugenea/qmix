@@ -102,7 +102,12 @@ session cancels the request, event stream, retry, and periodic timers.
 `HostSessionController` publishes each current-session repository update as a
 `HostingState.LiveRoom`, carrying the safe guest invitation, synchronization
 state, queue-command pending input, and local playback state used by the TV
-presentation. Start/Next is serialized by `QueueAdvancementCoordinator`. Only a
+presentation. Start/Next is serialized by `QueueAdvancementCoordinator`. Its coroutine Jobs
+are children of the application-owned scope, and queue mutations use an injected
+immediate main dispatcher. A failed command reconciliation remains unresolved
+until its own later GET succeeds; the POST is never automatically replayed.
+See [coroutine ownership and adapter removal owners](../docs/coroutine-queue-ownership.md)
+for the bounded #178 migration contract. Only a
 fresh, connected authoritative snapshot may select playback media; selection
 identity is `track_id`, so repeated snapshots—including refreshes caused by the
 host's own player report—preserve position, pause, completion, and errors without

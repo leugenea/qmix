@@ -3,12 +3,16 @@ package com.qmix.tv
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
-import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.OkHttpClient
 import java.util.concurrent.Executor
 import java.util.concurrent.FutureTask
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
 
 internal fun currentPlaybackStreamUrl(backendUrl: String, roomCode: String): String =
     backendUrl.toHttpUrl().newBuilder()
@@ -20,6 +24,17 @@ internal fun currentPlaybackStreamUrl(backendUrl: String, roomCode: String): Str
         .toString()
 
 class QMixApplication : Application() {
+    // Process-owned parent for #178; session coordinators own child Jobs.
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val queueMutationContext = QueueMutationContext(Dispatchers.Main.immediate) {
+        Looper.myLooper() === Looper.getMainLooper()
+    }
+
+    override fun onTerminate() {
+        applicationScope.cancel()
+        super.onTerminate()
+    }
+
     private data class ActivityHostSessionOverride(
         val token: Any,
         val provider: () -> HostSessionController,
@@ -57,7 +72,7 @@ class QMixApplication : Application() {
                         client,
                         backendUrl,
                         logger.component(QMixLogComponent.ROOM_API_CREATION),
-                    ),
+                    ).roomFetcher(applicationScope),
                     eventStreams = OkHttpRoomEventStreamFactory(client, backendUrl),
                     scheduler = ExecutorRoomSyncScheduler(syncExecutor),
                     dispatcher = syncExecutor,
@@ -69,23 +84,11 @@ class QMixApplication : Application() {
                     client,
                     backendUrl,
                     logger.component(QMixLogComponent.ROOM_API_CREATION),
-                )
+                ).roomFetcher(applicationScope)
             },
+            queueMutationContext = queueMutationContext,
             queueCoordinatorFactory = { backendUrl, credentials, observer ->
-                val api = RoomApiClient(
-                    client,
-                    backendUrl,
-                    logger.component(QMixLogComponent.ROOM_API_CREATION),
-                )
-                QueueAdvancementCoordinator(
-                    roomCode = credentials.code,
-                    hostToken = credentials.hostToken,
-                    command = AsyncRoomAdvanceCommand(api) { command ->
-                        Thread(command, "qmix-room-command").apply { isDaemon = true }.start()
-                    },
-                    reconciler = api,
-                    observer = observer,
-                )
+                createQueueCoordinator(client, backendUrl, credentials, observer)
             },
             playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
                 val api = RoomApiClient(
@@ -99,20 +102,38 @@ class QMixApplication : Application() {
                         roomCode = credentials.code,
                         streamUrl = streamUrl,
                         playbackEngine = playbackEngine,
-                        reconciler = api,
+                        reconciler = api.roomFetcher(applicationScope),
                         dispatcher = playbackDispatcher,
                         advanceAfterEnded = advanceAfterEnded,
                         observer = observer,
                         statePublisher = PlayerStatePublisher(
                             roomCode = credentials.code,
                             hostToken = credentials.hostToken,
-                            client = api,
+                            client = api.playerReporter(applicationScope),
                             scheduler = ExecutorRoomSyncScheduler(syncExecutor),
                             dispatcher = syncExecutor,
                         ),
                     )
                 }
             },
+        )
+    }
+
+    internal fun createQueueCoordinator(
+        client: OkHttpClient,
+        backendUrl: String,
+        credentials: RoomCredentials,
+        observer: (QueueAdvancementState) -> Unit,
+    ): QueueAdvancementCoordinator {
+        val api = RoomApiClient(client, backendUrl, logger.component(QMixLogComponent.ROOM_API_CREATION))
+        return QueueAdvancementCoordinator(
+            roomCode = credentials.code,
+            hostToken = credentials.hostToken,
+            command = RoomAdvanceCommand(api),
+            reconciler = QueueRoomReconciler(api::fetchRoom),
+            observer = observer,
+            parentScope = applicationScope,
+            mutationContext = queueMutationContext,
         )
     }
 
