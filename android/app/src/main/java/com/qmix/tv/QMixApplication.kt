@@ -5,7 +5,6 @@ import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.Executor
 import java.util.concurrent.FutureTask
-import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,7 +23,7 @@ internal fun currentPlaybackStreamUrl(backendUrl: String, roomCode: String): Str
         .toString()
 
 class QMixApplication : Application() {
-    // Process-owned parent for #178; session coordinators own child Jobs.
+    // Process-owned parent for #178 and #180; session coordinators own child Jobs.
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val queueMutationContext = QueueMutationContext(Dispatchers.Main.immediate) {
         Looper.myLooper() === Looper.getMainLooper()
@@ -53,9 +52,6 @@ class QMixApplication : Application() {
     }
 
     val hostSession: HostSessionController by lazy {
-        val syncExecutor = ScheduledThreadPoolExecutor(1) { command ->
-            Thread(command, "qmix-room-sync").apply { isDaemon = true }
-        }.apply { removeOnCancelPolicy = true }
         val client = OkHttpClient.Builder()
             .callTimeout(15, TimeUnit.SECONDS)
             .followRedirects(false)
@@ -110,9 +106,9 @@ class QMixApplication : Application() {
                         statePublisher = PlayerStatePublisher(
                             roomCode = credentials.code,
                             hostToken = credentials.hostToken,
-                            client = api.playerReporter(applicationScope),
-                            scheduler = ExecutorRoomSyncScheduler(syncExecutor),
-                            dispatcher = syncExecutor,
+                            reportPlayer = api::reportPlayer,
+                            parentScope = applicationScope,
+                            mutationContext = queueMutationContext,
                         ),
                     )
                 }

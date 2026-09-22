@@ -35,6 +35,7 @@ class AuthoritativePlaybackCoordinator(
 
     init {
         playbackEngine.addListener(playbackListener)
+        // Temporary publisher compatibility listener; qmix#181 owns its removal.
         statePublisher?.setListener(object : PlayerStatePublisher.Listener {
             override fun onSynchronizationChanged(synchronized: Boolean) {
                 dispatcher.execute {

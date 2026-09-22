@@ -1,8 +1,5 @@
 package com.qmix.tv
 
-import java.util.concurrent.Executor
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -56,10 +53,6 @@ sealed interface RoomEventStreamEvent {
 
 fun interface RoomEventStreamFactory {
     fun observe(roomCode: String): Flow<RoomEventStreamEvent>
-}
-
-fun interface RoomSyncScheduler {
-    fun schedule(delayMillis: Long, action: () -> Unit): Cancelable
 }
 
 fun interface RoomRepository {
@@ -228,74 +221,6 @@ class SequentialRoomRepository(
             val reconnectDelay = backoff.delayMillis(retryAttempt++)
             logger.info(QMixLogOperation.RECONNECT)
             delay(reconnectDelay)
-        }
-    }
-}
-
-internal class SerialExecutor(private val delegate: Executor) : Executor {
-    private enum class WorkerState { IDLE, SUBMITTING, RUNNING }
-
-    private val lock = ReentrantLock()
-    private val tasks = ArrayDeque<Runnable>()
-    private var state = WorkerState.IDLE
-
-    override fun execute(command: Runnable) {
-        val submitWorker = lock.withLock {
-            tasks.addLast(command)
-            if (state == WorkerState.IDLE) {
-                state = WorkerState.SUBMITTING
-                true
-            } else {
-                false
-            }
-        }
-        if (!submitWorker) return
-        try {
-            delegate.execute(::drain)
-        } catch (rejection: Throwable) {
-            val resubmit = lock.withLock {
-                tasks.remove(command)
-                state = WorkerState.IDLE
-                if (tasks.isNotEmpty()) {
-                    state = WorkerState.SUBMITTING
-                    true
-                } else {
-                    false
-                }
-            }
-            if (resubmit) {
-                try {
-                    delegate.execute(::drain)
-                } catch (resubmissionFailure: Throwable) {
-                    lock.withLock { state = WorkerState.IDLE }
-                    rejection.addSuppressed(resubmissionFailure)
-                }
-            }
-            throw rejection
-        }
-    }
-
-    private fun drain() {
-        lock.withLock {
-            state = WorkerState.RUNNING
-        }
-        while (true) {
-            val command = lock.withLock {
-                if (tasks.isEmpty()) {
-                    state = WorkerState.IDLE
-                    return
-                }
-                tasks.removeFirst()
-            }
-            try {
-                command.run()
-            } catch (failure: Throwable) {
-                try {
-                    Thread.currentThread().uncaughtExceptionHandler?.uncaughtException(Thread.currentThread(), failure)
-                } catch (_: Throwable) {
-                    // Keep draining: one callback must not wedge later lifecycle work.
-                }
-            }
         }
     }
 }

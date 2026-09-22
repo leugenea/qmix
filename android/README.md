@@ -121,9 +121,9 @@ restarting or seeking Media3. A new selection uses
 seek, completion, and error transitions are published immediately through
 `PATCH /rooms/{code}/player`; playing position is also published every 7.5
 seconds. Reports are serialized with at most one request in flight, queued
-positions are coalesced, and changing `track_id` cancels and generation-discards
-old reports. A 409 causes a fresh authoritative room read rather than replaying
-the rejected operation. Reporting failures never block local controls or audio;
+positions are coalesced, and changing `track_id` structurally cancels the old
+report and periodic Jobs. A 409 causes a fresh authoritative room read rather
+than replaying the rejected operation. Reporting failures never block local controls or audio;
 the local playback model exposes `reportSynchronized=false` until a later
 accepted report, while the server and guests retain the last successfully
 reported state and position during network loss. 403/404 stop that track's

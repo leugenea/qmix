@@ -414,8 +414,8 @@ and subscriber invalidation behavior.
   containing the complete state.
 - The Android host publishes actual playback through one serialized request
   pipeline. Immediate transitions supersede queued progress, old-track callbacks
-  are generation-discarded, and 409 responses force a GET reconciliation without
-  retrying the rejected report. GET/SSE echoes for the same `track_id` update
+  are excluded by selection-bound Job cancellation, and 409 responses force a
+  GET reconciliation without retrying the rejected report. GET/SSE echoes for the same `track_id` update
   presentation only and never command Media3. During network loss the server
   deliberately retains the last accepted state and position; local playback
   continues and marks reporting unsynchronized until a later accepted report.

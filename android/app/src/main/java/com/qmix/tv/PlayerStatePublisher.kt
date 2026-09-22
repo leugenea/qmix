@@ -1,14 +1,25 @@
 package com.qmix.tv
 
-import java.util.concurrent.Executor
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
-/** Serial, generation-bound publication of the host's actual local playback state. */
+/** Structured, selection-bound publication of the host's actual local playback state. */
 class PlayerStatePublisher(
     private val roomCode: String,
     private val hostToken: String,
-    private val client: PlayerReportClient,
-    private val scheduler: RoomSyncScheduler,
-    dispatcher: Executor,
+    private val reportPlayer: suspend (String, String, PlayerReport) -> PlayerReportResult,
+    parentScope: CoroutineScope,
+    private val mutationContext: QueueMutationContext,
     listener: Listener = object : Listener {
         override fun onSynchronizationChanged(synchronized: Boolean) = Unit
         override fun onConflict() = Unit
@@ -27,138 +38,164 @@ class PlayerStatePublisher(
 
     private enum class ReportingMode { ACTIVE, RECONCILING, STOPPED }
 
-    private val dispatcher = SerialExecutor(dispatcher)
+    private class Selection(val trackId: String)
+
+    private val sessionJob = SupervisorJob(requireNotNull(parentScope.coroutineContext[Job]))
+    private val scope = CoroutineScope(parentScope.coroutineContext + sessionJob + mutationContext.dispatcher)
     private var listener = listener
-    private var trackId: String? = null
-    private var generation = 0L
+    private var selection: Selection? = null
     private var latest: PlayerReport? = null
-    private var playingProgressEnabled = false
     private var pending: PlayerReport? = null
-    private var inFlight: Cancelable? = null
-    private var periodic: Cancelable? = null
+    private var reportJob: Job? = null
+    private var periodicJob: Job? = null
+    private var playingProgressEnabled = false
     private var synchronized = true
     private var mode = ReportingMode.ACTIVE
     private var foreground = true
-    private var closed = false
 
-    fun setListener(next: Listener) {
-        dispatcher.execute { if (!closed) listener = next }
+    fun setListener(next: Listener): Unit = mutationContext.run {
+        if (sessionJob.isActive) listener = next
     }
 
-    fun reconciled(selectedTrackId: String?) {
-        dispatcher.execute {
-            if (closed) return@execute
-            if (selectedTrackId != trackId) {
-                selectTrackNow(selectedTrackId)
-            } else {
-                if (mode == ReportingMode.STOPPED) return@execute
-                mode = ReportingMode.ACTIVE
-                if (foreground && selectedTrackId != null && periodic == null) {
-                    scheduleProgress(generation)
-                }
-            }
+    fun reconciled(selectedTrackId: String?): Unit = mutationContext.run {
+        if (!sessionJob.isActive) return@run
+        if (selectedTrackId != selection?.trackId) {
+            selectTrackNow(selectedTrackId)
+        } else if (mode != ReportingMode.STOPPED) {
+            mode = ReportingMode.ACTIVE
         }
     }
 
-    fun selectTrack(selectedTrackId: String?) {
-        dispatcher.execute {
-            if (!closed) selectTrackNow(selectedTrackId)
-        }
+    fun selectTrack(selectedTrackId: String?): Unit = mutationContext.run {
+        if (sessionJob.isActive) selectTrackNow(selectedTrackId)
     }
 
     private fun selectTrackNow(selectedTrackId: String?) {
-        if (selectedTrackId == trackId) return
-        generation++
-        trackId = selectedTrackId
+        if (selectedTrackId == selection?.trackId) return
+        val activeReport = reportJob
+        selection = selectedTrackId?.let(::Selection)
         mode = ReportingMode.ACTIVE
         latest = null
-        playingProgressEnabled = false
         pending = null
-        inFlight?.cancel()
-        inFlight = null
-        periodic?.cancel()
-        periodic = null
-        if (foreground && selectedTrackId != null) scheduleProgress(generation)
+        playingProgressEnabled = false
+        periodicJob?.cancel()
+        periodicJob = null
+        activeReport?.cancel()
     }
 
     fun update(
         report: PlayerReport,
         immediate: Boolean,
         periodicProgress: Boolean = report.state == PlayerReportState.PLAYING,
-    ) {
-        dispatcher.execute {
-            if (closed || !foreground || mode != ReportingMode.ACTIVE || report.trackId != trackId) return@execute
-            latest = report
-            playingProgressEnabled = periodicProgress && report.state == PlayerReportState.PLAYING
-            if (inFlight != null) {
-                if (immediate || pending != null) pending = report
-            } else if (immediate) {
-                send(report, generation)
-            }
+    ): Unit = mutationContext.run {
+        val activeSelection = selection
+        if (!sessionJob.isActive || !foreground || mode != ReportingMode.ACTIVE ||
+            report.trackId != activeSelection?.trackId
+        ) {
+            return@run
         }
-    }
 
-    fun suspendPlayingProgress() {
-        dispatcher.execute {
-            if (closed) return@execute
-            playingProgressEnabled = false
-            if (latest?.state == PlayerReportState.PLAYING) latest = null
+        latest = report
+        playingProgressEnabled = periodicProgress && report.state == PlayerReportState.PLAYING
+        if (playingProgressEnabled) {
+            ensurePeriodic(activeSelection)
+        } else {
+            periodicJob?.cancel()
+            periodicJob = null
             if (pending?.state == PlayerReportState.PLAYING) pending = null
         }
-    }
 
-    fun setForeground(active: Boolean) {
-        dispatcher.execute {
-            if (closed || foreground == active) return@execute
-            foreground = active
-            generation++
-            latest = null
-            playingProgressEnabled = false
-            pending = null
-            inFlight?.cancel()
-            inFlight = null
-            periodic?.cancel()
-            periodic = null
-            if (active && trackId != null) scheduleProgress(generation)
+        if (reportJob != null) {
+            if (immediate || pending?.state == PlayerReportState.PLAYING) pending = report
+        } else if (immediate) {
+            send(report, activeSelection)
         }
     }
 
-    private fun scheduleProgress(expectedGeneration: Long) {
-        periodic = scheduler.schedule(PROGRESS_INTERVAL_MILLIS) {
-            dispatcher.execute {
-                if (closed || !foreground || mode != ReportingMode.ACTIVE || expectedGeneration != generation) return@execute
-                periodic = null
-                latest?.takeIf { playingProgressEnabled && it.state == PlayerReportState.PLAYING }?.let { report ->
-                    if (inFlight == null) send(report, expectedGeneration) else pending = report
+    fun suspendPlayingProgress(): Unit = mutationContext.run {
+        if (!sessionJob.isActive) return@run
+        playingProgressEnabled = false
+        periodicJob?.cancel()
+        periodicJob = null
+        if (latest?.state == PlayerReportState.PLAYING) latest = null
+        if (pending?.state == PlayerReportState.PLAYING) pending = null
+    }
+
+    fun setForeground(active: Boolean): Unit = mutationContext.run {
+        if (!sessionJob.isActive || foreground == active) return@run
+        foreground = active
+        latest = null
+        pending = null
+        playingProgressEnabled = false
+        val activeReport = reportJob
+        periodicJob?.cancel()
+        periodicJob = null
+        activeReport?.cancel()
+    }
+
+    private fun ensurePeriodic(expectedSelection: Selection) {
+        if (periodicJob?.isActive == true) return
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            while (currentCoroutineContext().isActive) {
+                delay(PROGRESS_INTERVAL_MILLIS)
+                if (!sessionJob.isActive || !foreground || mode != ReportingMode.ACTIVE ||
+                    selection !== expectedSelection || !playingProgressEnabled
+                ) {
+                    return@launch
                 }
-                scheduleProgress(expectedGeneration)
+                val report = latest?.takeIf { it.state == PlayerReportState.PLAYING } ?: continue
+                if (reportJob != null) {
+                    if (pending == null || pending?.state == PlayerReportState.PLAYING) pending = report
+                } else {
+                    send(report, expectedSelection)
+                }
             }
         }
+        periodicJob = job
+        job.start()
     }
 
-    private fun send(report: PlayerReport, expectedGeneration: Long) {
-        val handle = client.reportPlayer(roomCode, hostToken, report) { result ->
-            dispatcher.execute { complete(expectedGeneration, result) }
+    private fun send(report: PlayerReport, expectedSelection: Selection) {
+        check(reportJob == null)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val activeJob = requireNotNull(coroutineContext[Job])
+            var completedResult: PlayerReportResult? = null
+            try {
+                val result = try {
+                    reportPlayer(roomCode, hostToken, report)
+                } catch (canceled: CancellationException) {
+                    throw canceled
+                } catch (_: Exception) {
+                    PlayerReportResult.FAILED
+                }
+                coroutineContext.ensureActive()
+                completedResult = result
+            } finally {
+                finish(expectedSelection, activeJob, completedResult)
+            }
         }
-        if (closed || expectedGeneration != generation || !foreground) {
-            handle.cancel()
-        } else {
-            inFlight = handle
-        }
+        reportJob = job
+        job.start()
     }
 
-    private fun complete(expectedGeneration: Long, result: PlayerReportResult) {
-        if (closed || expectedGeneration != generation) return
-        inFlight = null
+    private fun finish(
+        expectedSelection: Selection,
+        completedJob: Job,
+        result: PlayerReportResult?,
+    ) {
+        if (reportJob !== completedJob) return
+        if (!sessionJob.isActive || !foreground || selection !== expectedSelection || result == null) {
+            releaseCompletedReport(completedJob)
+            return
+        }
+
         var synchronizationNotification: Boolean? = null
         var notifyConflict = false
         var notifyUnavailable = false
         when (result) {
-            PlayerReportResult.ACCEPTED -> {
-                if (!synchronized) {
-                    synchronized = true
-                    synchronizationNotification = true
-                }
+            PlayerReportResult.ACCEPTED -> if (!synchronized) {
+                synchronized = true
+                synchronizationNotification = true
             }
             PlayerReportResult.CONFLICT -> {
                 if (synchronized) {
@@ -167,10 +204,10 @@ class PlayerStatePublisher(
                 }
                 mode = ReportingMode.RECONCILING
                 latest = null
-                playingProgressEnabled = false
                 pending = null
-                periodic?.cancel()
-                periodic = null
+                playingProgressEnabled = false
+                periodicJob?.cancel()
+                periodicJob = null
                 notifyConflict = true
             }
             PlayerReportResult.FORBIDDEN,
@@ -182,27 +219,55 @@ class PlayerStatePublisher(
                 }
                 mode = ReportingMode.STOPPED
                 pending = null
-                periodic?.cancel()
-                periodic = null
+                playingProgressEnabled = false
+                periodicJob?.cancel()
+                periodicJob = null
                 notifyUnavailable = true
             }
-            PlayerReportResult.FAILED -> {
-                if (synchronized) {
-                    synchronized = false
-                    synchronizationNotification = false
-                }
+            PlayerReportResult.FAILED -> if (synchronized) {
+                synchronized = false
+                synchronizationNotification = false
             }
         }
-        val next = pending
-        pending = null
-        if (next != null && result != PlayerReportResult.CONFLICT &&
-            result != PlayerReportResult.FORBIDDEN && result != PlayerReportResult.MISSING
-        ) {
-            send(next, expectedGeneration)
-        }
+
         synchronizationNotification?.let { value -> safelyNotify { listener.onSynchronizationChanged(value) } }
-        if (notifyConflict) safelyNotify { listener.onConflict() }
-        if (notifyUnavailable) safelyNotify { listener.onRoomUnavailable() }
+        if (notifyConflict &&
+            secondaryNotificationIsCurrent(expectedSelection, completedJob, ReportingMode.RECONCILING)
+        ) {
+            safelyNotify { listener.onConflict() }
+        }
+        if (notifyUnavailable &&
+            secondaryNotificationIsCurrent(expectedSelection, completedJob, ReportingMode.STOPPED)
+        ) {
+            safelyNotify { listener.onRoomUnavailable() }
+        }
+
+        releaseCompletedReport(completedJob)
+    }
+
+    private fun secondaryNotificationIsCurrent(
+        expectedSelection: Selection,
+        completedJob: Job,
+        expectedMode: ReportingMode,
+    ): Boolean =
+        reportJob === completedJob &&
+            sessionJob.isActive &&
+            foreground &&
+            selection === expectedSelection &&
+            mode == expectedMode
+
+    private fun releaseCompletedReport(completedJob: Job) {
+        if (reportJob !== completedJob) return
+        val activeSelection = selection
+        val next = pending
+        reportJob = null
+        pending = null
+        if (!sessionJob.isActive || !foreground || mode != ReportingMode.ACTIVE ||
+            activeSelection == null || next == null || next.trackId != activeSelection.trackId
+        ) {
+            return
+        }
+        send(next, activeSelection)
     }
 
     private inline fun safelyNotify(notification: () -> Unit) {
@@ -213,18 +278,13 @@ class PlayerStatePublisher(
         }
     }
 
-    override fun close() {
-        dispatcher.execute {
-            if (closed) return@execute
-            closed = true
-            generation++
-            pending = null
-            latest = null
-            playingProgressEnabled = false
-            inFlight?.cancel()
-            inFlight = null
-            periodic?.cancel()
-            periodic = null
-        }
+    override fun close(): Unit = mutationContext.run {
+        if (!sessionJob.isActive) return@run
+        latest = null
+        pending = null
+        playingProgressEnabled = false
+        reportJob = null
+        periodicJob = null
+        sessionJob.cancel()
     }
 }
