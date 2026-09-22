@@ -18,7 +18,7 @@ internal fun testQueueCoordinator(
     roomCode: String,
     hostToken: String,
     command: TestQueueCommand,
-    reconciler: RoomStateFetcher,
+    reconciler: TestRoomFetcher,
     observer: (QueueAdvancementState) -> Unit = {},
 ): QueueAdvancementCoordinator = QueueAdvancementCoordinator(
     roomCode, hostToken,
@@ -31,3 +31,19 @@ internal fun testQueueCoordinator(
         if (!continuation.isActive) request.cancel()
     } }, observer, parentScope, QueueMutationContext(Dispatchers.Unconfined) { true },
 )
+
+internal fun interface Cancelable {
+    fun cancel()
+}
+
+/** Test-only callback fixture; no callback adapter is shipped in the application. */
+internal fun interface TestRoomFetcher {
+    fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable
+}
+
+internal suspend fun TestRoomFetcher.fetchRoom(roomCode: String): RoomFetchResult =
+    suspendCancellableCoroutine { continuation ->
+        val request = fetch(roomCode) { if (continuation.isActive) continuation.resume(it) }
+        continuation.invokeOnCancellation { request.cancel() }
+        if (!continuation.isActive) request.cancel()
+    }

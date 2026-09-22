@@ -358,6 +358,275 @@ class HostSessionControllerInstrumentationTest {
         assertFalse(secondRepository.closed)
     }
 
+    @Test
+    fun missing_foreground_reconciliation_does_not_reopen_commands_or_restart_collection() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        var fetches = 0
+        var commands = 0
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+            foregroundReconcilerFactory = { { _: String -> fetches++; RoomFetchResult.Missing } },
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            primaryActionHandler = { commands++ },
+        )
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        val room = RoomState("ABCD", null,
+            listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
+        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        assertTrue((controller.state as HostingState.LiveRoom).isPrimaryActionEnabled)
+
+        controller.onHostStopped()
+        assertTrue(repository.closed)
+        controller.onHostStarted()
+        assertEquals(1, fetches)
+        assertEquals(RoomSyncState.Missing("ABCD"), controller.roomSyncState)
+        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        controller.onStartOrNext()
+        assertEquals(0, commands)
+        controller.endRoom()
+        assertTrue(controller.state is HostingState.Setup)
+    }
+
+    @Test
+    fun thrown_foreground_fetch_keeps_commands_closed_until_a_later_fresh_retry_succeeds() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val room = RoomState("ABCD", null,
+            listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
+        var fetches = 0
+        var commands = 0
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+            foregroundReconcilerFactory = { { _: String ->
+                fetches++
+                if (fetches == 1) throw IllegalStateException("temporary fetch failure")
+                if (fetches == 2) RoomFetchResult.Success(room.copy(code = "OTHER"))
+                else RoomFetchResult.Success(room)
+            } },
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            primaryActionHandler = { commands++ },
+        )
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.onHostStopped()
+        controller.onHostStarted()
+        assertEquals(1, fetches)
+        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        controller.onStartOrNext()
+        assertEquals(0, commands)
+
+        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        assertEquals(2, fetches)
+        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        controller.onStartOrNext()
+        assertEquals(0, commands)
+
+        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        assertEquals(3, fetches)
+        assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        controller.onStartOrNext()
+        assertEquals(1, commands)
+        controller.endRoom()
+        assertTrue(repository.closed)
+    }
+
+    @Test
+    fun recovery_observer_ending_session_cannot_restart_collection_or_reopen_commands() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val room = RoomState("ABCD", null,
+            listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
+        var commands = 0
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+            foregroundReconcilerFactory = { { _: String -> RoomFetchResult.Success(room) } },
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            primaryActionHandler = { commands++ },
+        )
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.onHostStopped()
+        controller.observe { state ->
+            if (state is HostingState.LiveRoom && !state.foregroundRecoveryPending &&
+                state.synchronization is RoomSyncState.Active &&
+                state.synchronization.freshness == Freshness.FRESH
+            ) {
+                controller.endRoom()
+            }
+        }
+
+        controller.onHostStarted()
+        controller.onStartOrNext()
+        assertEquals(0, commands)
+        assertTrue(repository.closed)
+        assertTrue(controller.state is HostingState.Setup)
+    }
+
+    @Test
+    fun stop_cancels_recovery_queued_on_mutation_dispatcher_before_fetch_or_command_admission() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val dispatcher = QueuedCoroutineDispatcher()
+        val repository = RecordingRoomRepository()
+        val room = RoomState("ABCD", null,
+            listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
+        var fetches = 0
+        var commands = 0
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+            foregroundReconcilerFactory = { { _: String -> fetches++; RoomFetchResult.Success(room) } },
+            queueMutationContext = QueueMutationContext(dispatcher) { true },
+            primaryActionHandler = { commands++ },
+        )
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.onHostStopped()
+        controller.onHostStarted()
+        controller.onHostStopped()
+        dispatcher.runPending()
+        controller.onStartOrNext()
+        assertEquals(0, fetches)
+        assertEquals(0, commands)
+        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+
+        controller.onHostStarted()
+        dispatcher.runPending()
+        assertEquals(1, fetches)
+        assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        controller.onStartOrNext()
+        assertEquals(1, commands)
+        controller.endRoom()
+    }
+
+    @Test
+    fun foreground_loss_during_repository_creation_cancels_unstarted_collection_and_recovers() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val room = RoomState("ABCD", null,
+            listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
+        lateinit var controller: HostSessionController
+        var creations = 0
+        var fetches = 0
+        controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            roomRepositoryFactory = {
+                if (++creations == 1) controller.onHostStopped()
+                repository
+            },
+            roomCollectionScope = roomScope, roomCollectionContext = Dispatchers.Unconfined,
+            foregroundReconcilerFactory = { { _: String -> fetches++; RoomFetchResult.Success(room) } },
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+        )
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        assertEquals(1, creations)
+        assertNull(repository.roomCode)
+        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+
+        controller.onHostStarted()
+        assertEquals(1, fetches)
+        assertEquals(2, creations)
+        assertEquals("ABCD", repository.roomCode)
+        assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        assertTrue((controller.state as HostingState.LiveRoom).isPrimaryActionEnabled)
+        controller.endRoom()
+        assertTrue(repository.closed)
+    }
+
+    @Test
+    fun ending_session_inside_coordinator_factories_discards_handles_before_collection_starts() {
+        repeat(2) {
+            server.enqueue(MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        }
+        val repository = RecordingRoomRepository()
+        var queueConstructions = 0
+        var playbackConstructions = 0
+        var playbackPauses = 0
+        lateinit var controller: HostSessionController
+        val engine = object : PlaybackEngine {
+            override val state = PlaybackState()
+            override fun prepare(media: PlaybackMedia) = Unit
+            override fun play() = Unit
+            override fun pause() { playbackPauses++ }
+            override fun seekTo(positionMs: Long) = Unit
+            override fun release() = Unit
+            override fun addListener(listener: (PlaybackState) -> Unit) = Unit
+            override fun removeListener(listener: (PlaybackState) -> Unit) = Unit
+        }
+        controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+            queueCoordinatorFactory = { _, credentials, observer ->
+                val queue = testQueueCoordinator(
+                    roomScope, credentials.code, credentials.hostToken,
+                    TestQueueCommand { _, _, _ -> },
+                    TestRoomFetcher { _, _ -> Cancelable { } }, observer,
+                )
+                if (++queueConstructions == 1) controller.endRoom()
+                queue
+            },
+            playbackCoordinatorFactory = { _, credentials, observer, advance ->
+                val playback = AuthoritativePlaybackCoordinator(
+                    credentials.code, "https://example/stream", engine,
+                    { RoomFetchResult.Failure }, roomScope,
+                    QueueMutationContext(Dispatchers.Unconfined) { true }, advance, observer,
+                )
+                playbackConstructions++
+                controller.endRoom()
+                playback
+            },
+        )
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        assertTrue(controller.state is HostingState.Setup)
+        assertNull(repository.roomCode)
+        assertEquals(0, playbackConstructions)
+
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        assertTrue(controller.state is HostingState.Setup)
+        assertNull(repository.roomCode)
+        assertEquals(2, queueConstructions)
+        assertEquals(1, playbackConstructions)
+        assertEquals(1, playbackPauses)
+    }
+
+    private class QueuedCoroutineDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+            tasks.addLast(block)
+        }
+        fun runPending() {
+            while (tasks.isNotEmpty()) tasks.removeFirst().run()
+        }
+    }
+
     private class RecordingRoomRepository : RoomRepository {
         var roomCode: String? = null
         var closed = false

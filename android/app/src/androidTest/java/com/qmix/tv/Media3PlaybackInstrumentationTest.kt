@@ -109,13 +109,9 @@ class Media3PlaybackInstrumentationTest {
     @Test
     fun branch_coordinators_start_next_complete_and_honor_local_controls_with_decodable_audio() {
         val playback = createEngine()
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val mainExecutor = java.util.concurrent.Executor { command ->
-            if (Looper.myLooper() === Looper.getMainLooper()) command.run() else instrumentation.runOnMainSync(command)
-        }
         var authoritative = acceptanceRoom(currentId = null, queueIds = listOf("one", "two"))
         val commandCallbacks = ArrayDeque<(QueueAdvanceCommandResult) -> Unit>()
-        val fetcher = RoomStateFetcher { _, callback ->
+        val fetcher = TestRoomFetcher { _, callback ->
             callback(RoomFetchResult.Success(authoritative))
             Cancelable { }
         }
@@ -133,8 +129,11 @@ class Media3PlaybackInstrumentationTest {
                     roomCode = "ABCD",
                     streamUrl = server.url("tone.webm"),
                     playbackEngine = playback,
-                    reconciler = fetcher,
-                    dispatcher = mainExecutor,
+                    reconciler = fetcher::fetchRoom,
+                    parentScope = queueScope,
+                    mutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                        Looper.myLooper() === Looper.getMainLooper()
+                    },
                     advanceAfterEnded = advancement::onPlaybackEnded,
                 ),
             )

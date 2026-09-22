@@ -22,7 +22,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class CoroutineRoomApiTest {
     @Test
-    fun room_fetch_callback_adapter_cancels_with_its_parent_and_delivers_no_failure_callback() = runBlocking {
+    fun room_fetch_suspend_call_cancels_with_its_parent_and_delivers_no_result() = runBlocking {
         val parent = kotlinx.coroutines.Job(coroutineContext[kotlinx.coroutines.Job])
         val owned = kotlinx.coroutines.CoroutineScope(coroutineContext + parent + Dispatchers.Default)
         val canceled = CountDownLatch(1)
@@ -34,7 +34,7 @@ class CoroutineRoomApiTest {
             MockWebServer().use { server ->
                 server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE))
                 val api = RoomApiClient(client, server.url("/").toString())
-                api.roomFetcher(owned).fetch("ABCD") { callbacks.incrementAndGet() }
+                owned.launch { api.fetchRoom("ABCD"); callbacks.incrementAndGet() }
                 org.junit.Assert.assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
                 parent.cancel()
                 parent.join()

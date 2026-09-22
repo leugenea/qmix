@@ -228,7 +228,7 @@ class MainActivityInstrumentationTest {
                 server,
                 repository,
                 playback,
-                foregroundFetcher = RoomStateFetcher { _, callback ->
+                foregroundFetcher = TestRoomFetcher { _, callback ->
                     recovery.set(callback)
                     Cancelable { recovery.compareAndSet(callback, null) }
                 },
@@ -307,7 +307,7 @@ class MainActivityInstrumentationTest {
         server: MockWebServer,
         repository: RecordingRepository,
         playback: RecordingPlaybackEngine,
-        foregroundFetcher: RoomStateFetcher = RoomStateFetcher { _, _ -> Cancelable { } },
+        foregroundFetcher: TestRoomFetcher = TestRoomFetcher { _, _ -> Cancelable { } },
     ) = HostSessionController(
         httpClient = OkHttpClient(),
         initialBackendUrl = server.url("/").toString(),
@@ -316,14 +316,18 @@ class MainActivityInstrumentationTest {
         roomRepositoryFactory = { repository },
         roomCollectionScope = roomScope,
         roomCollectionContext = Dispatchers.Unconfined,
-        foregroundReconcilerFactory = { foregroundFetcher },
+        queueMutationContext = QueueMutationContext(Dispatchers.Main.immediate) {
+            android.os.Looper.myLooper() === android.os.Looper.getMainLooper()
+        },
+        foregroundReconcilerFactory = { foregroundFetcher::fetchRoom },
         playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
             AuthoritativePlaybackCoordinator(
                 roomCode = credentials.code,
                 streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                 playbackEngine = playback,
-                reconciler = RoomStateFetcher { _, _ -> Cancelable { } },
-                dispatcher = Executor { it.run() },
+                reconciler = { RoomFetchResult.Failure },
+                parentScope = roomScope,
+                mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
                 advanceAfterEnded = advanceAfterEnded,
                 observer = observer,
             )

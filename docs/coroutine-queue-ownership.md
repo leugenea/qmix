@@ -1,8 +1,8 @@
-# Coroutine ownership, queue advancement, and player reporting (qmix#178, qmix#180)
+# Coroutine ownership, queue advancement, player reporting, and playback (qmix#178, qmix#180, qmix#181)
 
-This records the bounded coroutine migrations under #139. Repository SSE,
-authoritative playback, retained event history, and UI collection keep their
-existing contracts and remain owned by the later issues.
+This records the bounded coroutine migrations under #139. Repository SSE and
+authoritative playback have migrated; retained event history and UI collection
+remain owned by later issues.
 
 `QMixApplication` owns the process parent scope. Each queue coordinator receives
 that scope and a `QueueMutationContext`, creates a child session Job, and cancels
@@ -42,20 +42,22 @@ then delivers only a decoded value; prompt coroutine cancellation discards a
 result that has not yet resumed its caller. Status mappings, DTO checks,
 redacted logging, redirect rejection, and disabled transport retries remain.
 
-The only production compatibility surfaces are:
+The host owns one foreground-recovery child Job in the same application scope.
+A stop cancels that Job before it can resume on the serialized mutation dispatcher;
+only a successful matching-room result from the still-owned Job reopens queue
+commands and playback, and changed media remains paused. Playback retry and
+report-conflict GETs also own cancellable child Jobs; track replacement, stop,
+and close cancel their old-selection work. PlaybackEngine mutations run through
+the injected immediate Android main dispatcher. The publisher listener is
+supplied at construction, without a later replacement bridge.
 
-| Surface | Removal owner |
-| --- | --- |
-| `RoomApiClient.roomFetcher(parentScope)` | #181; repository usage leaves in #179 |
-| `RoomApiClient.createRoomBlocking()` | #182 |
+The only production compatibility surface remaining for #182 is
+`RoomApiClient.createRoomBlocking()`; repository, queue, playback, conflict,
+and foreground recovery all call the suspend `fetchRoom` API directly.
 
 Player-report request construction failures are classified as `FAILED` before
 any request is sent, so invalid server-issued header data cannot escape the
 suspend API as an exception containing credentials.
-
-The remaining room-fetch callback adapter requires an explicit parent scope and
-returns a cancellation handle for its child Job. Cancellation suppresses its
-callback instead of converting cancellation into a transport failure.
 
 Coroutines core, Android, and test are pinned together at 1.9.0, the version
 already present in the reviewed strict dependency-verification metadata and

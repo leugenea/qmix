@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -214,8 +215,8 @@ class RoomApiClientInstrumentationTest {
             server.enqueue(response)
             val completed = CountDownLatch(1)
             var result: RoomFetchResult? = null
-            api.roomFetcher(adapterScope).fetch("ABCD") {
-                result = it
+            adapterScope.launch {
+                result = api.fetchRoom("ABCD")
                 completed.countDown()
             }
             assertTrue(completed.await(5, TimeUnit.SECONDS))
