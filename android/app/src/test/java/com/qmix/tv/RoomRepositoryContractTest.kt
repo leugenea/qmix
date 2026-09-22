@@ -1,31 +1,37 @@
 package com.qmix.tv
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class RoomRepositoryContractTest {
+    /** qmix#179: observation is cold and preserves repeated equal snapshots. */
     @Test
-    fun observer_receives_room_state_and_can_unsubscribe() {
-        var observed: RoomSyncState? = null
-        var closed = false
+    fun observation_is_a_cold_non_conflated_flow() = runTest {
+        var collections = 0
+        val expected = RoomSyncState.Active(
+            roomCode = "ABCD",
+            room = null,
+            freshness = Freshness.LOADING,
+            connection = LiveConnection.CONNECTING,
+        )
         val repository: RoomRepository = object : RoomRepository {
-            override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
-                onUpdate(
-                    RoomSyncState.Active(
-                        roomCode = roomCode,
-                        room = null,
-                        freshness = Freshness.LOADING,
-                        connection = LiveConnection.CONNECTING,
-                    ),
-                )
-                return AutoCloseable { closed = true }
+            override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+                collections++
+                emit(expected)
+                emit(expected)
             }
         }
 
-        val subscription = repository.observe("ABCD") { observed = it }
-        subscription.close()
+        val observation = repository.observe("ABCD")
+        assertEquals(0, collections)
 
-        assertEquals("ABCD", observed?.roomCode)
-        assertEquals(true, closed)
+        assertEquals(listOf(expected, expected), observation.toList())
+        assertEquals(1, collections)
+        assertEquals(listOf(expected, expected), observation.toList())
+        assertEquals(2, collections)
     }
 }

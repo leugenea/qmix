@@ -67,18 +67,19 @@ class QMixApplication : Application() {
             logger = logger.component(QMixLogComponent.APP_HOST_SESSION),
             roomApiLogger = logger.component(QMixLogComponent.ROOM_API_CREATION),
             roomRepositoryFactory = { backendUrl ->
+                val api = RoomApiClient(
+                    client,
+                    backendUrl,
+                    logger.component(QMixLogComponent.ROOM_API_CREATION),
+                )
                 SequentialRoomRepository(
-                    fetcher = RoomApiClient(
-                        client,
-                        backendUrl,
-                        logger.component(QMixLogComponent.ROOM_API_CREATION),
-                    ).roomFetcher(applicationScope),
+                    fetchRoom = api::fetchRoom,
                     eventStreams = OkHttpRoomEventStreamFactory(client, backendUrl),
-                    scheduler = ExecutorRoomSyncScheduler(syncExecutor),
-                    dispatcher = syncExecutor,
                     logger = logger.component(QMixLogComponent.ROOM_SYNC_SSE_RECONNECT),
                 )
             },
+            roomCollectionScope = applicationScope,
+            roomCollectionContext = Dispatchers.IO,
             foregroundReconcilerFactory = { backendUrl ->
                 RoomApiClient(
                     client,

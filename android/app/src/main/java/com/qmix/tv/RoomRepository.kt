@@ -3,6 +3,18 @@ package com.qmix.tv
 import java.util.concurrent.Executor
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 fun interface Cancelable {
     fun cancel()
@@ -35,15 +47,15 @@ fun interface RoomStateFetcher {
     fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable
 }
 
-interface RoomEventListener {
-    fun onOpen()
-    fun onEvent(type: String?)
-    fun onClosed()
-    fun onFailure(statusCode: Int?)
+sealed interface RoomEventStreamEvent {
+    data object Opened : RoomEventStreamEvent
+    data class Event(val type: String?) : RoomEventStreamEvent
+    data object Closed : RoomEventStreamEvent
+    data class Failure(val statusCode: Int?) : RoomEventStreamEvent
 }
 
 fun interface RoomEventStreamFactory {
-    fun connect(roomCode: String, listener: RoomEventListener): Cancelable
+    fun observe(roomCode: String): Flow<RoomEventStreamEvent>
 }
 
 fun interface RoomSyncScheduler {
@@ -51,328 +63,171 @@ fun interface RoomSyncScheduler {
 }
 
 fun interface RoomRepository {
-    fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable
+    fun observe(roomCode: String): Flow<RoomSyncState>
 }
 
 class SequentialRoomRepository(
-    private val fetcher: RoomStateFetcher,
+    private val fetchRoom: suspend (String) -> RoomFetchResult,
     private val eventStreams: RoomEventStreamFactory,
-    private val scheduler: RoomSyncScheduler,
-    dispatcher: Executor,
     private val backoff: ReconnectBackoff = ReconnectBackoff(),
     private val logger: QMixComponentLogger =
         QMixComponentLogger.noOp(QMixLogComponent.ROOM_SYNC_SSE_RECONNECT),
 ) : RoomRepository {
-    private val dispatcher = SerialExecutor(dispatcher)
     private companion object {
         const val PERIODIC_REFRESH_MILLIS = 15_000L
         val CHANGE_EVENTS = setOf("queue_snapshot", "queue_updated", "track_changed", "player_state")
     }
 
-    override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
-        val session = Session(roomCode, onUpdate)
-        dispatcher.execute { session.start() }
-        return AutoCloseable { session.close() }
+    private sealed interface Command {
+        data object Refresh : Command
+        data class RefreshCompleted(val result: RoomFetchResult) : Command
+        data class ConnectionChanged(
+            val connection: LiveConnection,
+            val refresh: Boolean = false,
+        ) : Command
+        data object Missing : Command
     }
 
-    private inner class Session(
-        private val roomCode: String,
-        private val observer: (RoomSyncState) -> Unit,
-    ) {
-        private val lifecycleLock = ReentrantLock()
-        private val quiescent = lifecycleLock.newCondition()
-        private val operationDepth = ThreadLocal<Int>()
-        private var activeOperations = 0
-        private var cancellationComplete = false
-        private var terminationThread: Thread? = null
+    override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+        emit(RoomSyncState.Active(roomCode, null, Freshness.LOADING, LiveConnection.CONNECTING))
+        coroutineScope {
+            val commands = Channel<Command>(Channel.UNLIMITED)
+            var room: RoomState? = null
+            var freshness = Freshness.LOADING
+            var connection = LiveConnection.CONNECTING
+            var refreshJob: Job? = null
+            var refreshPending = false
 
-        @Volatile
-        private var closed = false
-        private var room: RoomState? = null
-        private var freshness = Freshness.LOADING
-        private var connection = LiveConnection.CONNECTING
-
-        @Volatile
-        private var request: Cancelable? = null
-        @Volatile
-        private var requestGeneration = 0L
-        private var refreshPending = false
-
-        @Volatile
-        private var stream: Cancelable? = null
-        private var connectionGeneration = 0L
-        private var connectionAttempt = 0
-        private var sseFailureWarningEmitted = false
-
-        @Volatile
-        private var retry: Cancelable? = null
-        private var retryGeneration = 0L
-        private var retryAttempt = 0
-
-        @Volatile
-        private var periodic: Cancelable? = null
-
-        fun start() {
-            if (closed) return
-            publishState()
-            refresh()
-            connectEvents()
-            schedulePeriodicRefresh()
-        }
-
-        private fun connectEvents() {
-            runIfOpen {
-                connectionGeneration++
-                val generation = connectionGeneration
-                val refreshOnOpen = connectionAttempt++ > 0
-                val connected = eventStreams.connect(roomCode, object : RoomEventListener {
-                    override fun onOpen() {
-                        dispatcher.execute {
-                            if (!isCurrentConnection(generation)) return@execute
-                            retryAttempt = 0
-                            connection = LiveConnection.CONNECTED
-                            publishState()
-                            if (refreshOnOpen) requestRefresh()
-                        }
+            fun startRefresh() {
+                refreshJob = launch {
+                    val result = try {
+                        fetchRoom(roomCode)
+                    } catch (cancellation: CancellationException) {
+                        throw cancellation
+                    } catch (_: Throwable) {
+                        RoomFetchResult.Failure
                     }
+                    commands.send(Command.RefreshCompleted(result))
+                }
+            }
 
-                    override fun onEvent(type: String?) {
-                        if (type in CHANGE_EVENTS) {
-                            dispatcher.execute {
-                                if (isCurrentConnection(generation)) requestRefresh()
+            val periodicJob = launch {
+                while (currentCoroutineContext().isActive) {
+                    delay(PERIODIC_REFRESH_MILLIS)
+                    commands.send(Command.Refresh)
+                }
+            }
+            val eventJob = launch {
+                collectEvents(roomCode, commands)
+            }
+            commands.send(Command.Refresh)
+
+            try {
+                var terminal = false
+                while (!terminal) {
+                    when (val command = commands.receive()) {
+                        Command.Refresh -> {
+                            if (refreshJob != null) {
+                                refreshPending = true
+                            } else {
+                                startRefresh()
                             }
                         }
-                    }
-
-                    override fun onClosed() = connectionEnded(generation, null)
-
-                    override fun onFailure(statusCode: Int?) = connectionEnded(generation, statusCode)
-                })
-                installStream(generation, connected)
-            }
-        }
-
-        private fun connectionEnded(generation: Long, statusCode: Int?) {
-            dispatcher.execute {
-                if (!isCurrentConnection(generation)) return@execute
-                val cause = if (statusCode == null) QMixLogCause.NETWORK else QMixLogCause.HTTP_STATUS
-                if (sseFailureWarningEmitted) {
-                    logger.debug(QMixLogOperation.SSE_CONNECTION, cause)
-                } else {
-                    sseFailureWarningEmitted = true
-                    logger.warn(QMixLogOperation.SSE_CONNECTION, cause)
-                }
-                if (statusCode == 404) {
-                    publishMissing()
-                    terminate()
-                    return@execute
-                }
-                connectionGeneration++
-                stream = null
-                connection = LiveConnection.RECONNECTING
-                publishState()
-                if (retry != null) return@execute
-                val delay = backoff.delayMillis(retryAttempt++)
-                logger.info(QMixLogOperation.RECONNECT)
-                scheduleRetry(delay)
-            }
-        }
-
-        private fun scheduleRetry(delayMillis: Long) {
-            runIfOpen {
-                val generation = ++retryGeneration
-                val scheduled = scheduler.schedule(delayMillis) {
-                    dispatcher.execute {
-                        if (closed || retry == null || generation != retryGeneration) return@execute
-                        retryGeneration++
-                        retry = null
-                        connectEvents()
+                        is Command.RefreshCompleted -> {
+                            refreshJob = null
+                            when (val result = command.result) {
+                                is RoomFetchResult.Success -> {
+                                    room = result.room
+                                    freshness = Freshness.FRESH
+                                    emit(RoomSyncState.Active(roomCode, room, freshness, connection))
+                                }
+                                RoomFetchResult.Failure -> {
+                                    freshness = Freshness.STALE
+                                    emit(RoomSyncState.Active(roomCode, room, freshness, connection))
+                                }
+                                RoomFetchResult.Missing -> {
+                                    emit(RoomSyncState.Missing(roomCode))
+                                    terminal = true
+                                }
+                            }
+                            if (!terminal && refreshPending) {
+                                refreshPending = false
+                                startRefresh()
+                            }
+                        }
+                        is Command.ConnectionChanged -> {
+                            connection = command.connection
+                            emit(RoomSyncState.Active(roomCode, room, freshness, connection))
+                            if (command.refresh) {
+                                if (refreshJob != null) {
+                                    refreshPending = true
+                                } else {
+                                    startRefresh()
+                                }
+                            }
+                        }
+                        Command.Missing -> {
+                            emit(RoomSyncState.Missing(roomCode))
+                            terminal = true
+                        }
                     }
                 }
-                installRetry(generation, scheduled)
+            } finally {
+                refreshJob?.cancelAndJoin()
+                eventJob.cancelAndJoin()
+                periodicJob.cancelAndJoin()
+                commands.close()
             }
         }
+    }
 
-        private fun isCurrentConnection(generation: Long): Boolean =
-            !closed && generation == connectionGeneration
-
-        private fun schedulePeriodicRefresh() {
-            runIfOpen {
-                val scheduled = scheduler.schedule(PERIODIC_REFRESH_MILLIS) {
-                    dispatcher.execute {
-                        if (closed) return@execute
-                        schedulePeriodicRefresh()
-                        requestRefresh()
+    private suspend fun collectEvents(roomCode: String, commands: Channel<Command>) {
+        var connectionAttempt = 0
+        var retryAttempt = 0
+        var warningEmitted = false
+        while (currentCoroutineContext().isActive) {
+            val refreshOnOpen = connectionAttempt++ > 0
+            var statusCode: Int? = null
+            try {
+                eventStreams.observe(roomCode).collect { event ->
+                    when (event) {
+                        RoomEventStreamEvent.Opened -> {
+                            retryAttempt = 0
+                            commands.send(
+                                Command.ConnectionChanged(
+                                    LiveConnection.CONNECTED,
+                                    refresh = refreshOnOpen,
+                                ),
+                            )
+                        }
+                        is RoomEventStreamEvent.Event -> {
+                            if (event.type in CHANGE_EVENTS) commands.send(Command.Refresh)
+                        }
+                        RoomEventStreamEvent.Closed -> Unit
+                        is RoomEventStreamEvent.Failure -> statusCode = event.statusCode
                     }
                 }
-                installPeriodic(scheduled)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Throwable) {
+                statusCode = null
             }
-        }
 
-        private fun requestRefresh() {
-            if (closed) return
-            if (request != null) {
-                refreshPending = true
+            if (statusCode == 404) {
+                commands.send(Command.Missing)
                 return
             }
-            refresh()
-        }
-
-        private fun refresh() {
-            runIfOpen {
-                val generation = ++requestGeneration
-                val started = fetcher.fetch(roomCode) { result ->
-                    dispatcher.execute {
-                        if (closed || generation != requestGeneration) return@execute
-                        requestGeneration++
-                        request = null
-                        when (result) {
-                            is RoomFetchResult.Success -> {
-                                room = result.room
-                                freshness = Freshness.FRESH
-                                publishState()
-                            }
-                            RoomFetchResult.Missing -> {
-                                publishMissing()
-                                terminate()
-                            }
-                            RoomFetchResult.Failure -> {
-                                freshness = Freshness.STALE
-                                publishState()
-                            }
-                        }
-                        if (!closed && refreshPending) {
-                            refreshPending = false
-                            refresh()
-                        }
-                    }
-                }
-                installRequest(generation, started)
+            val cause = if (statusCode == null) QMixLogCause.NETWORK else QMixLogCause.HTTP_STATUS
+            if (warningEmitted) {
+                logger.debug(QMixLogOperation.SSE_CONNECTION, cause)
+            } else {
+                warningEmitted = true
+                logger.warn(QMixLogOperation.SSE_CONNECTION, cause)
             }
-        }
-
-        fun close() {
-            terminate()
-        }
-
-        private fun installRequest(generation: Long, handle: Cancelable) {
-            val cancel = lifecycleLock.withLock {
-                if (closed || generation != requestGeneration) true else {
-                    request = handle
-                    false
-                }
-            }
-            if (cancel) handle.cancel()
-        }
-
-        private fun installStream(generation: Long, handle: Cancelable) {
-            val cancel = lifecycleLock.withLock {
-                if (closed || generation != connectionGeneration) true else {
-                    stream = handle
-                    false
-                }
-            }
-            if (cancel) handle.cancel()
-        }
-
-        private fun installRetry(generation: Long, handle: Cancelable) {
-            val cancel = lifecycleLock.withLock {
-                if (closed || generation != retryGeneration) true else {
-                    retry = handle
-                    false
-                }
-            }
-            if (cancel) handle.cancel()
-        }
-
-        private fun installPeriodic(handle: Cancelable) {
-            val cancel = lifecycleLock.withLock {
-                if (closed) true else {
-                    periodic = handle
-                    false
-                }
-            }
-            if (cancel) handle.cancel()
-        }
-
-        private fun publishState() {
-            runIfOpen {
-                observer(RoomSyncState.Active(roomCode, room, freshness, connection))
-            }
-        }
-
-        private fun publishMissing() {
-            runIfOpen {
-                observer(RoomSyncState.Missing(roomCode))
-            }
-        }
-
-        private fun runIfOpen(action: () -> Unit) {
-            lifecycleLock.withLock {
-                if (closed) return
-                activeOperations++
-                operationDepth.set((operationDepth.get() ?: 0) + 1)
-            }
-            try {
-                action()
-            } finally {
-                lifecycleLock.withLock {
-                    activeOperations--
-                    val depth = (operationDepth.get() ?: 0) - 1
-                    if (depth == 0) operationDepth.remove() else operationDepth.set(depth)
-                    quiescent.signalAll()
-                }
-            }
-        }
-
-        private fun terminate() {
-            val ownOperations = operationDepth.get() ?: 0
-            val currentThread = Thread.currentThread()
-            var ownsTermination = false
-            var resources: List<Cancelable> = emptyList()
-            lifecycleLock.withLock {
-                if (!closed) {
-                    closed = true
-                    terminationThread = currentThread
-                    ownsTermination = true
-                    connectionGeneration++
-                    requestGeneration++
-                    retryGeneration++
-                    resources = listOfNotNull(request, stream, retry, periodic)
-                    request = null
-                    stream = null
-                    retry = null
-                    periodic = null
-                    refreshPending = false
-                } else if (!cancellationComplete && terminationThread === currentThread) {
-                    return
-                }
-            }
-            var cancellationFailure: Throwable? = null
-            if (ownsTermination) {
-                for (resource in resources) {
-                    try {
-                        resource.cancel()
-                    } catch (failure: Throwable) {
-                        if (cancellationFailure == null) {
-                            cancellationFailure = failure
-                        } else {
-                            cancellationFailure.addSuppressed(failure)
-                        }
-                    }
-                }
-                lifecycleLock.withLock {
-                    cancellationComplete = true
-                    terminationThread = null
-                    quiescent.signalAll()
-                }
-            }
-            lifecycleLock.withLock {
-                while (!cancellationComplete || activeOperations > ownOperations) {
-                    quiescent.awaitUninterruptibly()
-                }
-            }
-            cancellationFailure?.let { throw it }
+            commands.send(Command.ConnectionChanged(LiveConnection.RECONNECTING))
+            val reconnectDelay = backoff.delayMillis(retryAttempt++)
+            logger.info(QMixLogOperation.RECONNECT)
+            delay(reconnectDelay)
         }
     }
 }

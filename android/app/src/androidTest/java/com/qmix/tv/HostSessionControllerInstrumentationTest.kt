@@ -3,6 +3,15 @@ package com.qmix.tv
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.util.ArrayDeque
+import java.util.concurrent.Executor
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -14,11 +23,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.ArrayDeque
-import java.util.concurrent.Executor
 
 @RunWith(AndroidJUnit4::class)
 class HostSessionControllerInstrumentationTest {
+    private val roomScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private lateinit var server: MockWebServer
 
     @Before
@@ -29,6 +37,7 @@ class HostSessionControllerInstrumentationTest {
 
     @After
     fun tearDown() {
+        roomScope.cancel()
         server.shutdown()
     }
 
@@ -197,6 +206,8 @@ class HostSessionControllerInstrumentationTest {
                 assertEquals(canonicalBackend, it)
                 repository
             },
+            roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
         )
         val observed = mutableListOf<HostingState>()
         val observation = controller.observe(observed::add)
@@ -242,6 +253,8 @@ class HostSessionControllerInstrumentationTest {
             initialGuestOrigin = "https://guest.example",
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
+            roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
             primaryActionHandler = { primaryActions++ },
             observerFailureHandler = failures::add,
         )
@@ -309,6 +322,8 @@ class HostSessionControllerInstrumentationTest {
             initialGuestOrigin = "https://guest.example",
             executor = Executor { it.run() },
             roomRepositoryFactory = { repositories.removeFirst() },
+            roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
         )
         assertTrue(controller.createRoom())
         controller.enterRoom()
@@ -346,16 +361,19 @@ class HostSessionControllerInstrumentationTest {
     private class RecordingRoomRepository : RoomRepository {
         var roomCode: String? = null
         var closed = false
-        private var observer: ((RoomSyncState) -> Unit)? = null
+        private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
-        override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
-            this.roomCode = roomCode
-            observer = onUpdate
-            return AutoCloseable { closed = true }
+        override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+            this@RecordingRoomRepository.roomCode = roomCode
+            try {
+                for (state in states) emit(state)
+            } finally {
+                closed = true
+            }
         }
 
         fun publish(state: RoomSyncState) {
-            observer?.invoke(state)
+            states.trySend(state)
         }
     }
 

@@ -367,6 +367,11 @@ class LocalizationContractTest {
             )
             addInventory("HostSessionController.kt", "identifiers", "qmix-room-request" to 1)
             addInventory(
+                "HostSessionController.kt",
+                "internal diagnostics",
+                "Room collection requires an explicit parent scope" to 1,
+            )
+            addInventory(
                 "LiveRoomPresentation.kt",
                 "nonlinguistic formatting",
                 "\$hours:\${minutes.toString().padStart(2, '0')}:\${seconds.toString().padStart(2, '0')}" to 1,

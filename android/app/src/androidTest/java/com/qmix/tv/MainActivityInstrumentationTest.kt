@@ -16,21 +16,36 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.concurrent.Executor
-import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class MainActivityInstrumentationTest {
+    private val roomScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
     @get:Rule
     val composeRule = createEmptyComposeRule()
+
+    @After
+    fun cancelRoomScope() {
+        roomScope.cancel()
+    }
 
     @Test
     fun recreated_activity_and_replacement_session_restore_endpoints_from_application_storage() {
@@ -299,6 +314,8 @@ class MainActivityInstrumentationTest {
         initialGuestOrigin = "https://guest.example",
         executor = Executor { it.run() },
         roomRepositoryFactory = { repository },
+        roomCollectionScope = roomScope,
+        roomCollectionContext = Dispatchers.Unconfined,
         foregroundReconcilerFactory = { foregroundFetcher },
         playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
             AuthoritativePlaybackCoordinator(
@@ -359,15 +376,14 @@ class MainActivityInstrumentationTest {
     )
 
     private class RecordingRepository : RoomRepository {
-        private var observer: ((RoomSyncState) -> Unit)? = null
+        private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
-        override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
-            observer = onUpdate
-            return AutoCloseable { observer = null }
+        override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+            for (state in states) emit(state)
         }
 
         fun publish(state: RoomSyncState) {
-            observer?.invoke(state)
+            states.trySend(state)
         }
     }
 

@@ -9,6 +9,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -163,6 +166,8 @@ class QueueAdvancementInstrumentationTest {
             initialGuestOrigin = "https://guest.example",
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
             queueCoordinatorFactory = { _, credentials, observer ->
                 testQueueCoordinator(
         queueScope,
@@ -221,6 +226,8 @@ class QueueAdvancementInstrumentationTest {
             initialGuestOrigin = "https://guest.example",
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
             queueCoordinatorFactory = { _, credentials, observer ->
                 testQueueCoordinator(
         queueScope,
@@ -346,15 +353,14 @@ class QueueAdvancementInstrumentationTest {
     }
 
     private class RecordingRepository : RoomRepository {
-        private var observer: ((RoomSyncState) -> Unit)? = null
+        private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
-        override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
-            observer = onUpdate
-            return AutoCloseable { observer = null }
+        override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+            for (state in states) emit(state)
         }
 
         fun publish(state: RoomSyncState) {
-            observer?.invoke(state)
+            states.trySend(state)
         }
     }
 
