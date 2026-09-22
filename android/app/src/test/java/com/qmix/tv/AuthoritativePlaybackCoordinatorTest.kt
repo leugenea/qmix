@@ -965,6 +965,73 @@ class AuthoritativePlaybackCoordinatorTest {
         reportingCoordinator.close()
     }
 
+    @Test
+    fun conflicting_report_with_a_foreign_reconciliation_keeps_old_payload_quarantined() = runTest {
+        val reportClient = CoordinatorReportClient()
+        val reportingCoordinator = AuthoritativePlaybackCoordinator(
+            "ABCD", "https://qmix.test/stream", engine, reconciler::fetchRoom,
+            backgroundScope, QueueMutationContext(UnconfinedTestDispatcher(testScheduler)) { true },
+            { true },
+            statePublisherFactory = { listener -> playerPublisher(
+                reportClient, backgroundScope, QueueMutationContext(UnconfinedTestDispatcher(testScheduler)) { true }, listener,
+            ) },
+        )
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 5_000))
+        reportClient.complete(PlayerReportResult.CONFLICT)
+        runCurrent()
+        assertEquals(1, reconciler.calls.size)
+        reconciler.complete(RoomFetchResult.Success(room(currentId = "two").copy(code = "OTHER")))
+        runCurrent()
+        advanceTimeBy(30_000)
+        runCurrent()
+
+        assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(listOf(5), reportClient.calls.map { it.report.positionSeconds })
+        assertFalse(reportingCoordinator.state.reportSynchronized)
+
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "two")))
+        engine.emit(PlaybackState("two", PlaybackStatus.READY, isPlaying = true, positionMs = 9_000))
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(listOf("one", "two"), reportClient.calls.map { it.report.trackId })
+        assertTrue(reportingCoordinator.state.reportSynchronized)
+        reportingCoordinator.close()
+    }
+
+    @Test
+    fun failed_conflict_reconciliation_never_replays_rejected_progress_on_same_track() = runTest {
+        val reportClient = CoordinatorReportClient()
+        val reportingCoordinator = AuthoritativePlaybackCoordinator(
+            "ABCD", "https://qmix.test/stream", engine, reconciler::fetchRoom,
+            backgroundScope, QueueMutationContext(UnconfinedTestDispatcher(testScheduler)) { true },
+            { true },
+            statePublisherFactory = { listener -> playerPublisher(
+                reportClient, backgroundScope, QueueMutationContext(UnconfinedTestDispatcher(testScheduler)) { true }, listener,
+            ) },
+        )
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 5_000))
+        reportClient.complete(PlayerReportResult.CONFLICT)
+        runCurrent()
+        reconciler.complete(RoomFetchResult.Failure)
+        runCurrent()
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(listOf(5), reportClient.calls.map { it.report.positionSeconds })
+
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 12_000))
+        advanceTimeBy(7_500)
+        runCurrent()
+        assertEquals(listOf(5, 12), reportClient.calls.map { it.report.positionSeconds })
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertTrue(reportingCoordinator.state.reportSynchronized)
+        reportingCoordinator.close()
+    }
+
     private fun fresh(room: RoomState) = RoomSyncState.Active(
         roomCode = room.code,
         room = room,

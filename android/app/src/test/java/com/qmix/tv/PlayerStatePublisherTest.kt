@@ -61,6 +61,29 @@ class PlayerStatePublisherTest {
     }
 
     @Test
+    fun periodic_progress_cannot_replace_a_queued_pause_while_a_report_is_in_flight() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 0), immediate = true)
+        runCurrent()
+        publisher.update(PlayerReport("one", PlayerReportState.PAUSED, 2), immediate = true)
+        // A newer playing sample must not supersede the already queued pause.
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 3), immediate = false)
+        advanceTimeBy(7_500)
+        runCurrent()
+        reporter.complete(0, PlayerReportResult.ACCEPTED)
+        runCurrent()
+
+        assertEquals(listOf(PlayerReportState.PLAYING, PlayerReportState.PAUSED), reporter.states())
+        assertEquals(listOf(0, 2), reporter.positions())
+        reporter.complete(1, PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(1, reporter.maxInFlight)
+        publisher.close()
+    }
+
+    @Test
     fun track_replacement_waits_for_canceled_report_completion_before_starting_the_new_report() = runTest {
         val reporter = SuspendedReporter()
         val publisher = publisher(reporter)
@@ -757,6 +780,36 @@ class PlayerStatePublisherTest {
 
         assertEquals(2, attempts)
         assertEquals(listOf("synchronized=false", "synchronized=true"), notifications.events)
+        publisher.close()
+    }
+
+    @Test
+    fun unobserved_publisher_still_quarantines_conflicts_and_recovers_on_a_fresh_selection() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = PlayerStatePublisher(
+            roomCode = "ABCD", hostToken = "host-secret", reportPlayer = reporter::report,
+            parentScope = backgroundScope,
+            mutationContext = QueueMutationContext(StandardTestDispatcher(testScheduler)) { true },
+        )
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 1), immediate = true)
+        runCurrent()
+        reporter.complete(0, PlayerReportResult.CONFLICT)
+        runCurrent()
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 2), immediate = true)
+        advanceTimeBy(15_000)
+        runCurrent()
+        assertEquals(listOf(1), reporter.positions())
+
+        publisher.reconciled("two")
+        publisher.update(PlayerReport("two", PlayerReportState.PAUSED, 3), immediate = true)
+        runCurrent()
+        assertEquals(listOf("one", "two"), reporter.calls.map { it.report.trackId })
+        reporter.complete(1, PlayerReportResult.MISSING)
+        runCurrent()
+        publisher.update(PlayerReport("two", PlayerReportState.PAUSED, 4), immediate = true)
+        runCurrent()
+        assertEquals(listOf(1, 3), reporter.positions())
         publisher.close()
     }
 
