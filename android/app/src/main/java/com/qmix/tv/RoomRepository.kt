@@ -13,10 +13,6 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-fun interface Cancelable {
-    fun cancel()
-}
-
 enum class Freshness { LOADING, FRESH, STALE }
 
 enum class LiveConnection { CONNECTING, CONNECTED, RECONNECTING }
@@ -38,10 +34,6 @@ sealed interface RoomFetchResult {
     data class Success(val room: RoomState) : RoomFetchResult
     data object Missing : RoomFetchResult
     data object Failure : RoomFetchResult
-}
-
-fun interface RoomStateFetcher {
-    fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable
 }
 
 sealed interface RoomEventStreamEvent {

@@ -3,7 +3,6 @@ package com.qmix.tv
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
-import java.util.concurrent.Executor
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -23,7 +22,7 @@ internal fun currentPlaybackStreamUrl(backendUrl: String, roomCode: String): Str
         .toString()
 
 class QMixApplication : Application() {
-    // Process-owned parent for #178 and #180; session coordinators own child Jobs.
+    // Process-owned parent for #178, #180, and #181; session coordinators own child Jobs.
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val queueMutationContext = QueueMutationContext(Dispatchers.Main.immediate) {
         Looper.myLooper() === Looper.getMainLooper()
@@ -47,9 +46,6 @@ class QMixApplication : Application() {
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private val playbackEngine by lazy { PlaybackEngines.create(this) }
-    private val playbackDispatcher = Executor { command ->
-        if (Looper.myLooper() === Looper.getMainLooper()) command.run() else mainHandler.post(command)
-    }
 
     val hostSession: HostSessionController by lazy {
         val client = OkHttpClient.Builder()
@@ -81,7 +77,7 @@ class QMixApplication : Application() {
                     client,
                     backendUrl,
                     logger.component(QMixLogComponent.ROOM_API_CREATION),
-                ).roomFetcher(applicationScope)
+                )::fetchRoom
             },
             queueMutationContext = queueMutationContext,
             queueCoordinatorFactory = { backendUrl, credentials, observer ->
@@ -99,17 +95,19 @@ class QMixApplication : Application() {
                         roomCode = credentials.code,
                         streamUrl = streamUrl,
                         playbackEngine = playbackEngine,
-                        reconciler = api.roomFetcher(applicationScope),
-                        dispatcher = playbackDispatcher,
+                        reconciler = api::fetchRoom,
+                        parentScope = applicationScope,
+                        mutationContext = queueMutationContext,
                         advanceAfterEnded = advanceAfterEnded,
                         observer = observer,
-                        statePublisher = PlayerStatePublisher(
+                        statePublisherFactory = { listener -> PlayerStatePublisher(
                             roomCode = credentials.code,
                             hostToken = credentials.hostToken,
                             reportPlayer = api::reportPlayer,
                             parentScope = applicationScope,
                             mutationContext = queueMutationContext,
-                        ),
+                            listener = listener,
+                        ) },
                     )
                 }
             },

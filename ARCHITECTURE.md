@@ -86,7 +86,7 @@ that cover the complete requirement.
 - **TV app** — the host player. The current implementation includes the Android
   TV scaffold, room creation, a QR invitation, live room synchronization, queue
   advancement, authoritative Media3 playback coordination, focused local playback
-  controls, token-bound foreground recovery, and serialized player-state publishing.
+  controls, Job-owned foreground recovery, and serialized player-state publishing.
   Playback transitions are reported immediately and progress every 7.5 seconds;
   reporting failure leaves local playback independent and observably unsynchronized.
   Returning from the background

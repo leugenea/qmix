@@ -42,7 +42,7 @@ class PlayerStatePublisher(
 
     private val sessionJob = SupervisorJob(requireNotNull(parentScope.coroutineContext[Job]))
     private val scope = CoroutineScope(parentScope.coroutineContext + sessionJob + mutationContext.dispatcher)
-    private var listener = listener
+    private val listener = listener
     private var selection: Selection? = null
     private var latest: PlayerReport? = null
     private var pending: PlayerReport? = null
@@ -52,10 +52,6 @@ class PlayerStatePublisher(
     private var synchronized = true
     private var mode = ReportingMode.ACTIVE
     private var foreground = true
-
-    fun setListener(next: Listener): Unit = mutationContext.run {
-        if (sessionJob.isActive) listener = next
-    }
 
     fun reconciled(selectedTrackId: String?): Unit = mutationContext.run {
         if (!sessionJob.isActive) return@run

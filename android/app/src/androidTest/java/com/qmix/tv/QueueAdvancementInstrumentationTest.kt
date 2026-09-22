@@ -122,7 +122,7 @@ class QueueAdvancementInstrumentationTest {
             roomCode = "ABCD",
             hostToken = "host-secret",
             command = testQueueCommand { _, _, _ -> throw IllegalStateException("dispatch") },
-            reconciler = RoomStateFetcher { _, callback ->
+            reconciler = TestRoomFetcher { _, callback ->
                 fetchCallback = callback
                 Cancelable { }
             },
@@ -142,7 +142,7 @@ class QueueAdvancementInstrumentationTest {
             roomCode = "ABCD",
             hostToken = "host-secret",
             command = testQueueCommand { _, _, _ -> dispatched = true },
-            reconciler = RoomStateFetcher { _, _ -> Cancelable { } },
+            reconciler = TestRoomFetcher { _, _ -> Cancelable { } },
             observer = { if (it.pending) closing.close() },
         )
         closing.onAuthoritativeRoom(room)
@@ -174,7 +174,7 @@ class QueueAdvancementInstrumentationTest {
                     credentials.code,
                     credentials.hostToken,
                     testQueueCommand { _, _, callback -> commands += callback },
-                    RoomStateFetcher { _, _ -> Cancelable { } },
+                    TestRoomFetcher { _, _ -> Cancelable { } },
                     observer,
                 )
             },
@@ -234,7 +234,7 @@ class QueueAdvancementInstrumentationTest {
                     credentials.code,
                     credentials.hostToken,
                     testQueueCommand { _, _, callback -> commands += callback },
-                    RoomStateFetcher { _, _ -> Cancelable { } },
+                    TestRoomFetcher { _, _ -> Cancelable { } },
                     observer,
                 )
             },
@@ -243,12 +243,13 @@ class QueueAdvancementInstrumentationTest {
                     roomCode = credentials.code,
                     streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                     playbackEngine = playback,
-                    reconciler = RoomStateFetcher { roomCode, callback ->
+                    reconciler = TestRoomFetcher { roomCode, callback ->
                         retryRequests += roomCode
                         retry = callback
                         Cancelable { retry = null }
-                    },
-                    dispatcher = Executor { it.run() },
+                    }::fetchRoom,
+                    parentScope = queueScope,
+                    mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
                     advanceAfterEnded = advanceAfterEnded,
                     observer = observer,
                 )

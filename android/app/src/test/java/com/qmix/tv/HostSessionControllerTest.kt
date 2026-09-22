@@ -8,6 +8,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -81,7 +86,7 @@ class HostSessionControllerTest {
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
             roomRepositoryFactory = { repository }, roomCollectionScope = queueScope,
-            roomCollectionContext = Dispatchers.Unconfined, foregroundReconcilerFactory = { reconciler },
+            roomCollectionContext = Dispatchers.Unconfined, foregroundReconcilerFactory = { reconciler::fetchRoom },
             queueMutationContext = mutation,
             queueCoordinatorFactory = { _, credentials, observer ->
                 QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
@@ -114,6 +119,44 @@ class HostSessionControllerTest {
             mutationExecutor.shutdownNow()
             recoveryExecutor.shutdownNow()
         }
+    }
+
+    /** qmix#181: stop wins over a recovery Job already queued on the mutation dispatcher. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun stop_start_stop_cancels_queued_recovery_without_reopening_commands() = runTest {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val initial = RoomState("ABCD", null,
+            listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+        var fetches = 0
+        var commands = 0
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            roomRepositoryFactory = { repository }, roomCollectionScope = backgroundScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+            foregroundReconcilerFactory = { { _: String ->
+                fetches++
+                RoomFetchResult.Success(initial)
+            } },
+            queueMutationContext = QueueMutationContext(dispatcher) { true },
+            primaryActionHandler = { commands++ },
+        )
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.onHostStopped()
+        controller.onHostStarted()
+        controller.onHostStopped()
+        runCurrent()
+        controller.onStartOrNext()
+        assertEquals(0, fetches)
+        assertEquals(0, commands)
+        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        controller.endRoom()
     }
 
     @Test
@@ -613,7 +656,8 @@ class HostSessionControllerTest {
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            foregroundReconcilerFactory = { reconciler },
+            foregroundReconcilerFactory = { reconciler::fetchRoom },
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
             queueCoordinatorFactory = { _, credentials, observer ->
                 testQueueCoordinator(queueScope, credentials.code, credentials.hostToken, command, reconciler, observer)
             },
@@ -622,8 +666,9 @@ class HostSessionControllerTest {
                     credentials.code,
                     "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                     engine,
-                    reconciler,
-                    Executor { it.run() },
+                    reconciler::fetchRoom,
+                    queueScope,
+                    QueueMutationContext(Dispatchers.Unconfined) { true },
                     advanceAfterEnded,
                     observer,
                 )
@@ -649,6 +694,12 @@ class HostSessionControllerTest {
         reconciler.complete(RoomFetchResult.Failure)
         repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
         assertEquals(listOf("ABCD", "ABCD"), reconciler.calls)
+        reconciler.complete(RoomFetchResult.Success(initial.copy(code = "WRONG")))
+        controller.onStartOrNext()
+        assertTrue(command.callbacks.isEmpty())
+        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+        assertEquals(listOf("ABCD", "ABCD", "ABCD"), reconciler.calls)
         val replacement = initial.copy(current = CurrentTrack("other", 0, "playing", "Other", "Artist"))
         reconciler.complete(RoomFetchResult.Success(replacement))
 
@@ -690,8 +741,9 @@ class HostSessionControllerTest {
                     roomCode = credentials.code,
                     streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                     playbackEngine = engine,
-                    reconciler = reconciler,
-                    dispatcher = Executor { it.run() },
+                    reconciler = reconciler::fetchRoom,
+                    parentScope = queueScope,
+                    mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
                     advanceAfterEnded = advanceAfterEnded,
                     observer = observer,
                 )
@@ -1105,7 +1157,7 @@ class HostSessionControllerTest {
         }
     }
 
-    private class RecordingReconciler : RoomStateFetcher {
+    private class RecordingReconciler : TestRoomFetcher {
         private var callback: ((RoomFetchResult) -> Unit)? = null
         val calls = mutableListOf<String>()
 

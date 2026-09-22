@@ -1,33 +1,51 @@
 package com.qmix.tv
 
-import java.util.concurrent.Executor
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 
 /** Binds only fresh authoritative current-track selections to local playback. */
 class AuthoritativePlaybackCoordinator(
     private val roomCode: String,
     private val streamUrl: String,
     private val playbackEngine: PlaybackEngine,
-    private val reconciler: RoomStateFetcher,
-    private val dispatcher: Executor,
+    private val reconciler: suspend (String) -> RoomFetchResult,
+    parentScope: CoroutineScope,
+    private val mutationContext: QueueMutationContext,
     private val advanceAfterEnded: (String) -> Boolean,
     private val observer: (LocalPlaybackState) -> Unit = {},
-    private val statePublisher: PlayerStatePublisher? = null,
+    statePublisherFactory: ((PlayerStatePublisher.Listener) -> PlayerStatePublisher)? = null,
 ) : AutoCloseable {
     private var currentTrackId: String? = null
     private var latestRoom: RoomState? = null
     private var endedConsumed = false
     private var explicitlyPaused = false
-    private var retryGeneration = 0L
-    private var retryRequest: Cancelable? = null
-    private var reportReconciliationGeneration = 0L
-    private var reportReconciliationRequest: Cancelable? = null
+    private val sessionJob = SupervisorJob(requireNotNull(parentScope.coroutineContext[Job]))
+    private val scope = CoroutineScope(parentScope.coroutineContext + sessionJob + mutationContext.dispatcher)
+    private var retryJob: Job? = null
+    private var reportReconciliationJob: Job? = null
     private var foregroundReady = true
-    @Volatile private var requestedLifecycleToken = 0L
-    private var directLifecycleToken = 0L
     private var closed = false
     private val playbackListener: (PlaybackState) -> Unit = { snapshot ->
-        dispatcher.execute { onPlaybackState(snapshot) }
+        mutationContext.run { onPlaybackState(snapshot) }
     }
+    private val statePublisher = statePublisherFactory?.invoke(object : PlayerStatePublisher.Listener {
+        override fun onSynchronizationChanged(synchronized: Boolean) {
+            mutationContext.run {
+                if (sessionJob.isActive && state.reportSynchronized != synchronized) {
+                    publish(state.copy(reportSynchronized = synchronized))
+                }
+            }
+        }
+
+        override fun onConflict() = mutationContext.run { reconcilePlayerReportConflict() }
+        override fun onRoomUnavailable() = Unit
+    })
 
     @Volatile
     var state: LocalPlaybackState = LocalPlaybackState()
@@ -35,122 +53,87 @@ class AuthoritativePlaybackCoordinator(
 
     init {
         playbackEngine.addListener(playbackListener)
-        // Temporary publisher compatibility listener; qmix#181 owns its removal.
-        statePublisher?.setListener(object : PlayerStatePublisher.Listener {
-            override fun onSynchronizationChanged(synchronized: Boolean) {
-                dispatcher.execute {
-                    if (!closed && state.reportSynchronized != synchronized) {
-                        publish(state.copy(reportSynchronized = synchronized))
-                    }
-                }
-            }
 
-            override fun onConflict() {
-                dispatcher.execute { reconcilePlayerReportConflict() }
-            }
-
-            override fun onRoomUnavailable() {
-                // The local player remains usable; the observable sync flag is already false.
-            }
-        })
     }
 
     fun onSynchronization(synchronization: RoomSyncState) {
-        dispatcher.execute {
-            if (closed || !foregroundReady) return@execute
-            val active = synchronization as? RoomSyncState.Active ?: return@execute
-            val room = active.room ?: return@execute
+        mutationContext.run {
+            if (closed || !foregroundReady) return@run
+            val active = synchronization as? RoomSyncState.Active ?: return@run
+            val room = active.room ?: return@run
             if (active.roomCode != roomCode || room.code != roomCode ||
                 active.freshness != Freshness.FRESH || active.connection != LiveConnection.CONNECTED
             ) {
-                return@execute
+                return@run
             }
             statePublisher?.reconciled(room.current?.trackId)
             applyAuthoritativeRoom(room)
         }
     }
 
-    fun onForegroundLost() {
-        val token = synchronized(this) { ++directLifecycleToken }
-        onForegroundLost(token)
+    fun onForegroundLost(): Unit = mutationContext.run {
+        if (!sessionJob.isActive || !foregroundReady) return@run
+        foregroundReady = false
+        retryJob?.cancel()
+        retryJob = null
+        invalidateReportReconciliation()
+        statePublisher?.setForeground(false)
+        playbackEngine.pause()
+        if (currentTrackId != null && state.status in setOf(
+                LocalPlaybackStatus.BUFFERING, LocalPlaybackStatus.PLAYING, LocalPlaybackStatus.PAUSED,
+            )
+        ) {
+            explicitlyPaused = true
+            publish(state.copy(status = LocalPlaybackStatus.PAUSED, isPlaying = false))
+        }
     }
 
-    fun onForegroundLost(token: Long) {
-        synchronized(this) {
-            if (token > requestedLifecycleToken) requestedLifecycleToken = token
+    /** The host delivers only its own successful, still-owned foreground GET. */
+    fun onForegroundReconciled(room: RoomState): Unit = mutationContext.run {
+        if (!sessionJob.isActive || foregroundReady || room.code != roomCode) return@run
+        latestRoom = room
+        val selectedId = room.current?.trackId
+        statePublisher?.setForeground(true)
+        statePublisher?.reconciled(selectedId)
+        if (selectedId == null) {
+            invalidateReportReconciliation()
+            retryJob?.cancel()
+            retryJob = null
+            currentTrackId = null
+            statePublisher?.selectTrack(null)
+            endedConsumed = false
+            explicitlyPaused = false
+            foregroundReady = true
+            publish(LocalPlaybackState(reportSynchronized = state.reportSynchronized))
+            return@run
         }
-        dispatcher.execute {
-            if (closed || token != requestedLifecycleToken || !foregroundReady) return@execute
-            foregroundReady = false
-            retryGeneration++
-            retryRequest?.cancel()
-            retryRequest = null
-            reportReconciliationGeneration++
-            reportReconciliationRequest?.cancel()
-            reportReconciliationRequest = null
-            statePublisher?.setForeground(false)
+        if (selectedId != currentTrackId) {
+            invalidateReportReconciliation()
+            retryJob?.cancel()
+            retryJob = null
+            currentTrackId = selectedId
+            endedConsumed = false
+            playbackEngine.prepare(PlaybackMedia(selectedId, streamUrl))
             playbackEngine.pause()
-            if (currentTrackId != null && state.status in setOf(
-                    LocalPlaybackStatus.BUFFERING,
-                    LocalPlaybackStatus.PLAYING,
-                    LocalPlaybackStatus.PAUSED,
-                )
-            ) {
-                explicitlyPaused = true
-                publish(state.copy(status = LocalPlaybackStatus.PAUSED, isPlaying = false))
-            }
-        }
-    }
-
-    fun onForegroundReconciled(room: RoomState) {
-        val token = synchronized(this) { directLifecycleToken }
-        onForegroundReconciled(token, room)
-    }
-
-    fun onForegroundReconciled(token: Long, room: RoomState) {
-        synchronized(this) {
-            if (token < requestedLifecycleToken) return
-            requestedLifecycleToken = token
-        }
-        dispatcher.execute {
-            if (closed || token != requestedLifecycleToken || foregroundReady || room.code != roomCode) return@execute
-            latestRoom = room
-            val selectedId = room.current?.trackId
-            statePublisher?.setForeground(true)
-            statePublisher?.reconciled(selectedId)
-            if (selectedId == null) {
-                currentTrackId = null
-                endedConsumed = false
-                explicitlyPaused = false
-                foregroundReady = true
-                publish(LocalPlaybackState(reportSynchronized = state.reportSynchronized))
-                return@execute
-            }
-            if (selectedId != currentTrackId) {
-                retryGeneration++
-                currentTrackId = selectedId
-                endedConsumed = false
-                playbackEngine.prepare(PlaybackMedia(selectedId, streamUrl))
-                playbackEngine.pause()
-                publish(
-                    LocalPlaybackState(
-                        trackId = selectedId,
-                        status = LocalPlaybackStatus.PAUSED,
-                        reportSynchronized = state.reportSynchronized,
-                    ),
-                )
-            } else if (state.status in setOf(LocalPlaybackStatus.COMPLETED, LocalPlaybackStatus.ERROR)) {
-                foregroundReady = true
-                return@execute
-            } else if (playbackEngine.state.status in setOf(PlaybackStatus.ENDED, PlaybackStatus.ERROR)) {
-                foregroundReady = true
-                onPlaybackState(playbackEngine.state)
-                return@execute
-            } else {
-                publish(state.copy(status = LocalPlaybackStatus.PAUSED, isPlaying = false))
-            }
             explicitlyPaused = true
             foregroundReady = true
+            publish(LocalPlaybackState(
+                trackId = selectedId, status = LocalPlaybackStatus.PAUSED,
+                reportSynchronized = state.reportSynchronized,
+            ))
+        } else if (state.status in setOf(LocalPlaybackStatus.COMPLETED, LocalPlaybackStatus.ERROR)) {
+            foregroundReady = true
+            return@run
+        } else if (playbackEngine.state.status in setOf(PlaybackStatus.ENDED, PlaybackStatus.ERROR)) {
+            foregroundReady = true
+            onPlaybackState(playbackEngine.state)
+            return@run
+        } else {
+            explicitlyPaused = true
+            foregroundReady = true
+            publish(state.copy(status = LocalPlaybackStatus.PAUSED, isPlaying = false))
+        }
+        if (sessionJob.isActive && foregroundReady && currentTrackId == selectedId) {
             report(PlayerReportState.PAUSED, state.positionMs, immediate = true)
         }
     }
@@ -162,9 +145,8 @@ class AuthoritativePlaybackCoordinator(
             if (currentTrackId != null) {
                 invalidateReportReconciliation()
                 currentTrackId = null
-                retryGeneration++
-                retryRequest?.cancel()
-                retryRequest = null
+                retryJob?.cancel()
+                retryJob = null
                 statePublisher?.selectTrack(null)
                 if (state.status != LocalPlaybackStatus.COMPLETED) {
                     playbackEngine.pause()
@@ -175,9 +157,8 @@ class AuthoritativePlaybackCoordinator(
         }
         if (selectedId == currentTrackId) return
         invalidateReportReconciliation()
-        retryGeneration++
-        retryRequest?.cancel()
-        retryRequest = null
+        retryJob?.cancel()
+        retryJob = null
         currentTrackId = selectedId
         statePublisher?.selectTrack(selectedId)
         endedConsumed = false
@@ -193,16 +174,18 @@ class AuthoritativePlaybackCoordinator(
                 reportSynchronized = state.reportSynchronized,
             ),
         )
+        if (!sessionJob.isActive || !foregroundReady || currentTrackId != trackId || explicitlyPaused) return
         playbackEngine.prepare(PlaybackMedia(trackId, streamUrl))
+        if (!sessionJob.isActive || !foregroundReady || currentTrackId != trackId || explicitlyPaused) return
         playbackEngine.play()
     }
 
     fun pause() {
-        dispatcher.execute {
+        mutationContext.run {
             if (closed || !foregroundReady || currentTrackId == null || endedConsumed ||
                 state.status !in setOf(LocalPlaybackStatus.BUFFERING, LocalPlaybackStatus.PLAYING)
             ) {
-                return@execute
+                return@run
             }
             explicitlyPaused = true
             playbackEngine.pause()
@@ -212,11 +195,11 @@ class AuthoritativePlaybackCoordinator(
     }
 
     fun resume() {
-        dispatcher.execute {
+        mutationContext.run {
             if (closed || !foregroundReady || currentTrackId == null || endedConsumed || !explicitlyPaused ||
                 state.status != LocalPlaybackStatus.PAUSED
             ) {
-                return@execute
+                return@run
             }
             explicitlyPaused = false
             publish(state.copy(status = LocalPlaybackStatus.BUFFERING, isPlaying = false))
@@ -226,8 +209,8 @@ class AuthoritativePlaybackCoordinator(
     }
 
     fun togglePlayPause() {
-        dispatcher.execute {
-            if (closed || !foregroundReady || currentTrackId == null || endedConsumed) return@execute
+        mutationContext.run {
+            if (closed || !foregroundReady || currentTrackId == null || endedConsumed) return@run
             when (state.status) {
                 LocalPlaybackStatus.BUFFERING,
                 LocalPlaybackStatus.PLAYING,
@@ -252,7 +235,7 @@ class AuthoritativePlaybackCoordinator(
     }
 
     fun seekBy(offsetMs: Long) {
-        dispatcher.execute {
+        mutationContext.run {
             val snapshot = state
             val duration = snapshot.durationMs
             if (closed || !foregroundReady || currentTrackId == null || endedConsumed ||
@@ -263,7 +246,7 @@ class AuthoritativePlaybackCoordinator(
                     LocalPlaybackStatus.PAUSED,
                 )
             ) {
-                return@execute
+                return@run
             }
             val position = snapshot.positionMs.coerceIn(0, duration)
             val target = if (offsetMs >= 0) {
@@ -288,39 +271,38 @@ class AuthoritativePlaybackCoordinator(
         }
     }
 
-    fun retryCurrent() {
-        dispatcher.execute {
-            val expectedTrackId = currentTrackId
-            if (closed || !foregroundReady || state.status != LocalPlaybackStatus.ERROR || expectedTrackId == null || retryRequest != null) {
-                return@execute
-            }
-            val token = ++retryGeneration
-            val request = reconciler.fetch(roomCode) { result ->
-                dispatcher.execute { completeRetry(token, expectedTrackId, result) }
-            }
-            if (closed || token != retryGeneration) {
-                request.cancel()
+    fun retryCurrent(): Unit = mutationContext.run {
+        val expectedTrackId = currentTrackId
+        if (!sessionJob.isActive || !foregroundReady || state.status != LocalPlaybackStatus.ERROR ||
+            expectedTrackId == null || retryJob?.isActive == true
+        ) return@run
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val result = fetchAuthoritativeRoom()
+            coroutineContext.ensureActive()
+            if (!foregroundReady || currentTrackId != expectedTrackId) return@launch
+            retryJob = null
+            val room = (result as? RoomFetchResult.Success)?.room ?: return@launch
+            if (room.code != roomCode) return@launch
+            latestRoom = room
+            val authoritativeTrackId = room.current?.trackId
+            if (authoritativeTrackId == expectedTrackId) {
+                explicitlyPaused = false
+                endedConsumed = false
+                prepareAndPlay(expectedTrackId)
             } else {
-                retryRequest = request
+                applyAuthoritativeRoom(room)
             }
         }
+        retryJob = job
+        job.start()
     }
 
-    private fun completeRetry(token: Long, expectedTrackId: String, result: RoomFetchResult) {
-        if (closed || token != retryGeneration) return
-        retryGeneration++
-        retryRequest = null
-        val room = (result as? RoomFetchResult.Success)?.room ?: return
-        if (room.code != roomCode) return
-        latestRoom = room
-        val authoritativeTrackId = room.current?.trackId
-        if (authoritativeTrackId == expectedTrackId && currentTrackId == expectedTrackId) {
-            explicitlyPaused = false
-            endedConsumed = false
-            prepareAndPlay(expectedTrackId)
-        } else {
-            applyAuthoritativeRoom(room)
-        }
+    private suspend fun fetchAuthoritativeRoom(): RoomFetchResult = try {
+        reconciler(roomCode)
+    } catch (canceled: CancellationException) {
+        throw canceled
+    } catch (_: Exception) {
+        RoomFetchResult.Failure
     }
 
     private fun onPlaybackState(snapshot: PlaybackState) {
@@ -373,31 +355,25 @@ class AuthoritativePlaybackCoordinator(
     }
 
     private fun invalidateReportReconciliation() {
-        reportReconciliationGeneration++
-        reportReconciliationRequest?.cancel()
-        reportReconciliationRequest = null
+        reportReconciliationJob?.cancel()
+        reportReconciliationJob = null
     }
 
     private fun reconcilePlayerReportConflict() {
         val expectedTrackId = currentTrackId ?: return
-        if (closed || !foregroundReady || reportReconciliationRequest != null) return
-        val token = ++reportReconciliationGeneration
-        val request = reconciler.fetch(roomCode) { result ->
-            dispatcher.execute {
-                if (closed || token != reportReconciliationGeneration) return@execute
-                reportReconciliationGeneration++
-                reportReconciliationRequest = null
-                val room = (result as? RoomFetchResult.Success)?.room ?: return@execute
-                if (room.code != roomCode || currentTrackId != expectedTrackId) return@execute
-                statePublisher?.reconciled(room.current?.trackId)
-                applyAuthoritativeRoom(room)
-            }
+        if (!sessionJob.isActive || !foregroundReady || reportReconciliationJob?.isActive == true) return
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val result = fetchAuthoritativeRoom()
+            coroutineContext.ensureActive()
+            if (!foregroundReady || currentTrackId != expectedTrackId) return@launch
+            reportReconciliationJob = null
+            val room = (result as? RoomFetchResult.Success)?.room ?: return@launch
+            if (room.code != roomCode) return@launch
+            statePublisher?.reconciled(room.current?.trackId)
+            applyAuthoritativeRoom(room)
         }
-        if (closed || token != reportReconciliationGeneration) {
-            request.cancel()
-        } else {
-            reportReconciliationRequest = request
-        }
+        reportReconciliationJob = job
+        job.start()
     }
 
     private fun PlaybackState.toLocal(status: LocalPlaybackStatus) = LocalPlaybackState(
@@ -416,20 +392,15 @@ class AuthoritativePlaybackCoordinator(
         observer(next)
     }
 
-    override fun close() {
-        dispatcher.execute {
-            if (closed) return@execute
-            closed = true
-            retryGeneration++
-            retryRequest?.cancel()
-            retryRequest = null
-            reportReconciliationGeneration++
-            reportReconciliationRequest?.cancel()
-            reportReconciliationRequest = null
-            statePublisher?.close()
-            playbackEngine.removeListener(playbackListener)
-            playbackEngine.pause()
-        }
+    override fun close(): Unit = mutationContext.run {
+        if (closed) return@run
+        closed = true
+        sessionJob.cancel()
+        retryJob = null
+        reportReconciliationJob = null
+        statePublisher?.close()
+        playbackEngine.removeListener(playbackListener)
+        playbackEngine.pause()
     }
 }
 

@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -22,7 +23,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
-class RoomStateFetcherTest {
+class RoomFetchSuspendTest {
     private val adapterScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var server: MockWebServer
 
@@ -45,11 +46,11 @@ class RoomStateFetcherTest {
         server.enqueue(MockResponse().setResponseCode(404))
         val results = mutableListOf<RoomFetchResult>()
         val firstCompleted = CountDownLatch(1)
-        client.roomFetcher(adapterScope).fetch("ABCD") { results += it; firstCompleted.countDown() }
+        adapterScope.launch { results += client.fetchRoom("ABCD"); firstCompleted.countDown() }
         assertTrue(firstCompleted.await(5, TimeUnit.SECONDS))
 
         val secondCompleted = CountDownLatch(1)
-        client.roomFetcher(adapterScope).fetch("MISSING") { results += it; secondCompleted.countDown() }
+        adapterScope.launch { results += client.fetchRoom("MISSING"); secondCompleted.countDown() }
         assertTrue(secondCompleted.await(5, TimeUnit.SECONDS))
 
         assertTrue(results.contains(RoomFetchResult.Success(RoomState("ABCD", null, emptyList()))))
@@ -67,7 +68,7 @@ class RoomStateFetcherTest {
         val completed = CountDownLatch(1)
         var result: RoomFetchResult? = null
 
-        client.roomFetcher(adapterScope).fetch("ABCD") { result = it; completed.countDown() }
+        adapterScope.launch { result = client.fetchRoom("ABCD"); completed.countDown() }
 
         assertTrue(completed.await(5, TimeUnit.SECONDS))
         assertEquals(RoomFetchResult.Failure, result)
@@ -79,7 +80,7 @@ class RoomStateFetcherTest {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
         val completed = CountDownLatch(1)
 
-        val request = client.roomFetcher(adapterScope).fetch("ABCD") { completed.countDown() }
+        val request = adapterScope.launch { client.fetchRoom("ABCD"); completed.countDown() }
         assertEquals("/rooms/ABCD", server.takeRequest(5, TimeUnit.SECONDS)?.path)
         request.cancel()
 

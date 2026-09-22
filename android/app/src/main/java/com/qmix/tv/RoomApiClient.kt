@@ -4,9 +4,7 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
@@ -117,17 +115,6 @@ class RoomApiClient(
     } catch (failure: RoomApiException) {
         if (failure.userMessage == UserMessage.ROOM_NOT_FOUND) RoomFetchResult.Missing else RoomFetchResult.Failure
     }
-
-    /** Temporary repository/foreground adapter; removal owner qmix#181 (repository migrates in #179). */
-    fun roomFetcher(parentScope: CoroutineScope): RoomStateFetcher = RoomStateFetcher { code, callback ->
-        val job = parentScope.launch {
-            val result = fetchRoom(code)
-            coroutineContext.ensureActive()
-            callback(result)
-        }
-        Cancelable { job.cancel() }
-    }
-
 
     suspend fun reportPlayer(
         roomCode: String,

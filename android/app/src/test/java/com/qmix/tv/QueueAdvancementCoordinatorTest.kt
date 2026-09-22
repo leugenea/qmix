@@ -359,7 +359,7 @@ class QueueAdvancementCoordinatorTest {
         }
     }
 
-    private class RecordingReconciler : RoomStateFetcher {
+    private class RecordingReconciler : TestRoomFetcher {
         var calls = 0
         var failure: Throwable? = null
         val canceled = mutableListOf<Boolean>()
@@ -382,7 +382,7 @@ class QueueAdvancementCoordinatorTest {
 
     private class SynchronousReconciler(
         private val result: RoomFetchResult,
-    ) : RoomStateFetcher {
+    ) : TestRoomFetcher {
         var returnedRequestCanceled = false
             private set
 

@@ -4,8 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.ArrayDeque
-import java.util.concurrent.Executor
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,8 +32,9 @@ class AuthoritativePlaybackCoordinatorTest {
         roomCode = "ABCD",
         streamUrl = "https://qmix.test/rooms/ABCD/current/stream",
         playbackEngine = engine,
-        reconciler = reconciler,
-        dispatcher = Executor { it.run() },
+        reconciler = reconciler::fetchRoom,
+        parentScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+        mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
         advanceAfterEnded = { trackId -> advances += trackId; true },
     )
 
@@ -50,6 +50,83 @@ class AuthoritativePlaybackCoordinatorTest {
             engine.prepared,
         )
         assertEquals(1, engine.playCount)
+    }
+
+    @Test
+    fun buffering_observer_losing_foreground_cannot_start_audio() {
+        lateinit var guarded: AuthoritativePlaybackCoordinator
+        guarded = AuthoritativePlaybackCoordinator(
+            "ABCD", "https://qmix.test/stream", engine, reconciler::fetchRoom,
+            CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            QueueMutationContext(Dispatchers.Unconfined) { true }, { true },
+            observer = { if (it.status == LocalPlaybackStatus.BUFFERING) guarded.onForegroundLost() },
+        )
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        assertTrue(engine.prepared.isEmpty())
+        assertEquals(0, engine.playCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, guarded.state.status)
+        guarded.resume()
+        assertEquals(0, engine.playCount)
+        guarded.close()
+    }
+
+    @Test
+    fun buffering_observer_closing_session_cannot_prepare_or_play() {
+        lateinit var guarded: AuthoritativePlaybackCoordinator
+        guarded = AuthoritativePlaybackCoordinator(
+            "ABCD", "https://qmix.test/stream", engine, reconciler::fetchRoom,
+            CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            QueueMutationContext(Dispatchers.Unconfined) { true }, { true },
+            observer = { if (it.status == LocalPlaybackStatus.BUFFERING) guarded.close() },
+        )
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        assertTrue(engine.prepared.isEmpty())
+        assertEquals(0, engine.playCount)
+        guarded.onSynchronization(fresh(room(currentId = "two")))
+        assertTrue(engine.prepared.isEmpty())
+    }
+
+    @Test
+    fun engine_prepare_observer_losing_foreground_cannot_play() {
+        lateinit var guarded: AuthoritativePlaybackCoordinator
+        var bufferingEvents = 0
+        guarded = AuthoritativePlaybackCoordinator(
+            "ABCD", "https://qmix.test/stream", engine, reconciler::fetchRoom,
+            CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            QueueMutationContext(Dispatchers.Unconfined) { true }, { true },
+            observer = {
+                if (it.status == LocalPlaybackStatus.BUFFERING && ++bufferingEvents == 2) guarded.onForegroundLost()
+            },
+        )
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        assertEquals(2, bufferingEvents)
+        assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(0, engine.playCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, guarded.state.status)
+        guarded.close()
+    }
+
+    @Test
+    fun changed_track_recovery_observer_losing_foreground_cannot_reopen_controls() {
+        lateinit var guarded: AuthoritativePlaybackCoordinator
+        guarded = AuthoritativePlaybackCoordinator(
+            "ABCD", "https://qmix.test/stream", engine, reconciler::fetchRoom,
+            CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            QueueMutationContext(Dispatchers.Unconfined) { true }, { true },
+            observer = {
+                if (it.trackId == "two" && it.status == LocalPlaybackStatus.PAUSED) guarded.onForegroundLost()
+            },
+        )
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        guarded.onForegroundLost()
+        guarded.onForegroundReconciled(room(currentId = "two"))
+        guarded.resume()
+        guarded.togglePlayPause()
+        guarded.onSynchronization(fresh(room(currentId = "three")))
+        assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals(1, engine.playCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, guarded.state.status)
+        guarded.close()
     }
 
     @Test
@@ -71,29 +148,39 @@ class AuthoritativePlaybackCoordinatorTest {
     }
 
     @Test
-    fun later_foreground_loss_invalidates_an_already_queued_reconciliation() {
-        val queued = QueuedExecutor()
+    fun later_foreground_loss_invalidates_an_already_queued_reconciliation() = runTest {
+        val queued = StandardTestDispatcher(testScheduler)
+        val reportClient = CoordinatorReportClient()
+        val mutation = QueueMutationContext(queued) { true }
         val guarded = AuthoritativePlaybackCoordinator(
             roomCode = "ABCD",
             streamUrl = "https://qmix.test/rooms/ABCD/current/stream",
             playbackEngine = engine,
-            reconciler = reconciler,
-            dispatcher = queued,
+            reconciler = reconciler::fetchRoom,
+            parentScope = backgroundScope,
+            mutationContext = mutation,
             advanceAfterEnded = { true },
+            statePublisherFactory = { listener -> playerPublisher(
+                reportClient, backgroundScope, QueueMutationContext(UnconfinedTestDispatcher(testScheduler)) { true }, listener,
+            ) },
         )
         guarded.onSynchronization(fresh(room(currentId = "one")))
-        queued.runAll()
-        guarded.onForegroundLost(1)
-        queued.runAll()
-
-        guarded.onForegroundReconciled(2, room(currentId = "two"))
-        guarded.onForegroundLost(3)
-        queued.runAll()
-        guarded.onSynchronization(fresh(room(currentId = "three")))
-        queued.runAll()
-
+        runCurrent()
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        runCurrent()
+        reportClient.complete(PlayerReportResult.CONFLICT)
+        runCurrent()
+        assertEquals(1, reconciler.calls.size)
+        // The completed GET is queued on StandardTestDispatcher, not yet applied.
+        reconciler.complete(RoomFetchResult.Success(room(currentId = "two")))
+        assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
+        guarded.onForegroundLost()
+        runCurrent()
+        assertTrue(reconciler.calls.single().canceled)
         assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
         assertEquals(1, engine.playCount)
+        assertEquals(LocalPlaybackStatus.PAUSED, guarded.state.status)
+        guarded.close()
     }
 
     @Test
@@ -605,15 +692,15 @@ class AuthoritativePlaybackCoordinatorTest {
     @Test
     fun media3_transitions_publish_immediately_and_self_refresh_never_restarts_or_seeks_media() {
         val reportClient = CoordinatorReportClient()
-        val reporting = playerPublisher(reportClient)
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             roomCode = "ABCD",
             streamUrl = "https://qmix.test/rooms/ABCD/current/stream",
             playbackEngine = engine,
-            reconciler = reconciler,
-            dispatcher = Executor { it.run() },
+            reconciler = reconciler::fetchRoom,
+            parentScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+        mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
             advanceAfterEnded = { true },
-            statePublisher = reporting,
+            statePublisherFactory = { listener -> playerPublisher(reportClient, listener = listener) },
         )
         val selected = fresh(room(currentId = "one"))
         reportingCoordinator.onSynchronization(selected)
@@ -671,19 +758,17 @@ class AuthoritativePlaybackCoordinatorTest {
     @Test
     fun non_playing_buffering_stops_periodic_progress_until_fresh_playing_state() = runTest {
         val reportClient = CoordinatorReportClient()
-        val reporting = playerPublisher(
-            reportClient,
-            backgroundScope,
-            QueueMutationContext(UnconfinedTestDispatcher(testScheduler)) { true },
-        )
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             "ABCD",
             "https://qmix.test/rooms/ABCD/current/stream",
             engine,
-            reconciler,
-            Executor { it.run() },
+            reconciler::fetchRoom,
+            CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            QueueMutationContext(Dispatchers.Unconfined) { true },
             { true },
-            statePublisher = reporting,
+            statePublisherFactory = { listener -> playerPublisher(
+                reportClient, backgroundScope, QueueMutationContext(UnconfinedTestDispatcher(testScheduler)) { true }, listener,
+            ) },
         )
         reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
         engine.emit(
@@ -737,15 +822,15 @@ class AuthoritativePlaybackCoordinatorTest {
     @Test
     fun foreground_loss_cancels_retry_report_reconciliation_and_publishing_then_rebinds_all() {
         val reportClient = CoordinatorReportClient()
-        val reporting = playerPublisher(reportClient)
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             "ABCD",
             "https://qmix.test/rooms/ABCD/current/stream",
             engine,
-            reconciler,
-            Executor { it.run() },
+            reconciler::fetchRoom,
+            CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            QueueMutationContext(Dispatchers.Unconfined) { true },
             { true },
-            statePublisher = reporting,
+            statePublisherFactory = { listener -> playerPublisher(reportClient, listener = listener) },
         )
         reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
@@ -771,15 +856,15 @@ class AuthoritativePlaybackCoordinatorTest {
     @Test
     fun report_conflict_fetches_authority_once_without_feedback_on_the_same_track() {
         val reportClient = CoordinatorReportClient()
-        val reporting = playerPublisher(reportClient)
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             "ABCD",
             "https://qmix.test/rooms/ABCD/current/stream",
             engine,
-            reconciler,
-            Executor { it.run() },
+            reconciler::fetchRoom,
+            CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            QueueMutationContext(Dispatchers.Unconfined) { true },
             { true },
-            statePublisher = reporting,
+            statePublisherFactory = { listener -> playerPublisher(reportClient, listener = listener) },
         )
         reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
@@ -797,15 +882,15 @@ class AuthoritativePlaybackCoordinatorTest {
     @Test
     fun stale_conflict_reconciliation_cannot_replace_or_disable_reporting_for_a_newer_track() {
         val reportClient = CoordinatorReportClient()
-        val reporting = playerPublisher(reportClient)
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             "ABCD",
             "https://qmix.test/rooms/ABCD/current/stream",
             engine,
-            reconciler,
-            Executor { it.run() },
+            reconciler::fetchRoom,
+            CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            QueueMutationContext(Dispatchers.Unconfined) { true },
             { true },
-            statePublisher = reporting,
+            statePublisherFactory = { listener -> playerPublisher(reportClient, listener = listener) },
         )
         reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
@@ -821,6 +906,62 @@ class AuthoritativePlaybackCoordinatorTest {
         assertEquals(listOf("one", "two", "two"), reportClient.calls.map { it.report.trackId })
         assertEquals(PlayerReportState.PAUSED, reportClient.calls.last().report.state)
         assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
+        reportingCoordinator.close()
+    }
+
+    @Test
+    fun conflict_fetch_suspended_during_replacement_cannot_reselect_old_track() = runTest {
+        val reportClient = CoordinatorReportClient()
+        val roomFetch = CompletableDeferred<RoomFetchResult>()
+        var canceled = false
+        val dispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler)
+        val mutation = QueueMutationContext(dispatcher) { true }
+        val guarded = AuthoritativePlaybackCoordinator(
+            roomCode = "ABCD", streamUrl = "https://qmix.test/stream", playbackEngine = engine,
+            reconciler = { try { roomFetch.await() } finally { canceled = true } },
+            parentScope = backgroundScope, mutationContext = mutation,
+            advanceAfterEnded = { true },
+            statePublisherFactory = { listener -> playerPublisher(reportClient, backgroundScope, mutation, listener) },
+        )
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        runCurrent()
+        reportClient.complete(PlayerReportResult.CONFLICT)
+        runCurrent()
+        guarded.onSynchronization(fresh(room(currentId = "two")))
+        runCurrent()
+        assertTrue(canceled)
+        roomFetch.complete(RoomFetchResult.Success(room(currentId = "one")))
+        runCurrent()
+        assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
+        assertEquals("two", guarded.state.trackId)
+        guarded.close()
+    }
+
+    @Test
+    fun failed_report_does_not_block_local_controls_or_audio() {
+        val reportClient = CoordinatorReportClient()
+        val reportingCoordinator = AuthoritativePlaybackCoordinator(
+            roomCode = "ABCD", streamUrl = "https://qmix.test/stream", playbackEngine = engine,
+            reconciler = reconciler::fetchRoom,
+            parentScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            advanceAfterEnded = { true },
+            statePublisherFactory = { listener -> playerPublisher(reportClient, listener = listener) },
+        )
+        reportingCoordinator.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true,
+            positionMs = 5_000, durationMs = 30_000, isSeekable = true))
+        reportClient.complete(PlayerReportResult.FAILED)
+        assertFalse(reportingCoordinator.state.reportSynchronized)
+        reportingCoordinator.pause()
+        assertEquals(LocalPlaybackStatus.PAUSED, reportingCoordinator.state.status)
+        reportingCoordinator.seekBy(10_000)
+        assertEquals(listOf(15_000L), engine.seeks)
+        reportingCoordinator.resume()
+        assertEquals(2, engine.playCount)
+        reportClient.complete(PlayerReportResult.ACCEPTED)
+        assertTrue(reportingCoordinator.state.reportSynchronized)
         reportingCoordinator.close()
     }
 
@@ -841,12 +982,18 @@ class AuthoritativePlaybackCoordinatorTest {
         reportClient: CoordinatorReportClient,
         parentScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
         mutationContext: QueueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+        listener: PlayerStatePublisher.Listener = object : PlayerStatePublisher.Listener {
+            override fun onSynchronizationChanged(synchronized: Boolean) = Unit
+            override fun onConflict() = Unit
+            override fun onRoomUnavailable() = Unit
+        },
     ) = PlayerStatePublisher(
         roomCode = "ABCD",
         hostToken = "host-secret",
         reportPlayer = reportClient::reportPlayer,
         parentScope = parentScope,
         mutationContext = mutationContext,
+        listener = listener,
     )
 
     private class CoordinatorReportClient {
@@ -907,19 +1054,7 @@ class AuthoritativePlaybackCoordinatorTest {
         }
     }
 
-    private class QueuedExecutor : Executor {
-        private val commands = ArrayDeque<Runnable>()
-
-        override fun execute(command: Runnable) {
-            commands.addLast(command)
-        }
-
-        fun runAll() {
-            while (commands.isNotEmpty()) commands.removeFirst().run()
-        }
-    }
-
-    private class RecordingRoomFetcher : RoomStateFetcher {
+    private class RecordingRoomFetcher : TestRoomFetcher {
         data class Call(
             val roomCode: String,
             val callback: (RoomFetchResult) -> Unit,

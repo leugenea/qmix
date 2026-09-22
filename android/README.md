@@ -131,7 +131,7 @@ reporting, and foreground loss cancels reporting together with playback work.
 Final completion reports `ended`, allowing the server to clear only the matching
 current; a concurrent Next either follows that clear or makes the old report
 conflict, so it cannot clear the replacement. Final completion is local, while ENDED with queued work
-requests one coordinated advance. Retry Current performs a token-bound GET and
+requests one coordinated advance. Retry Current performs an owned child-Job GET and
 re-prepares only when the authoritative current still matches. Stale snapshots,
 reconnecting snapshots, replaced-media callbacks, and stale retry callbacks
 cannot drive playback. The live-room UI presents the server-selected track

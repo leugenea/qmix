@@ -5,9 +5,11 @@ import java.util.concurrent.Executor
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -87,7 +89,7 @@ class HostSessionController(
     private val roomRepositoryFactory: ((String) -> RoomRepository)? = null,
     private val roomCollectionScope: CoroutineScope? = null,
     private val roomCollectionContext: CoroutineContext = EmptyCoroutineContext,
-    private val foregroundReconcilerFactory: ((String) -> RoomStateFetcher)? = null,
+    private val foregroundReconcilerFactory: ((String) -> suspend (String) -> RoomFetchResult)? = null,
     private val queueMutationContext: QueueMutationContext? = null,
     private val queueCoordinatorFactory: QueueCoordinatorFactory? = null,
     private val playbackCoordinatorFactory: PlaybackCoordinatorFactory? = null,
@@ -114,8 +116,7 @@ class HostSessionController(
     private var queueCoordinator: QueueAdvancementCoordinator? = null
     private var playbackCoordinator: AuthoritativePlaybackCoordinator? = null
     private var foreground = true
-    private var foregroundRecoveryGeneration = 0L
-    private var foregroundRecoveryRequest: Cancelable? = null
+    private var foregroundRecoveryJob: Job? = null
     private var httpAcknowledgementQuarantined = false
     private var createGeneration = 0L
     private var syncGeneration = 0L
@@ -459,7 +460,7 @@ class HostSessionController(
                     activeCoordinator = queueCoordinator
                 } else if (current.foregroundRecoveryPending && foreground &&
                     active?.freshness == Freshness.FRESH && active.room != null &&
-                    foregroundRecoveryRequest == null
+                    foregroundRecoveryJob == null
                 ) {
                     retryForegroundRecovery = true
                 }
@@ -507,17 +508,14 @@ class HostSessionController(
     private fun stopHostOnMutationContext(): Unit = synchronized(foregroundTransitionLock) {
         var queue: QueueAdvancementCoordinator? = null
         var playback: AuthoritativePlaybackCoordinator? = null
-        var request: Cancelable? = null
+        var recovery: Job? = null
         var collection: Job? = null
-        var lifecycleToken = 0L
         val changed = synchronized(this) {
             val current = state as? HostingState.LiveRoom ?: return
             if (!foreground) return
             foreground = false
-            foregroundRecoveryGeneration++
-            lifecycleToken = foregroundRecoveryGeneration
-            request = foregroundRecoveryRequest
-            foregroundRecoveryRequest = null
+            recovery = foregroundRecoveryJob
+            foregroundRecoveryJob = null
             collection = roomCollectionJob
             roomCollectionJob = null
             queue = queueCoordinator
@@ -525,10 +523,10 @@ class HostSessionController(
             publishLocked(current.copy(foregroundRecoveryPending = true, commandPending = false))
             true
         }
-        request?.cancel()
+        recovery?.cancel()
         cancelRoomCollectionAndJoin(collection)
         queue?.onForegroundLost()
-        playback?.onForegroundLost(lifecycleToken)
+        playback?.onForegroundLost()
         if (changed) drainNotifications()
     }
 
@@ -544,34 +542,44 @@ class HostSessionController(
     }
 
     private fun startForegroundRecovery() {
+        val scope = roomCollectionScope ?: return
         lateinit var code: String
-        lateinit var fetcher: RoomStateFetcher
-        var token = 0L
+        lateinit var fetch: suspend (String) -> RoomFetchResult
         var staleCollection: Job? = null
         synchronized(this) {
             val current = state as? HostingState.LiveRoom ?: return
-            if (!foreground || !current.foregroundRecoveryPending || foregroundRecoveryRequest != null) return
+            if (!foreground || !current.foregroundRecoveryPending || foregroundRecoveryJob != null) return
             val backend = activeBackendUrl ?: return
-            fetcher = foregroundReconcilerFactory?.invoke(backend) ?: return
+            fetch = foregroundReconcilerFactory?.invoke(backend) ?: return
             code = current.invite.code
-            token = ++foregroundRecoveryGeneration
             staleCollection = roomCollectionJob
             roomCollectionJob = null
         }
         cancelRoomCollectionAndJoin(staleCollection)
-        val request = fetcher.fetch(code) { result -> completeForegroundRecovery(token, code, result) }
+        lateinit var job: Job
+        job = scope.launch(checkNotNull(queueMutationContext).dispatcher, start = CoroutineStart.LAZY) {
+            val result = try {
+                fetch(code)
+            } catch (canceled: CancellationException) {
+                throw canceled
+            } catch (_: Exception) {
+                RoomFetchResult.Failure
+            }
+            coroutineContext.ensureActive()
+            completeForegroundRecoveryOnMutationContext(job, code, result)
+        }
         val cancel = synchronized(this) {
             val current = state as? HostingState.LiveRoom
-            if (!foreground || token != foregroundRecoveryGeneration ||
-                current?.invite?.code != code || !current.foregroundRecoveryPending
+            if (!foreground || current?.invite?.code != code || !current.foregroundRecoveryPending ||
+                foregroundRecoveryJob != null
             ) {
                 true
             } else {
-                foregroundRecoveryRequest = request
+                foregroundRecoveryJob = job
                 false
             }
         }
-        if (cancel) request.cancel()
+        if (cancel) job.cancel() else job.start()
     }
 
     private fun onQueueMutationContext(action: () -> Unit) {
@@ -579,10 +587,7 @@ class HostSessionController(
         if (context == null) action() else context.run(action)
     }
 
-    private fun completeForegroundRecovery(token: Long, code: String, result: RoomFetchResult) =
-        onQueueMutationContext { completeForegroundRecoveryOnMutationContext(token, code, result) }
-
-    private fun completeForegroundRecoveryOnMutationContext(token: Long, code: String, result: RoomFetchResult): Unit =
+    private fun completeForegroundRecoveryOnMutationContext(job: Job, code: String, result: RoomFetchResult): Unit =
         synchronized(foregroundTransitionLock) {
             var queue: QueueAdvancementCoordinator? = null
             var playback: AuthoritativePlaybackCoordinator? = null
@@ -595,9 +600,8 @@ class HostSessionController(
             var changed = false
             synchronized(this) {
                 val current = state as? HostingState.LiveRoom
-                if (!foreground || token != foregroundRecoveryGeneration || current?.invite?.code != code) return
-                foregroundRecoveryRequest = null
-                foregroundRecoveryGeneration++
+                if (!foreground || foregroundRecoveryJob !== job || current?.invite?.code != code) return
+                foregroundRecoveryJob = null
                 when (result) {
                     RoomFetchResult.Failure -> restartCollection = true
                     RoomFetchResult.Missing -> {
@@ -617,10 +621,7 @@ class HostSessionController(
                             publishLocked(
                                 current.copy(
                                     synchronization = RoomSyncState.Active(
-                                        code,
-                                        fresh,
-                                        Freshness.FRESH,
-                                        connection,
+                                        code, fresh, Freshness.FRESH, connection,
                                     ),
                                     foregroundRecoveryPending = false,
                                 ),
@@ -639,15 +640,13 @@ class HostSessionController(
             }
             room?.let { fresh ->
                 queue?.onForegroundReconciled(fresh)
-                playback?.onForegroundReconciled(token, fresh)
+                playback?.onForegroundReconciled(fresh)
             }
             if (changed) drainNotifications()
             if (repositoryFactory != null && backendUrl != null && invite != null) {
                 startRoomCollection(
-                    checkNotNull(repositoryFactory),
-                    checkNotNull(backendUrl),
-                    checkNotNull(invite),
-                    collectionGeneration,
+                    checkNotNull(repositoryFactory), checkNotNull(backendUrl),
+                    checkNotNull(invite), collectionGeneration,
                 )
             }
         }
@@ -733,13 +732,12 @@ class HostSessionController(
     fun endRoom() {
         var coordinator: QueueAdvancementCoordinator? = null
         var localPlayback: AuthoritativePlaybackCoordinator? = null
-        var recoveryRequest: Cancelable? = null
+        var recoveryJob: Job? = null
         val collection = synchronized(this) {
             createGeneration++
             syncGeneration++
-            foregroundRecoveryGeneration++
-            recoveryRequest = foregroundRecoveryRequest
-            foregroundRecoveryRequest = null
+            recoveryJob = foregroundRecoveryJob
+            foregroundRecoveryJob = null
             val owned = roomCollectionJob
             roomCollectionJob = null
             coordinator = queueCoordinator
@@ -754,7 +752,7 @@ class HostSessionController(
         }
         try {
             cancelRoomCollectionAndJoin(collection)
-            recoveryRequest?.cancel()
+            recoveryJob?.cancel()
         } finally {
             try {
                 coordinator?.close()
