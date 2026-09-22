@@ -279,7 +279,6 @@ class LocalizationContractTest {
                 "rooms" to 1,
                 "current" to 1,
                 "stream" to 1,
-                "qmix-room-sync" to 1,
             )
             addInventory(
                 "QMixApplication.kt",

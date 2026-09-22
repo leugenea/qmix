@@ -274,14 +274,7 @@ class RoomApiClientInstrumentationTest {
     }
 
     private fun report(playerReport: PlayerReport): PlayerReportResult {
-        val completed = CountDownLatch(1)
-        var result: PlayerReportResult? = null
-        api.playerReporter(adapterScope).reportPlayer("AB CD", "host-secret", playerReport) {
-            result = it
-            completed.countDown()
-        }
-        assertTrue(completed.await(5, TimeUnit.SECONDS))
-        return requireNotNull(result)
+        return runBlocking { api.reportPlayer("AB CD", "host-secret", playerReport) }
     }
 
     private fun assertInvalid(block: () -> Unit) {

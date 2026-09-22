@@ -58,15 +58,6 @@ data class PlayerReport(
 
 enum class PlayerReportResult { ACCEPTED, FORBIDDEN, MISSING, CONFLICT, FAILED }
 
-fun interface PlayerReportClient {
-    fun reportPlayer(
-        roomCode: String,
-        hostToken: String,
-        report: PlayerReport,
-        callback: (PlayerReportResult) -> Unit,
-    ): Cancelable
-}
-
 /** Credentials returned once by POST /rooms. Never include [hostToken] in presentation objects. */
 data class RoomCredentials(
     val code: String,
@@ -137,15 +128,6 @@ class RoomApiClient(
         Cancelable { job.cancel() }
     }
 
-    /** Temporary player-report adapter; removal owner qmix#180. */
-    fun playerReporter(parentScope: CoroutineScope): PlayerReportClient = PlayerReportClient { code, token, report, callback ->
-        val job = parentScope.launch {
-            val result = reportPlayer(code, token, report)
-            coroutineContext.ensureActive()
-            callback(result)
-        }
-        Cancelable { job.cancel() }
-    }
 
     suspend fun reportPlayer(
         roomCode: String,

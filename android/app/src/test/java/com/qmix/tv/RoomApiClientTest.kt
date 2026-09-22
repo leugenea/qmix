@@ -2,10 +2,6 @@ package com.qmix.tv
 
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -26,7 +22,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class RoomApiClientTest {
-    private val adapterScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var server: MockWebServer
     private lateinit var api: RoomApiClient
 
@@ -39,7 +34,6 @@ class RoomApiClientTest {
 
     @After
     fun tearDown() {
-        adapterScope.cancel()
         server.shutdown()
     }
 
@@ -108,16 +102,12 @@ class RoomApiClientTest {
     @Test
     fun reportPlayer_patches_exact_bounded_schema_with_host_token() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
-        var result: PlayerReportResult? = null
-        val completed = CountDownLatch(1)
-
-        api.playerReporter(adapterScope).reportPlayer(
-            "AB CD",
-            "host-secret",
-            PlayerReport("track-1", PlayerReportState.PAUSED, 17),
-        ) {
-            result = it
-            completed.countDown()
+        val result = runBlocking {
+            api.reportPlayer(
+                "AB CD",
+                "host-secret",
+                PlayerReport("track-1", PlayerReportState.PAUSED, 17),
+            )
         }
 
         val request = server.takeRequest(5, TimeUnit.SECONDS)!!
@@ -128,25 +118,16 @@ class RoomApiClientTest {
             """{"track_id":"track-1","state":"paused","pos_sec":17}""",
             request.body.readUtf8(),
         )
-        assertTrue(completed.await(5, TimeUnit.SECONDS))
         assertEquals(PlayerReportResult.ACCEPTED, result)
     }
 
     /** qmix#178: moving construction into a coroutine must not expose credential-bearing exceptions. */
     @Test
-    fun report_adapter_classifies_invalid_header_without_uncaught_failure() {
-        val delivered = java.util.concurrent.CompletableFuture<PlayerReportResult>()
-        val uncaught = java.util.concurrent.CompletableFuture<Throwable>()
-        val owned = CoroutineScope(adapterScope.coroutineContext +
-            kotlinx.coroutines.CoroutineExceptionHandler { _, failure -> uncaught.complete(failure) })
-
-        api.playerReporter(owned).reportPlayer(
-            "ABCD", "\n", PlayerReport("one", PlayerReportState.PAUSED, 0), delivered::complete,
+    fun report_suspend_api_classifies_invalid_header_without_throwing() {
+        assertEquals(
+            PlayerReportResult.FAILED,
+            runBlocking { api.reportPlayer("ABCD", "\n", PlayerReport("one", PlayerReportState.PAUSED, 0)) },
         )
-
-        java.util.concurrent.CompletableFuture.anyOf(delivered, uncaught).get(5, TimeUnit.SECONDS)
-        assertFalse("Request construction must not escape the owned adapter", uncaught.isDone)
-        assertEquals(PlayerReportResult.FAILED, delivered.get(5, TimeUnit.SECONDS))
         assertEquals(0, server.requestCount)
     }
 
@@ -161,19 +142,13 @@ class RoomApiClientTest {
             503 to PlayerReportResult.FAILED,
         ).forEach { (status, expected) ->
             server.enqueue(MockResponse().setResponseCode(status))
-            val completed = CountDownLatch(1)
-            var actual: PlayerReportResult? = null
-
-            api.playerReporter(adapterScope).reportPlayer(
-                "ABCD",
-                "host-secret",
-                PlayerReport("track", PlayerReportState.ERROR, 2),
-            ) {
-                actual = it
-                completed.countDown()
+            val actual = runBlocking {
+                api.reportPlayer(
+                    "ABCD",
+                    "host-secret",
+                    PlayerReport("track", PlayerReportState.ERROR, 2),
+                )
             }
-
-            assertTrue(completed.await(5, TimeUnit.SECONDS))
             assertEquals(expected, actual)
         }
         assertEquals(6, server.requestCount)

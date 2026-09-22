@@ -22,22 +22,20 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class CoroutineRoomApiTest {
     @Test
-    fun callback_adapters_cancel_with_their_parent_and_deliver_no_failure_callback() = runBlocking {
+    fun room_fetch_callback_adapter_cancels_with_its_parent_and_delivers_no_failure_callback() = runBlocking {
         val parent = kotlinx.coroutines.Job(coroutineContext[kotlinx.coroutines.Job])
         val owned = kotlinx.coroutines.CoroutineScope(coroutineContext + parent + Dispatchers.Default)
-        val canceled = CountDownLatch(2)
+        val canceled = CountDownLatch(1)
         val callbacks = java.util.concurrent.atomic.AtomicInteger()
         val client = OkHttpClient.Builder().eventListener(object : EventListener() {
             override fun canceled(call: Call) { canceled.countDown() }
         }).build()
         try {
             MockWebServer().use { server ->
-                repeat(2) { server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE)) }
+                server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE))
                 val api = RoomApiClient(client, server.url("/").toString())
                 api.roomFetcher(owned).fetch("ABCD") { callbacks.incrementAndGet() }
-                api.playerReporter(owned).reportPlayer("ABCD", "fixture",
-                    PlayerReport("one", PlayerReportState.PAUSED, 0)) { callbacks.incrementAndGet() }
-                repeat(2) { org.junit.Assert.assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+                org.junit.Assert.assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
                 parent.cancel()
                 parent.join()
                 assertTrue(canceled.await(5, TimeUnit.SECONDS))

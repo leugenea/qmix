@@ -1,8 +1,8 @@
-# Coroutine ownership and queue advancement (qmix#178)
+# Coroutine ownership, queue advancement, and player reporting (qmix#178, qmix#180)
 
-This is the first bounded migration under #139. Repository SSE, player-state
-publishing, authoritative playback, retained event history, and UI collection
-keep their existing contracts and remain owned by the later issues.
+This records the bounded coroutine migrations under #139. Repository SSE,
+authoritative playback, retained event history, and UI collection keep their
+existing contracts and remain owned by the later issues.
 
 `QMixApplication` owns the process parent scope. Each queue coordinator receives
 that scope and a `QueueMutationContext`, creates a child session Job, and cancels
@@ -15,6 +15,15 @@ Host foreground stop/start and recovery delivery enter that context before
 acquiring the legacy foreground transition lock, preventing a lock inversion
 with main-thread observers.
 Tests inject their own scope and dispatcher, including `StandardTestDispatcher`.
+
+`PlayerStatePublisher` also owns a child session Job of the application scope and
+uses the same injected mutation context for synchronous playback calls and
+coroutine resumptions. One report Job and one periodic Job replace the manual
+scheduler, serial executor, cancellation handles, and numeric generation. Track
+replacement, foreground loss, close, and parent cancellation structurally cancel
+owned work. Selection identity plus active Job identity prevents late completion
+from mutating a replacement. Virtual-time tests cover the 7.5-second cadence,
+coalescing, transition priority, reconciliation, and cancellation boundaries.
 
 Unresolved command state is separate from the coroutine operation. The owned
 lazy Job is registered before pending notifications, so a reentrant foreground
@@ -37,18 +46,16 @@ The only production compatibility surfaces are:
 
 | Surface | Removal owner |
 | --- | --- |
-| `RoomApiClient.playerReporter(parentScope)` | #180 |
 | `RoomApiClient.roomFetcher(parentScope)` | #181; repository usage leaves in #179 |
 | `RoomApiClient.createRoomBlocking()` | #182 |
 
 Player-report request construction failures are classified as `FAILED` before
 any request is sent, so invalid server-issued header data cannot escape the
-owned adapter as an uncaught exception containing credentials.
+suspend API as an exception containing credentials.
 
-Both callback adapters require an explicit parent scope and return cancellation
-handles for their child Jobs. Cancellation suppresses callbacks instead of
-converting cancellation into a transport failure. Callback-controlled test
-fixtures adapt existing assertions to suspend fakes; they are not shipped.
+The remaining room-fetch callback adapter requires an explicit parent scope and
+returns a cancellation handle for its child Job. Cancellation suppresses its
+callback instead of converting cancellation into a transport failure.
 
 Coroutines core, Android, and test are pinned together at 1.9.0, the version
 already present in the reviewed strict dependency-verification metadata and

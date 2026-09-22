@@ -5,9 +5,18 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.ArrayDeque
-import java.util.PriorityQueue
 import java.util.concurrent.Executor
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class AuthoritativePlaybackCoordinatorTest {
     @Test
     fun stream_url_appends_encoded_room_path_to_backend_base() {
@@ -596,13 +605,7 @@ class AuthoritativePlaybackCoordinatorTest {
     @Test
     fun media3_transitions_publish_immediately_and_self_refresh_never_restarts_or_seeks_media() {
         val reportClient = CoordinatorReportClient()
-        val reporting = PlayerStatePublisher(
-            "ABCD",
-            "host-secret",
-            reportClient,
-            RoomSyncScheduler { _, _ -> Cancelable { } },
-            Executor { it.run() },
-        )
+        val reporting = playerPublisher(reportClient)
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             roomCode = "ABCD",
             streamUrl = "https://qmix.test/rooms/ABCD/current/stream",
@@ -662,18 +665,16 @@ class AuthoritativePlaybackCoordinatorTest {
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED, positionMs = 30_000))
         assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
         assertEquals(1, reportClient.calls.count { it.report.trackId == "one" && it.report.state == PlayerReportState.ENDED })
+        reportingCoordinator.close()
     }
 
     @Test
-    fun non_playing_buffering_stops_periodic_progress_until_fresh_playing_state() {
+    fun non_playing_buffering_stops_periodic_progress_until_fresh_playing_state() = runTest {
         val reportClient = CoordinatorReportClient()
-        val scheduler = CoordinatorVirtualScheduler()
-        val reporting = PlayerStatePublisher(
-            "ABCD",
-            "host-secret",
+        val reporting = playerPublisher(
             reportClient,
-            scheduler,
-            Executor { it.run() },
+            backgroundScope,
+            QueueMutationContext(UnconfinedTestDispatcher(testScheduler)) { true },
         )
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             "ABCD",
@@ -705,14 +706,16 @@ class AuthoritativePlaybackCoordinatorTest {
                 isSeekable = true,
             ),
         )
-        scheduler.advanceBy(15_000)
+        advanceTimeBy(15_000)
+        runCurrent()
 
         assertEquals(listOf(5), reportClient.calls.map { it.report.positionSeconds })
 
         reportingCoordinator.seekBy(1_000)
         assertEquals(listOf(5, 7), reportClient.calls.map { it.report.positionSeconds })
         reportClient.complete(PlayerReportResult.ACCEPTED)
-        scheduler.advanceBy(7_500)
+        advanceTimeBy(7_500)
+        runCurrent()
         assertEquals(listOf(5, 7), reportClient.calls.map { it.report.positionSeconds })
 
         engine.emit(
@@ -724,21 +727,17 @@ class AuthoritativePlaybackCoordinatorTest {
             ),
         )
         reportClient.complete(PlayerReportResult.ACCEPTED)
-        scheduler.advanceBy(7_500)
+        advanceTimeBy(7_500)
+        runCurrent()
 
         assertEquals(listOf(5, 7, 8, 8), reportClient.calls.map { it.report.positionSeconds })
+        reportingCoordinator.close()
     }
 
     @Test
     fun foreground_loss_cancels_retry_report_reconciliation_and_publishing_then_rebinds_all() {
         val reportClient = CoordinatorReportClient()
-        val reporting = PlayerStatePublisher(
-            "ABCD",
-            "host-secret",
-            reportClient,
-            RoomSyncScheduler { _, _ -> Cancelable { } },
-            Executor { it.run() },
-        )
+        val reporting = playerPublisher(reportClient)
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             "ABCD",
             "https://qmix.test/rooms/ABCD/current/stream",
@@ -766,18 +765,13 @@ class AuthoritativePlaybackCoordinatorTest {
         assertTrue(reconciler.calls.all { it.canceled })
         reportingCoordinator.onForegroundReconciled(room(currentId = "one"))
         assertEquals(LocalPlaybackStatus.ERROR, reportingCoordinator.state.status)
+        reportingCoordinator.close()
     }
 
     @Test
     fun report_conflict_fetches_authority_once_without_feedback_on_the_same_track() {
         val reportClient = CoordinatorReportClient()
-        val reporting = PlayerStatePublisher(
-            "ABCD",
-            "host-secret",
-            reportClient,
-            RoomSyncScheduler { _, _ -> Cancelable { } },
-            Executor { it.run() },
-        )
+        val reporting = playerPublisher(reportClient)
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             "ABCD",
             "https://qmix.test/rooms/ABCD/current/stream",
@@ -797,18 +791,13 @@ class AuthoritativePlaybackCoordinatorTest {
         assertEquals(1, engine.prepared.size)
         assertTrue(engine.seeks.isEmpty())
         assertFalse(reportingCoordinator.state.reportSynchronized)
+        reportingCoordinator.close()
     }
 
     @Test
     fun stale_conflict_reconciliation_cannot_replace_or_disable_reporting_for_a_newer_track() {
         val reportClient = CoordinatorReportClient()
-        val reporting = PlayerStatePublisher(
-            "ABCD",
-            "host-secret",
-            reportClient,
-            RoomSyncScheduler { _, _ -> Cancelable { } },
-            Executor { it.run() },
-        )
+        val reporting = playerPublisher(reportClient)
         val reportingCoordinator = AuthoritativePlaybackCoordinator(
             "ABCD",
             "https://qmix.test/rooms/ABCD/current/stream",
@@ -832,6 +821,7 @@ class AuthoritativePlaybackCoordinatorTest {
         assertEquals(listOf("one", "two", "two"), reportClient.calls.map { it.report.trackId })
         assertEquals(PlayerReportState.PAUSED, reportClient.calls.last().report.state)
         assertEquals(listOf("one", "two"), engine.prepared.map(PlaybackMedia::trackId))
+        reportingCoordinator.close()
     }
 
     private fun fresh(room: RoomState) = RoomSyncState.Active(
@@ -847,28 +837,43 @@ class AuthoritativePlaybackCoordinatorTest {
         queue = queueIds.map { QueuedTrack(it, "https://example/$it", it, "Artist", 60, "fixture") },
     )
 
-    private class CoordinatorReportClient : PlayerReportClient {
+    private fun playerPublisher(
+        reportClient: CoordinatorReportClient,
+        parentScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+        mutationContext: QueueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+    ) = PlayerStatePublisher(
+        roomCode = "ABCD",
+        hostToken = "host-secret",
+        reportPlayer = reportClient::reportPlayer,
+        parentScope = parentScope,
+        mutationContext = mutationContext,
+    )
+
+    private class CoordinatorReportClient {
         data class Call(
             val report: PlayerReport,
-            val callback: (PlayerReportResult) -> Unit,
+            val result: CompletableDeferred<PlayerReportResult> = CompletableDeferred(),
             var canceled: Boolean = false,
         )
 
         val calls = mutableListOf<Call>()
 
-        override fun reportPlayer(
+        suspend fun reportPlayer(
             roomCode: String,
             hostToken: String,
             report: PlayerReport,
-            callback: (PlayerReportResult) -> Unit,
-        ): Cancelable {
-            val call = Call(report, callback)
+        ): PlayerReportResult {
+            val call = Call(report)
             calls += call
-            return Cancelable { call.canceled = true }
+            return try {
+                call.result.await()
+            } finally {
+                if (!call.result.isCompleted) call.canceled = true
+            }
         }
 
         fun complete(result: PlayerReportResult, index: Int = calls.lastIndex) {
-            calls[index].callback(result)
+            calls[index].result.complete(result)
         }
     }
 
@@ -899,37 +904,6 @@ class AuthoritativePlaybackCoordinatorTest {
         private fun publish(next: PlaybackState) {
             state = next
             listeners.toList().forEach { it(next) }
-        }
-    }
-
-    private class CoordinatorVirtualScheduler : RoomSyncScheduler {
-        private data class Task(
-            val at: Long,
-            val order: Long,
-            val action: () -> Unit,
-            var canceled: Boolean = false,
-        ) : Comparable<Task> {
-            override fun compareTo(other: Task): Int = compareValuesBy(this, other, Task::at, Task::order)
-        }
-
-        private val tasks = PriorityQueue<Task>()
-        private var now = 0L
-        private var order = 0L
-
-        override fun schedule(delayMillis: Long, action: () -> Unit): Cancelable {
-            val task = Task(now + delayMillis, order++, action)
-            tasks += task
-            return Cancelable { task.canceled = true }
-        }
-
-        fun advanceBy(millis: Long) {
-            val target = now + millis
-            while (tasks.peek()?.at?.let { it <= target } == true) {
-                val task = tasks.remove()
-                now = task.at
-                if (!task.canceled) task.action()
-            }
-            now = target
         }
     }
 
