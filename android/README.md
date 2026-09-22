@@ -85,19 +85,24 @@ parameters are never emitted.
 
 ## Room synchronization
 
-The application-scoped host session owns one `SequentialRoomRepository` while a
-room is active. The repository treats SSE as invalidation only: the four room
-change events trigger a complete `GET /rooms/{code}` reconciliation, while
-heartbeats and payload data are ignored. REST reads are serialized and
-coalesced, so an event received during a request causes exactly one follow-up
-request without allowing older responses to overwrite newer state.
+The application-scoped host session owns exactly one cold
+`SequentialRoomRepository.observe(roomCode)` collection while a room is active.
+Each collection owns its GET, SSE, reconnect-delay, and fixed 15-second refresh
+children; stopping, replacing, or ending the session cancels and joins that work
+before another collection can start. The Flow is non-conflated, so every
+completed refresh remains observable even when its value equals the previous
+snapshot.
 
-The SSE connection reconnects with capped exponential backoff and jitter. A
-fixed 15-second REST refresh repairs silently missed events. REST retains the
-15-second call timeout; the long-lived SSE client disables call and read
-timeouts and owns reconnect policy explicitly. A 404 ends synchronization,
-network failures preserve the last room state as stale, and ending the host
-session cancels the request, event stream, retry, and periodic timers.
+The repository treats SSE as invalidation only: the four room change events
+trigger a complete `GET /rooms/{code}` reconciliation, while heartbeats and
+payload data are ignored. REST reads are serialized and coalesced, so an event
+received during a request causes exactly one follow-up request without allowing
+older responses to overwrite newer state. The SSE connection reconnects with
+capped exponential backoff and jitter. REST retains the 15-second call timeout;
+the long-lived SSE client disables call and read timeouts and owns reconnect
+policy explicitly. A 404 ends synchronization, network failures preserve the
+last room state as stale, and cancellation closes the request, event stream,
+retry, and periodic work.
 
 `HostSessionController` publishes each current-session repository update as a
 `HostingState.LiveRoom`, carrying the safe guest invitation, synchronization

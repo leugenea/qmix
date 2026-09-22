@@ -11,6 +11,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flow
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -76,7 +80,8 @@ class HostSessionControllerTest {
         val controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
-            roomRepositoryFactory = { repository }, foregroundReconcilerFactory = { reconciler },
+            roomRepositoryFactory = { repository }, roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined, foregroundReconcilerFactory = { reconciler },
             queueMutationContext = mutation,
             queueCoordinatorFactory = { _, credentials, observer ->
                 QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
@@ -559,6 +564,8 @@ class HostSessionControllerTest {
             initialGuestOrigin = "https://guest.example",
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
             queueCoordinatorFactory = { _, credentials, observer ->
                 testQueueCoordinator(
         queueScope,
@@ -604,6 +611,8 @@ class HostSessionControllerTest {
             initialGuestOrigin = "https://guest.example",
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
             foregroundReconcilerFactory = { reconciler },
             queueCoordinatorFactory = { _, credentials, observer ->
                 testQueueCoordinator(queueScope, credentials.code, credentials.hostToken, command, reconciler, observer)
@@ -671,6 +680,8 @@ class HostSessionControllerTest {
             initialGuestOrigin = "https://guest.example",
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
             queueCoordinatorFactory = { _, credentials, observer ->
                 testQueueCoordinator(queueScope, credentials.code, credentials.hostToken, command, reconciler, observer)
             },
@@ -801,6 +812,8 @@ class HostSessionControllerTest {
         val controller = HostSessionController(
             OkHttpClient(),
             roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
         )
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val invited = CountDownLatch(1)
@@ -827,6 +840,168 @@ class HostSessionControllerTest {
         )
         repository.publish(synchronized.copy(freshness = Freshness.STALE))
         assertEquals(null, controller.roomSyncState)
+    }
+
+    /** qmix#179: one active host session owns exactly one Flow collector. */
+    @Test
+    fun room_sync_flow_is_collected_exactly_once_and_cancelled_on_end() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val repository = FlowRoomRepository()
+        val controller = HostSessionController(
+            OkHttpClient(),
+            initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+            roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+        )
+
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        repository.publish(
+            RoomSyncState.Active(
+                "ABCD",
+                RoomState("ABCD", null, emptyList()),
+                Freshness.FRESH,
+                LiveConnection.CONNECTED,
+            ),
+        )
+
+        assertEquals(1, repository.collections)
+        assertEquals(1, repository.activeCollectors)
+        controller.endRoom()
+        assertEquals(1, repository.cancellations)
+        assertEquals(0, repository.activeCollectors)
+    }
+
+    @Test
+    fun ending_room_waits_for_owned_collection_cleanup() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val repository = BlockingCleanupRoomRepository()
+        val controller = HostSessionController(
+            OkHttpClient(),
+            initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+            roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+        )
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        assertTrue(repository.collectionStarted.await(5, TimeUnit.SECONDS))
+        val endReturned = CountDownLatch(1)
+        val endThread = Executors.newSingleThreadExecutor()
+
+        try {
+            endThread.execute {
+                controller.endRoom()
+                endReturned.countDown()
+            }
+            assertTrue(repository.cleanupStarted.await(5, TimeUnit.SECONDS))
+            assertEquals(1L, endReturned.count)
+
+            repository.allowCleanup.countDown()
+            assertTrue(endReturned.await(5, TimeUnit.SECONDS))
+            assertTrue(repository.cleanupCompleted.get())
+            assertTrue(controller.state is HostingState.Setup)
+        } finally {
+            repository.allowCleanup.countDown()
+            endThread.shutdownNow()
+        }
+    }
+
+    @Test
+    fun concurrent_stop_calls_wait_for_the_same_collection_cleanup() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val repository = BlockingCleanupRoomRepository()
+        val controller = HostSessionController(
+            OkHttpClient(),
+            initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+            roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+        )
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+        assertTrue(repository.collectionStarted.await(5, TimeUnit.SECONDS))
+        val begin = CountDownLatch(1)
+        val returned = CountDownLatch(2)
+        val callers = Executors.newFixedThreadPool(2)
+
+        try {
+            repeat(2) {
+                callers.execute {
+                    begin.await()
+                    controller.onHostStopped()
+                    returned.countDown()
+                }
+            }
+            begin.countDown()
+            assertTrue(repository.cleanupStarted.await(5, TimeUnit.SECONDS))
+            assertEquals(2L, returned.count)
+
+            repository.allowCleanup.countDown()
+            assertTrue(returned.await(5, TimeUnit.SECONDS))
+            assertTrue(repository.cleanupCompleted.get())
+        } finally {
+            repository.allowCleanup.countDown()
+            callers.shutdownNow()
+        }
+    }
+
+    @Test
+    fun room_collection_can_end_the_session_reentrantly_without_deadlock() {
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        val repository = FlowRoomRepository()
+        val controller = HostSessionController(
+            OkHttpClient(),
+            initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            executor = Executor { it.run() },
+            roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+        )
+        val ended = CountDownLatch(1)
+        controller.observe { state ->
+            val sync = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
+            if (sync?.freshness == Freshness.FRESH) {
+                controller.endRoom()
+                ended.countDown()
+            }
+        }
+        assertTrue(controller.createRoom())
+        controller.enterRoom()
+
+        repository.publish(
+            RoomSyncState.Active(
+                "ABCD",
+                RoomState("ABCD", null, emptyList()),
+                Freshness.FRESH,
+                LiveConnection.CONNECTED,
+            ),
+        )
+
+        assertTrue(ended.await(5, TimeUnit.SECONDS))
+        assertEquals(1, repository.cancellations)
+        assertEquals(0, repository.activeCollectors)
+        assertTrue(controller.state is HostingState.Setup)
     }
 
     private fun awaitBlockedOnController(thread: Thread) {
@@ -946,23 +1121,70 @@ class HostSessionControllerTest {
         }
     }
 
-    private class RecordingRoomRepository : RoomRepository {
-        var observedCode: String? = null
-        var closed = false
-        private val observers = mutableListOf<(RoomSyncState) -> Unit>()
+    private class BlockingCleanupRoomRepository : RoomRepository {
+        val collectionStarted = CountDownLatch(1)
+        val cleanupStarted = CountDownLatch(1)
+        val allowCleanup = CountDownLatch(1)
+        val cleanupCompleted = AtomicBoolean(false)
 
-        override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
-            observedCode = roomCode
-            observers += onUpdate
-            return AutoCloseable { closed = true }
+        override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+            assertEquals("ABCD", roomCode)
+            collectionStarted.countDown()
+            try {
+                Channel<RoomSyncState>(Channel.UNLIMITED).receive()
+            } finally {
+                cleanupStarted.countDown()
+                check(allowCleanup.await(5, TimeUnit.SECONDS)) { "Collection cleanup gate timed out" }
+                cleanupCompleted.set(true)
+            }
+        }
+    }
+
+    private class FlowRoomRepository : RoomRepository {
+        private val states = MutableSharedFlow<RoomSyncState>(extraBufferCapacity = 8)
+        var collections = 0
+        var cancellations = 0
+        var activeCollectors = 0
+
+        override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+            assertEquals("ABCD", roomCode)
+            collections++
+            activeCollectors++
+            try {
+                states.collect { emit(it) }
+            } finally {
+                activeCollectors--
+                cancellations++
+            }
         }
 
         fun publish(state: RoomSyncState) {
-            observers.lastOrNull()?.invoke(state)
+            assertTrue(states.tryEmit(state))
+        }
+    }
+
+    private class RecordingRoomRepository : RoomRepository {
+        var observedCode: String? = null
+        var closed = false
+        private val collectors = mutableListOf<Channel<RoomSyncState>>()
+
+        override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+            observedCode = roomCode
+            val states = Channel<RoomSyncState>(Channel.UNLIMITED)
+            collectors += states
+            try {
+                for (state in states) emit(state)
+            } finally {
+                closed = true
+            }
+        }
+
+        fun publish(state: RoomSyncState) {
+            collectors.lastOrNull()?.trySend(state)
         }
 
         fun publishAt(index: Int, state: RoomSyncState) {
-            observers[index](state)
+            collectors[index].trySend(state)
         }
     }
 }

@@ -1,5 +1,14 @@
 package com.qmix.tv
 
+import java.util.ArrayDeque
+import java.util.concurrent.Executor
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -13,12 +22,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.util.ArrayDeque
-import java.util.concurrent.Executor
-
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class LiveRoomPresentationTest {
+    private val roomScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private lateinit var server: MockWebServer
 
     @Before
@@ -29,6 +36,7 @@ class LiveRoomPresentationTest {
 
     @After
     fun tearDown() {
+        roomScope.cancel()
         server.shutdown()
     }
 
@@ -229,6 +237,8 @@ class LiveRoomPresentationTest {
             initialGuestOrigin = "https://guest.example",
             executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
+            roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
         )
         controller.observe { state ->
             val active = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
@@ -252,6 +262,8 @@ class LiveRoomPresentationTest {
             initialGuestOrigin = "https://guest.example",
             executor = Executor { it.run() },
             roomRepositoryFactory = { repositories.removeFirst() },
+            roomCollectionScope = roomScope,
+            roomCollectionContext = Dispatchers.Unconfined,
         )
 
         createAndEnter(controller)
@@ -303,6 +315,8 @@ class LiveRoomPresentationTest {
         initialGuestOrigin = "https://guest.example",
         executor = Executor { it.run() },
         roomRepositoryFactory = { repository },
+        roomCollectionScope = roomScope,
+        roomCollectionContext = Dispatchers.Unconfined,
         primaryActionHandler = onStartOrNext,
         observerFailureHandler = observerFailureHandler,
     )
@@ -324,32 +338,38 @@ class LiveRoomPresentationTest {
 
     private class RecordingRoomRepository : RoomRepository {
         var closed = false
-        private var observer: ((RoomSyncState) -> Unit)? = null
+        private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
-        override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
+        override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
             assertEquals("ABCD", roomCode)
-            observer = onUpdate
-            return AutoCloseable { closed = true }
+            try {
+                for (state in states) emit(state)
+            } finally {
+                closed = true
+            }
         }
 
         fun publish(state: RoomSyncState) {
-            observer?.invoke(state)
+            states.trySend(state)
         }
     }
 
     private class SynchronousRoomRepository : RoomRepository {
         var closed = false
 
-        override fun observe(roomCode: String, onUpdate: (RoomSyncState) -> Unit): AutoCloseable {
-            onUpdate(
-                RoomSyncState.Active(
-                    roomCode,
-                    RoomState(roomCode, null, emptyList()),
-                    Freshness.FRESH,
-                    LiveConnection.CONNECTED,
-                ),
-            )
-            return AutoCloseable { closed = true }
+        override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+            try {
+                emit(
+                    RoomSyncState.Active(
+                        roomCode,
+                        RoomState(roomCode, null, emptyList()),
+                        Freshness.FRESH,
+                        LiveConnection.CONNECTED,
+                    ),
+                )
+            } finally {
+                closed = true
+            }
         }
     }
 }

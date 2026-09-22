@@ -2,6 +2,15 @@ package com.qmix.tv
 
 import java.util.ArrayDeque
 import java.util.concurrent.Executor
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 
 sealed interface HostingState {
@@ -76,6 +85,8 @@ class HostSessionController(
         EndpointSettings(initialBackendUrl, initialGuestOrigin),
     ),
     private val roomRepositoryFactory: ((String) -> RoomRepository)? = null,
+    private val roomCollectionScope: CoroutineScope? = null,
+    private val roomCollectionContext: CoroutineContext = EmptyCoroutineContext,
     private val foregroundReconcilerFactory: ((String) -> RoomStateFetcher)? = null,
     private val queueMutationContext: QueueMutationContext? = null,
     private val queueCoordinatorFactory: QueueCoordinatorFactory? = null,
@@ -98,7 +109,8 @@ class HostSessionController(
     private var setupState = HostingState.Setup(initialSettings.backendUrl, initialSettings.guestOrigin)
     private var credentials: RoomCredentials? = null
     private var activeBackendUrl: String? = null
-    private var roomSubscription: AutoCloseable? = null
+    private var roomCollectionJob: Job? = null
+    private val roomCollectionMarker = ThreadLocal<Boolean>()
     private var queueCoordinator: QueueAdvancementCoordinator? = null
     private var playbackCoordinator: AuthoritativePlaybackCoordinator? = null
     private var foreground = true
@@ -107,7 +119,6 @@ class HostSessionController(
     private var httpAcknowledgementQuarantined = false
     private var createGeneration = 0L
     private var syncGeneration = 0L
-    private var roomObservationGeneration = 0L
 
     @Volatile
     var state: HostingState = setupState
@@ -263,7 +274,7 @@ class HostSessionController(
         var localPlaybackFactory: PlaybackCoordinatorFactory? = null
         var backendUrl: String? = null
         var sessionCredentials: RoomCredentials? = null
-        var previousSubscription: AutoCloseable? = null
+        var previousCollection: Job? = null
         var previousCoordinator: QueueAdvancementCoordinator? = null
         var previousPlayback: AuthoritativePlaybackCoordinator? = null
         var generation = 0L
@@ -287,17 +298,17 @@ class HostSessionController(
             backendUrl = activeBackendUrl
             sessionCredentials = credentials
             if (repositoryFactory != null && backendUrl != null) {
-                previousSubscription = roomSubscription
+                previousCollection = roomCollectionJob
                 previousCoordinator = queueCoordinator
                 previousPlayback = playbackCoordinator
-                roomSubscription = null
+                roomCollectionJob = null
                 queueCoordinator = null
                 playbackCoordinator = null
                 generation = ++syncGeneration
             }
         }
         drainNotifications()
-        previousSubscription?.close()
+        cancelRoomCollectionAndJoin(previousCollection)
         previousCoordinator?.close()
         previousPlayback?.close()
 
@@ -384,60 +395,90 @@ class HostSessionController(
             return
         }
 
-        val observationGeneration = synchronized(this) { ++roomObservationGeneration }
-        startRoomObservation(activeRepositoryFactory, activeUrl, invite, observationGeneration)
+        startRoomCollection(activeRepositoryFactory, activeUrl, invite, generation)
     }
 
-    private fun startRoomObservation(
+    private fun startRoomCollection(
         repositoryFactory: (String) -> RoomRepository,
         backendUrl: String,
         invite: GuestInvite,
         generation: Long,
     ) {
-        val subscription = repositoryFactory(backendUrl).observe(invite.code) { syncState ->
-            var authoritativeRoom: RoomState? = null
-            var activeCoordinator: QueueAdvancementCoordinator? = null
-            var activePlayback: AuthoritativePlaybackCoordinator? = null
-            var retryForegroundRecovery = false
-            val changed = synchronized(this@HostSessionController) {
-                val current = state as? HostingState.LiveRoom
-                if (generation != roomObservationGeneration || current?.invite?.code != syncState.roomCode) {
-                    false
-                } else {
-                    publishLocked(current.copy(synchronization = retainLastKnownRoom(current.synchronization, syncState)))
-                    activePlayback = playbackCoordinator
-                    val active = syncState as? RoomSyncState.Active
-                    if (!current.foregroundRecoveryPending &&
-                        active?.freshness == Freshness.FRESH && active.room != null
-                    ) {
-                        authoritativeRoom = active.room
-                        activeCoordinator = queueCoordinator
-                    } else if (current.foregroundRecoveryPending && foreground &&
-                        active?.freshness == Freshness.FRESH && active.room != null &&
-                        foregroundRecoveryRequest == null
-                    ) {
-                        retryForegroundRecovery = true
-                    }
-                    true
+        val scope = checkNotNull(roomCollectionScope) {
+            "Room collection requires an explicit parent scope"
+        }
+        val repository = repositoryFactory(backendUrl)
+        lateinit var job: Job
+        job = scope.launch(
+            roomCollectionContext + roomCollectionMarker.asContextElement(true),
+            start = CoroutineStart.LAZY,
+        ) {
+            try {
+                repository.observe(invite.code).collect { syncState ->
+                    publishRoomSynchronization(generation, syncState)
+                }
+            } finally {
+                synchronized(this@HostSessionController) {
+                    if (roomCollectionJob === job) roomCollectionJob = null
                 }
             }
-            if (changed) {
-                activePlayback?.onSynchronization(syncState)
-                activeCoordinator?.onAuthoritativeRoom(checkNotNull(authoritativeRoom))
-                drainNotifications()
-                if (retryForegroundRecovery) startForegroundRecovery()
-            }
         }
-        val closeImmediately = synchronized(this) {
+        val cancelImmediately = synchronized(this) {
             val current = state as? HostingState.LiveRoom
-            if (generation == roomObservationGeneration && current?.invite?.code == invite.code) {
-                roomSubscription = subscription
+            if (generation == syncGeneration && current?.invite?.code == invite.code && foreground) {
+                roomCollectionJob = job
                 false
             } else {
                 true
             }
         }
-        if (closeImmediately) subscription.close()
+        if (cancelImmediately) {
+            cancelRoomCollectionAndJoin(job)
+        } else {
+            job.start()
+        }
+    }
+
+    private fun publishRoomSynchronization(generation: Long, syncState: RoomSyncState) {
+        var authoritativeRoom: RoomState? = null
+        var activeCoordinator: QueueAdvancementCoordinator? = null
+        var activePlayback: AuthoritativePlaybackCoordinator? = null
+        var retryForegroundRecovery = false
+        val changed = synchronized(this) {
+            val current = state as? HostingState.LiveRoom
+            if (generation != syncGeneration || current?.invite?.code != syncState.roomCode) {
+                false
+            } else {
+                publishLocked(current.copy(synchronization = retainLastKnownRoom(current.synchronization, syncState)))
+                activePlayback = playbackCoordinator
+                val active = syncState as? RoomSyncState.Active
+                if (!current.foregroundRecoveryPending &&
+                    active?.freshness == Freshness.FRESH && active.room != null
+                ) {
+                    authoritativeRoom = active.room
+                    activeCoordinator = queueCoordinator
+                } else if (current.foregroundRecoveryPending && foreground &&
+                    active?.freshness == Freshness.FRESH && active.room != null &&
+                    foregroundRecoveryRequest == null
+                ) {
+                    retryForegroundRecovery = true
+                }
+                true
+            }
+        }
+        if (changed) {
+            activePlayback?.onSynchronization(syncState)
+            activeCoordinator?.onAuthoritativeRoom(checkNotNull(authoritativeRoom))
+            drainNotifications()
+            if (retryForegroundRecovery) startForegroundRecovery()
+        }
+    }
+
+    private fun cancelRoomCollectionAndJoin(job: Job?) {
+        if (job == null) return
+        job.cancel()
+        if (roomCollectionMarker.get() == true) return
+        runBlocking { job.join() }
     }
 
     private fun retainLastKnownRoom(previous: RoomSyncState, update: RoomSyncState): RoomSyncState {
@@ -467,7 +508,7 @@ class HostSessionController(
         var queue: QueueAdvancementCoordinator? = null
         var playback: AuthoritativePlaybackCoordinator? = null
         var request: Cancelable? = null
-        var subscription: AutoCloseable? = null
+        var collection: Job? = null
         var lifecycleToken = 0L
         val changed = synchronized(this) {
             val current = state as? HostingState.LiveRoom ?: return
@@ -475,18 +516,17 @@ class HostSessionController(
             foreground = false
             foregroundRecoveryGeneration++
             lifecycleToken = foregroundRecoveryGeneration
-            roomObservationGeneration++
             request = foregroundRecoveryRequest
             foregroundRecoveryRequest = null
-            subscription = roomSubscription
-            roomSubscription = null
+            collection = roomCollectionJob
+            roomCollectionJob = null
             queue = queueCoordinator
             playback = playbackCoordinator
             publishLocked(current.copy(foregroundRecoveryPending = true, commandPending = false))
             true
         }
         request?.cancel()
-        subscription?.close()
+        cancelRoomCollectionAndJoin(collection)
         queue?.onForegroundLost()
         playback?.onForegroundLost(lifecycleToken)
         if (changed) drainNotifications()
@@ -507,7 +547,7 @@ class HostSessionController(
         lateinit var code: String
         lateinit var fetcher: RoomStateFetcher
         var token = 0L
-        var staleObservation: AutoCloseable? = null
+        var staleCollection: Job? = null
         synchronized(this) {
             val current = state as? HostingState.LiveRoom ?: return
             if (!foreground || !current.foregroundRecoveryPending || foregroundRecoveryRequest != null) return
@@ -515,11 +555,10 @@ class HostSessionController(
             fetcher = foregroundReconcilerFactory?.invoke(backend) ?: return
             code = current.invite.code
             token = ++foregroundRecoveryGeneration
-            roomObservationGeneration++
-            staleObservation = roomSubscription
-            roomSubscription = null
+            staleCollection = roomCollectionJob
+            roomCollectionJob = null
         }
-        staleObservation?.close()
+        cancelRoomCollectionAndJoin(staleCollection)
         val request = fetcher.fetch(code) { result -> completeForegroundRecovery(token, code, result) }
         val cancel = synchronized(this) {
             val current = state as? HostingState.LiveRoom
@@ -551,8 +590,8 @@ class HostSessionController(
             var repositoryFactory: ((String) -> RoomRepository)? = null
             var backendUrl: String? = null
             var invite: GuestInvite? = null
-            var observationGeneration = 0L
-            var restartObservation = false
+            var collectionGeneration = 0L
+            var restartCollection = false
             var changed = false
             synchronized(this) {
                 val current = state as? HostingState.LiveRoom
@@ -560,7 +599,7 @@ class HostSessionController(
                 foregroundRecoveryRequest = null
                 foregroundRecoveryGeneration++
                 when (result) {
-                    RoomFetchResult.Failure -> restartObservation = true
+                    RoomFetchResult.Failure -> restartCollection = true
                     RoomFetchResult.Missing -> {
                         publishLocked(current.copy(synchronization = RoomSyncState.Missing(code)))
                         changed = true
@@ -568,7 +607,7 @@ class HostSessionController(
                     is RoomFetchResult.Success -> {
                         val fresh = result.room
                         if (fresh.code != code) {
-                            restartObservation = true
+                            restartCollection = true
                         } else {
                             room = fresh
                             queue = queueCoordinator
@@ -587,15 +626,15 @@ class HostSessionController(
                                 ),
                             )
                             changed = true
-                            restartObservation = true
+                            restartCollection = true
                         }
                     }
                 }
-                if (restartObservation) {
+                if (restartCollection) {
                     repositoryFactory = roomRepositoryFactory
                     backendUrl = activeBackendUrl
                     invite = current.invite
-                    observationGeneration = ++roomObservationGeneration
+                    collectionGeneration = syncGeneration
                 }
             }
             room?.let { fresh ->
@@ -604,11 +643,11 @@ class HostSessionController(
             }
             if (changed) drainNotifications()
             if (repositoryFactory != null && backendUrl != null && invite != null) {
-                startRoomObservation(
+                startRoomCollection(
                     checkNotNull(repositoryFactory),
                     checkNotNull(backendUrl),
                     checkNotNull(invite),
-                    observationGeneration,
+                    collectionGeneration,
                 )
             }
         }
@@ -695,15 +734,14 @@ class HostSessionController(
         var coordinator: QueueAdvancementCoordinator? = null
         var localPlayback: AuthoritativePlaybackCoordinator? = null
         var recoveryRequest: Cancelable? = null
-        val subscription = synchronized(this) {
+        val collection = synchronized(this) {
             createGeneration++
             syncGeneration++
-            roomObservationGeneration++
             foregroundRecoveryGeneration++
             recoveryRequest = foregroundRecoveryRequest
             foregroundRecoveryRequest = null
-            val owned = roomSubscription
-            roomSubscription = null
+            val owned = roomCollectionJob
+            roomCollectionJob = null
             coordinator = queueCoordinator
             queueCoordinator = null
             localPlayback = playbackCoordinator
@@ -715,7 +753,7 @@ class HostSessionController(
             owned
         }
         try {
-            subscription?.close()
+            cancelRoomCollectionAndJoin(collection)
             recoveryRequest?.cancel()
         } finally {
             try {
