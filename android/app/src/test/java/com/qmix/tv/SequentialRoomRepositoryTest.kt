@@ -1,8 +1,13 @@
 package com.qmix.tv
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +46,56 @@ class SequentialRoomRepositoryTest {
         assertEquals(active(room, Freshness.FRESH), fixture.observed.last())
     }
 
+    @Test
+    fun initial_sse_open_marks_connected_without_starting_a_duplicate_refresh() = runTest {
+        val fixture = Fixture(this)
+        fixture.start()
+
+        fixture.events.latest.emit(RoomEventStreamEvent.Opened)
+        runCurrent()
+
+        assertEquals(active(connection = LiveConnection.CONNECTED), fixture.observed.last())
+        assertEquals(1, fixture.fetcher.requests.size)
+
+        val room = roomState("ABCD", "connected")
+        fixture.fetcher.complete(0, RoomFetchResult.Success(room))
+        runCurrent()
+
+        assertEquals(active(room, Freshness.FRESH, LiveConnection.CONNECTED), fixture.observed.last())
+    }
+
+    @Test
+    fun connected_delivery_applies_collector_backpressure_before_the_get_result() = runTest {
+        val fixture = Fixture(this)
+        val collectorEntered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val observed = mutableListOf<RoomSyncState>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            fixture.repository.observe("ABCD").collect { state ->
+                observed += state
+                val active = state as? RoomSyncState.Active
+                if (active?.connection == LiveConnection.CONNECTED && active.freshness == Freshness.LOADING) {
+                    collectorEntered.complete(Unit)
+                    withContext(NonCancellable) { releaseCollector.await() }
+                }
+            }
+        }
+        runCurrent()
+
+        fixture.events.latest.emit(RoomEventStreamEvent.Opened)
+        runCurrent()
+        assertTrue(collectorEntered.isCompleted)
+
+        val room = roomState("ABCD", "fresh-after-open")
+        fixture.fetcher.complete(0, RoomFetchResult.Success(room))
+        runCurrent()
+        assertEquals(Freshness.LOADING, (observed.last() as RoomSyncState.Active).freshness)
+
+        releaseCollector.complete(Unit)
+        runCurrent()
+        assertEquals(active(room, Freshness.FRESH, LiveConnection.CONNECTED), observed.last())
+    }
+
     /** qmix#179: periodic recovery is virtual-time owned by the collection. */
     @Test
     fun periodic_refresh_runs_every_fifteen_seconds() = runTest {
@@ -62,6 +117,24 @@ class SequentialRoomRepositoryTest {
         advanceTimeBy(15_000L)
         runCurrent()
         assertEquals(3, fixture.fetcher.requests.size)
+    }
+
+    @Test
+    fun periodic_refresh_during_an_active_get_coalesces_into_one_follow_up() = runTest {
+        val fixture = Fixture(this)
+        fixture.start()
+
+        advanceTimeBy(15_000L)
+        runCurrent()
+        assertEquals(1, fixture.fetcher.requests.size)
+
+        fixture.fetcher.complete(0, RoomFetchResult.Success(roomState("ABCD", "first")))
+        runCurrent()
+        assertEquals(2, fixture.fetcher.requests.size)
+
+        fixture.fetcher.complete(1, RoomFetchResult.Success(roomState("ABCD", "second")))
+        runCurrent()
+        assertEquals(2, fixture.fetcher.requests.size)
     }
 
     @Test
@@ -156,6 +229,98 @@ class SequentialRoomRepositoryTest {
     }
 
     @Test
+    fun reopened_sse_after_a_completed_get_starts_an_immediate_refresh() = runTest {
+        val fixture = Fixture(this)
+        fixture.start()
+        fixture.fetcher.complete(0, RoomFetchResult.Success(roomState("ABCD", "initial")))
+        runCurrent()
+
+        fixture.events.latest.emit(RoomEventStreamEvent.Failure(503))
+        runCurrent()
+        advanceTimeBy(500L)
+        runCurrent()
+        fixture.events.latest.emit(RoomEventStreamEvent.Opened)
+        runCurrent()
+
+        assertEquals(2, fixture.fetcher.requests.size)
+        assertEquals(LiveConnection.CONNECTED, (fixture.observed.last() as RoomSyncState.Active).connection)
+    }
+
+    @Test
+    fun clean_sse_close_is_treated_as_a_network_reconnect() = runTest {
+        val fixture = Fixture(this)
+        fixture.start()
+
+        fixture.events.latest.emit(RoomEventStreamEvent.Closed)
+        runCurrent()
+
+        assertEquals(LiveConnection.RECONNECTING, (fixture.observed.last() as RoomSyncState.Active).connection)
+        assertEquals(1, fixture.events.connections.size)
+        advanceTimeBy(500L)
+        runCurrent()
+        assertEquals(2, fixture.events.connections.size)
+    }
+
+    @Test
+    fun fetch_exception_marks_the_room_stale_and_later_refresh_can_recover() = runTest {
+        var attempts = 0
+        val events = TestEventStreams()
+        val room = roomState("ABCD", "recovered")
+        val repository = SequentialRoomRepository(
+            fetchRoom = {
+                attempts++
+                if (attempts == 1) throw IllegalStateException("offline")
+                RoomFetchResult.Success(room)
+            },
+            eventStreams = events,
+            backoff = ReconnectBackoff(randomFraction = { 0.0 }),
+        )
+        val observed = mutableListOf<RoomSyncState>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            repository.observe("ABCD").toList(observed)
+        }
+        runCurrent()
+
+        assertEquals(active(freshness = Freshness.STALE), observed.last())
+        events.latest.emit(RoomEventStreamEvent.Event("queue_updated"))
+        runCurrent()
+
+        assertEquals(2, attempts)
+        assertEquals(active(room, Freshness.FRESH), observed.last())
+    }
+
+    @Test
+    fun event_stream_exception_logs_network_failure_and_reconnects() = runTest {
+        val sink = RecordingLogSink()
+        val logger = QMixLogger(sink, QMixLogLevel.DEBUG) { null }
+            .component(QMixLogComponent.ROOM_SYNC_SSE_RECONNECT)
+        var connections = 0
+        val repository = SequentialRoomRepository(
+            fetchRoom = { RoomFetchResult.Success(roomState(it, "initial")) },
+            eventStreams = RoomEventStreamFactory {
+                flow {
+                    connections++
+                    if (connections == 1) throw IllegalStateException("socket failure")
+                    awaitCancellation()
+                }
+            },
+            backoff = ReconnectBackoff(randomFraction = { 0.0 }),
+            logger = logger,
+        )
+        val observed = mutableListOf<RoomSyncState>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            repository.observe("ABCD").toList(observed)
+        }
+        runCurrent()
+
+        assertEquals(LiveConnection.RECONNECTING, (observed.last() as RoomSyncState.Active).connection)
+        assertEquals(QMixLogCause.NETWORK, sink.records.first().cause)
+        advanceTimeBy(500L)
+        runCurrent()
+        assertEquals(2, connections)
+    }
+
+    @Test
     fun reconnect_backoff_is_capped_and_uses_virtual_time() = runTest {
         val fixture = Fixture(this)
         fixture.start()
@@ -190,6 +355,37 @@ class SequentialRoomRepositoryTest {
     }
 
     @Test
+    fun stale_delivery_applies_collector_backpressure_before_processing_the_next_refresh() = runTest {
+        val fixture = Fixture(this)
+        val collectorEntered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val observed = mutableListOf<RoomSyncState>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            fixture.repository.observe("ABCD").collect { state ->
+                observed += state
+                if ((state as? RoomSyncState.Active)?.freshness == Freshness.STALE) {
+                    collectorEntered.complete(Unit)
+                    withContext(NonCancellable) { releaseCollector.await() }
+                }
+            }
+        }
+        runCurrent()
+
+        fixture.fetcher.complete(0, RoomFetchResult.Failure)
+        runCurrent()
+        assertTrue(collectorEntered.isCompleted)
+
+        fixture.events.latest.emit(RoomEventStreamEvent.Event("queue_updated"))
+        runCurrent()
+        assertEquals(1, fixture.fetcher.requests.size)
+
+        releaseCollector.complete(Unit)
+        runCurrent()
+        assertEquals(2, fixture.fetcher.requests.size)
+        assertEquals(Freshness.STALE, (observed.last() as RoomSyncState.Active).freshness)
+    }
+
+    @Test
     fun get_404_is_terminal_and_cancels_sse_and_periodic_work() = runTest {
         val fixture = Fixture(this)
         fixture.start()
@@ -207,6 +403,48 @@ class SequentialRoomRepositoryTest {
     }
 
     @Test
+    fun get_missing_waits_for_collector_backpressure_before_terminal_cleanup() = runTest {
+        val fixture = Fixture(this)
+        val collectorEntered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            fixture.repository.observe("ABCD").collect { state ->
+                if (state is RoomSyncState.Missing) {
+                    collectorEntered.complete(Unit)
+                    withContext(NonCancellable) { releaseCollector.await() }
+                }
+            }
+        }
+        runCurrent()
+
+        fixture.fetcher.complete(0, RoomFetchResult.Missing)
+        runCurrent()
+        assertTrue(collectorEntered.isCompleted)
+        assertFalse(job.isCompleted)
+        assertFalse(fixture.events.latest.cancelled)
+
+        releaseCollector.complete(Unit)
+        runCurrent()
+        assertTrue(job.isCompleted)
+        assertTrue(fixture.events.latest.cancelled)
+    }
+
+    @Test
+    fun missing_result_discards_a_refresh_that_was_queued_during_the_get() = runTest {
+        val fixture = Fixture(this)
+        fixture.start()
+        fixture.events.latest.emit(RoomEventStreamEvent.Event("queue_updated"))
+        runCurrent()
+
+        fixture.fetcher.complete(0, RoomFetchResult.Missing)
+        runCurrent()
+
+        assertEquals(RoomSyncState.Missing("ABCD"), fixture.observed.last())
+        assertEquals(1, fixture.fetcher.requests.size)
+        assertTrue(fixture.events.latest.cancelled)
+    }
+
+    @Test
     fun sse_404_is_terminal_and_cancels_an_active_get() = runTest {
         val fixture = Fixture(this)
         fixture.start()
@@ -217,6 +455,33 @@ class SequentialRoomRepositoryTest {
         assertEquals(RoomSyncState.Missing("ABCD"), fixture.observed.last())
         assertTrue(fixture.fetcher.requests.single().cancelled)
         assertTrue(fixture.events.latest.cancelled)
+    }
+
+    @Test
+    fun sse_missing_waits_for_collector_backpressure_before_cancelling_the_get() = runTest {
+        val fixture = Fixture(this)
+        val collectorEntered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            fixture.repository.observe("ABCD").collect { state ->
+                if (state is RoomSyncState.Missing) {
+                    collectorEntered.complete(Unit)
+                    withContext(NonCancellable) { releaseCollector.await() }
+                }
+            }
+        }
+        runCurrent()
+
+        fixture.events.latest.emit(RoomEventStreamEvent.Failure(404))
+        runCurrent()
+        assertTrue(collectorEntered.isCompleted)
+        assertFalse(job.isCompleted)
+        assertFalse(fixture.fetcher.requests.single().cancelled)
+
+        releaseCollector.complete(Unit)
+        runCurrent()
+        assertTrue(job.isCompleted)
+        assertTrue(fixture.fetcher.requests.single().cancelled)
     }
 
     @Test
@@ -292,6 +557,45 @@ class SequentialRoomRepositoryTest {
 
         assertTrue(job.isCompleted)
         assertEquals(2, observed.size)
+        assertTrue(fixture.events.latest.cancelled)
+    }
+
+    @Test
+    fun cancelling_collection_cancels_both_the_active_get_and_event_stream() = runTest {
+        val fixture = Fixture(this)
+        val job = fixture.start()
+
+        job.cancelAndJoin()
+
+        assertTrue(fixture.fetcher.requests.single().cancelled)
+        assertTrue(fixture.events.latest.cancelled)
+    }
+
+    @Test
+    fun collector_failure_propagates_after_cancelling_all_owned_work() = runTest {
+        val fixture = Fixture(this)
+        val owner = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val collection = owner.async {
+            fixture.repository.observe("ABCD").collect { state ->
+                if ((state as? RoomSyncState.Active)?.connection == LiveConnection.CONNECTED) {
+                    throw IllegalStateException("collector failed")
+                }
+            }
+        }
+        runCurrent()
+
+        fixture.events.latest.emit(RoomEventStreamEvent.Opened)
+        runCurrent()
+
+        val failure = try {
+            collection.await()
+            null
+        } catch (caught: Throwable) {
+            caught
+        }
+        owner.cancel()
+        assertEquals("collector failed", failure?.message)
+        assertTrue(fixture.fetcher.requests.single().cancelled)
         assertTrue(fixture.events.latest.cancelled)
     }
 
