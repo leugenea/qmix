@@ -10,10 +10,48 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
+ACTION_USE = re.compile(
+    r"^\s*-?\s*uses:\s+(?P<reference>[^\s#]+)(?:\s+#\s+(?P<comment>\S+))?\s*$"
+)
 
 
 def read(relative):
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def workflow_files(directory=WORKFLOWS):
+    return sorted((*directory.glob("*.yml"), *directory.glob("*.yaml")))
+
+
+def assert_external_action_policy(test_case, path):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if "uses:" not in line:
+            continue
+        match = ACTION_USE.fullmatch(line)
+        if match is None:
+            raise AssertionError(f"{path}:{line_number}: malformed uses entry")
+        reference = match.group("reference")
+        if reference.startswith(("./", "../", "docker://")):
+            continue
+        action, separator, revision = reference.rpartition("@")
+        test_case.assertTrue(
+            separator and "/" in action,
+            f"{path}:{line_number}: malformed external Action reference",
+        )
+        test_case.assertRegex(
+            revision,
+            r"^[0-9a-f]{40}$",
+            f"{path}:{line_number}: external Action must use a full 40-character SHA",
+        )
+        test_case.assertRegex(
+            match.group("comment") or "",
+            r"^v\d+(?:\.\d+){0,2}$",
+            f"{path}:{line_number}: external Action SHA needs an adjacent semver release comment",
+        )
+
+
+def dependabot_update_blocks(text):
+    return re.findall(r"(?ms)^  - package-ecosystem:.*?(?=^  - package-ecosystem:|\Z)", text)
 
 
 def job(text, name):
@@ -276,15 +314,79 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertEqual(publisher.count("require_tests: true"), 2)
         self.assertEqual(publisher.count("fail_on_parse_error: true"), 2)
 
-    def test_all_actions_are_full_sha_pinned_and_permissions_are_explicit(self):
-        action = re.compile(r"^\s*-?\s*uses:\s+[^@\s]+@([^\s#]+)", re.MULTILINE)
-        for path in WORKFLOWS.glob("*.yml"):
+    def test_workflow_permissions_are_explicit(self):
+        for path in workflow_files():
             text = path.read_text(encoding="utf-8")
             with self.subTest(path=path.name, policy="permissions"):
                 self.assertRegex(text, r"(?m)^permissions:\n(?:  [a-z-]+: (?:read|write|none)\n)+")
-            for ref in action.findall(text):
-                with self.subTest(path=path.name, ref=ref):
-                    self.assertRegex(ref, r"^[0-9a-f]{40}$")
+
+    def test_every_external_action_has_full_sha_and_adjacent_semver_comment(self):
+        paths = workflow_files()
+        self.assertGreater(len(paths), 0)
+        for path in paths:
+            with self.subTest(path=path.name):
+                assert_external_action_policy(self, path)
+
+    def test_action_policy_covers_yaml_and_rejects_missing_version_comment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            workflows = pathlib.Path(temp)
+            workflow = workflows / "fixture.yaml"
+            workflow.write_text(
+                "jobs:\n"
+                "  policy:\n"
+                "    steps:\n"
+                "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n",
+                encoding="utf-8",
+            )
+            self.assertEqual([workflow], workflow_files(workflows))
+            with self.assertRaisesRegex(AssertionError, "adjacent semver release comment"):
+                assert_external_action_policy(self, workflow)
+
+    def test_dependabot_updates_github_actions_under_repository_policy(self):
+        dependabot = read(".github/dependabot.yml")
+        self.assertRegex(dependabot, r"(?m)^version: 2$")
+        blocks = dependabot_update_blocks(dependabot)
+        ecosystems = []
+        for block in blocks:
+            match = re.search(r'^  - package-ecosystem: "([^"]+)"$', block, re.MULTILINE)
+            if match is None:
+                self.fail("Dependabot update is missing a quoted package-ecosystem")
+            ecosystems.append(match.group(1))
+        self.assertEqual(["github-actions"], ecosystems)
+
+        actions = blocks[0]
+        for expected in (
+            '    directory: "/"',
+            '      interval: "weekly"',
+            '      day: "monday"',
+            '      time: "06:00"',
+            '      timezone: "UTC"',
+            "    open-pull-requests-limit: 3",
+            '      prefix: "chore(actions)"',
+            "      minor-and-patch:",
+            '        applies-to: "version-updates"',
+            '          - "*"',
+        ):
+            with self.subTest(setting=expected.strip()):
+                self.assertIn(expected, actions)
+        update_types = re.findall(r'^          - "(minor|patch|major)"$', actions, re.MULTILINE)
+        self.assertEqual(["minor", "patch"], update_types)
+        self.assertNotIn("automerge", actions.lower())
+        self.assertIn(
+            "SHA-pinned Actions do not receive Dependabot alerts or security-update PRs",
+            actions,
+        )
+        self.assertIn(
+            "weekly version-update scan is the automated Actions update path",
+            actions,
+        )
+
+        ci = read(".github/workflows/ci.yml")
+        trigger = ci.split("\nconcurrency:", 1)[0]
+        self.assertRegex(trigger, r"(?m)^  pull_request:$")
+        self.assertNotIn("pull_request_target", ci)
+        self.assertNotIn("secrets.", ci)
+        self.assertNotRegex(ci, r"runs-on:.*(?:self-hosted|\bnas\b)")
 
     def test_agent_and_contributor_guidance_covers_repository_contracts(self):
         agents = read("AGENTS.md")
