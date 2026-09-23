@@ -495,10 +495,10 @@ class HostSessionControllerInstrumentationTest {
         }
 
         controller.onHostStarted()
+        controller.awaitSetupForTest()
         controller.onStartOrNext()
         assertEquals(0, commands)
         assertTrue(repository.closed)
-        controller.awaitSetupForTest()
         assertTrue(controller.state is HostingState.Setup)
     }
 

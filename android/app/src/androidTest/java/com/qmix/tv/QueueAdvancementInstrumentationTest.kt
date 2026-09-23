@@ -58,6 +58,7 @@ class QueueAdvancementInstrumentationTest {
         val application = ApplicationProvider.getApplicationContext<QMixApplication>()
         val controller = application.hostSession
         controller.endRoom()
+        controller.awaitSetupForTest()
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val invited = CountDownLatch(1)
         val subscription = controller.collectStatesForTest { if (it is HostingState.Invitation) invited.countDown() }
