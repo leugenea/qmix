@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.ArrayDeque
-import java.util.concurrent.Executor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,13 +43,12 @@ class HostSessionControllerInstrumentationTest {
     @Test
     fun observer_settings_pending_invitation_and_live_room_form_one_session() {
         server.enqueue(
-            MockResponse().setResponseCode(201)
+            MockResponse().setBodyDelay(200, java.util.concurrent.TimeUnit.MILLISECONDS).setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
         )
-        val executor = QueuedExecutor()
-        val controller = HostSessionController(OkHttpClient(), executor = executor)
+        val controller = HostSessionController(OkHttpClient())
         val observed = mutableListOf<HostingState>()
-        val subscription = controller.observe(observed::add)
+        val subscription = controller.collectStatesForTest(observed::add)
         try {
             assertEquals(HostingState.Setup("", ""), observed.single())
             controller.updateSettings(server.url("/").toString(), "https://guest.example")
@@ -63,7 +61,7 @@ class HostSessionControllerInstrumentationTest {
             controller.updateSettings("https://ignored.example", "https://ignored.example")
             assertFalse(controller.createRoom())
             controller.enterRoom()
-            executor.runNext()
+            controller.awaitCreatedForTest()
 
             assertEquals(
                 HostingState.Invitation(GuestInvite("ABCD", "https://guest.example/r/ABCD")),
@@ -91,8 +89,7 @@ class HostSessionControllerInstrumentationTest {
 
     @Test
     fun invalid_settings_and_server_failure_can_be_corrected_and_retried() {
-        val executor = QueuedExecutor()
-        val controller = HostSessionController(OkHttpClient(), executor = executor)
+        val controller = HostSessionController(OkHttpClient())
         controller.updateSettings("not a url", "also not a url")
 
         assertFalse(controller.createRoom())
@@ -108,7 +105,7 @@ class HostSessionControllerInstrumentationTest {
         server.enqueue(MockResponse().setResponseCode(503))
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         assertTrue(controller.createRoom())
-        executor.runNext()
+        controller.awaitCreatedForTest()
         assertEquals(
             HostingState.Error(
                 UserMessage.SERVER_UNAVAILABLE,
@@ -123,7 +120,7 @@ class HostSessionControllerInstrumentationTest {
                 .setBody("""{"code":"WXYZ","host_token":"replacement-secret","url":"/r/WXYZ"}"""),
         )
         assertTrue(controller.createRoom())
-        executor.runNext()
+        controller.awaitCreatedForTest()
         assertEquals(
             HostingState.Invitation(GuestInvite("WXYZ", "https://guest.example/r/WXYZ")),
             controller.state,
@@ -143,7 +140,7 @@ class HostSessionControllerInstrumentationTest {
         try {
             val controller = HostSessionController(
                 OkHttpClient(),
-                executor = Executor { it.run() },
+
                 settingsPersistence = EndpointSettingsStore(context),
             )
             controller.updateSettings(backend, guestOrigin)
@@ -173,7 +170,7 @@ class HostSessionControllerInstrumentationTest {
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
         )
 
         assertTrue(controller.createRoom())
@@ -201,7 +198,7 @@ class HostSessionControllerInstrumentationTest {
             OkHttpClient(),
             initialBackendUrl = backend,
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = {
                 assertEquals(canonicalBackend, it)
                 repository
@@ -210,7 +207,7 @@ class HostSessionControllerInstrumentationTest {
             roomCollectionContext = Dispatchers.Unconfined,
         )
         val observed = mutableListOf<HostingState>()
-        val observation = controller.observe(observed::add)
+        val observation = controller.collectStatesForTest(observed::add)
 
         try {
             assertTrue(controller.createRoom())
@@ -227,6 +224,7 @@ class HostSessionControllerInstrumentationTest {
             assertEquals(synchronized, controller.roomSyncState)
             assertEquals(synchronized, (observed.last() as HostingState.LiveRoom).synchronization)
             controller.endRoom()
+            controller.awaitSetupForTest()
 
             assertTrue(repository.closed)
             assertNull(controller.roomSyncState)
@@ -246,27 +244,27 @@ class HostSessionControllerInstrumentationTest {
         )
         val repository = RecordingRoomRepository()
         var primaryActions = 0
-        val failures = mutableListOf<Throwable>()
         val controller = HostSessionController(
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = { repository },
             roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
             primaryActionHandler = { primaryActions++ },
-            observerFailureHandler = failures::add,
+
         )
         val observed = mutableListOf<HostingState>()
-        controller.observe(observed::add)
-        controller.observe { state ->
+        controller.collectStatesForTest(observed::add)
+        controller.collectStatesForTest { state ->
             if (state is HostingState.LiveRoom && state.commandPending) {
                 error("observer failure")
             }
         }
 
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         val queue = listOf(QueuedTrack("track-1", "https://example/1", "Title", "Artist", 0, "fixture"))
         val room = RoomState("ABCD", null, queue)
@@ -281,7 +279,7 @@ class HostSessionControllerInstrumentationTest {
         controller.onStartOrNext()
         assertEquals(1, primaryActions)
         assertFalse((controller.state as HostingState.LiveRoom).isPrimaryActionEnabled)
-        assertEquals(1, failures.size)
+        assertTrue((observed.last() as HostingState.LiveRoom).commandPending)
 
         controller.setCommandPending(false)
         controller.onInvite()
@@ -292,7 +290,9 @@ class HostSessionControllerInstrumentationTest {
         assertFalse((controller.state as HostingState.LiveRoom).invitationVisible)
         assertFalse((observed.last() as HostingState.LiveRoom).invitationVisible)
         assertEquals(LiveRoomBackResult.EXIT_ACTIVITY, controller.onBack())
+        controller.awaitSetupForTest()
         assertTrue(repository.closed)
+        controller.awaitSetupForTest()
         assertTrue(controller.state is HostingState.Setup)
         assertTrue(observed.last() is HostingState.Setup)
         assertEquals(LiveRoomBackResult.IGNORED, controller.onBack())
@@ -320,12 +320,13 @@ class HostSessionControllerInstrumentationTest {
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = { repositories.removeFirst() },
             roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         val room = RoomState("ABCD", null, emptyList())
         firstRepository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
@@ -347,7 +348,9 @@ class HostSessionControllerInstrumentationTest {
         )
         assertEquals(beforeOtherRoom, controller.state)
         controller.endRoom()
+        controller.awaitSetupForTest()
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         val replacementInitialState = controller.state
 
@@ -367,7 +370,7 @@ class HostSessionControllerInstrumentationTest {
         var commands = 0
         val controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
             foregroundReconcilerFactory = { { _: String -> fetches++; RoomFetchResult.Missing } },
@@ -375,6 +378,7 @@ class HostSessionControllerInstrumentationTest {
             primaryActionHandler = { commands++ },
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         val room = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
@@ -390,6 +394,8 @@ class HostSessionControllerInstrumentationTest {
         controller.onStartOrNext()
         assertEquals(0, commands)
         controller.endRoom()
+        controller.awaitSetupForTest()
+        controller.awaitSetupForTest()
         assertTrue(controller.state is HostingState.Setup)
     }
 
@@ -404,7 +410,7 @@ class HostSessionControllerInstrumentationTest {
         var commands = 0
         val controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
             foregroundReconcilerFactory = { { _: String ->
@@ -417,6 +423,7 @@ class HostSessionControllerInstrumentationTest {
             primaryActionHandler = { commands++ },
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.onHostStopped()
@@ -451,7 +458,7 @@ class HostSessionControllerInstrumentationTest {
         var commands = 0
         val controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
             foregroundReconcilerFactory = { { _: String -> RoomFetchResult.Success(room) } },
@@ -459,10 +466,11 @@ class HostSessionControllerInstrumentationTest {
             primaryActionHandler = { commands++ },
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.onHostStopped()
-        controller.observe { state ->
+        controller.collectStatesForTest { state ->
             if (state is HostingState.LiveRoom && !state.foregroundRecoveryPending &&
                 state.synchronization is RoomSyncState.Active &&
                 state.synchronization.freshness == Freshness.FRESH
@@ -475,6 +483,7 @@ class HostSessionControllerInstrumentationTest {
         controller.onStartOrNext()
         assertEquals(0, commands)
         assertTrue(repository.closed)
+        controller.awaitSetupForTest()
         assertTrue(controller.state is HostingState.Setup)
     }
 
@@ -490,7 +499,7 @@ class HostSessionControllerInstrumentationTest {
         var commands = 0
         val controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
             foregroundReconcilerFactory = { { _: String -> fetches++; RoomFetchResult.Success(room) } },
@@ -498,6 +507,7 @@ class HostSessionControllerInstrumentationTest {
             primaryActionHandler = { commands++ },
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.onHostStopped()
@@ -530,7 +540,7 @@ class HostSessionControllerInstrumentationTest {
         var fetches = 0
         controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = {
                 if (++creations == 1) controller.onHostStopped()
                 repository
@@ -540,6 +550,7 @@ class HostSessionControllerInstrumentationTest {
             queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         assertEquals(1, creations)
         assertNull(repository.roomCode)
@@ -579,22 +590,22 @@ class HostSessionControllerInstrumentationTest {
         }
         controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            queueCoordinatorFactory = { _, credentials, observer ->
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
                 val queue = testQueueCoordinator(
-                    roomScope, credentials.code, credentials.hostToken,
+                    sessionScope, credentials.code, credentials.hostToken,
                     TestQueueCommand { _, _, _ -> },
                     TestRoomFetcher { _, _ -> Cancelable { } }, observer,
                 )
                 if (++queueConstructions == 1) controller.endRoom()
                 queue
             },
-            playbackCoordinatorFactory = { _, credentials, observer, advance ->
+            playbackCoordinatorFactory = { _, credentials, observer, advance, sessionScope ->
                 val playback = AuthoritativePlaybackCoordinator(
                     credentials.code, "https://example/stream", engine,
-                    { RoomFetchResult.Failure }, roomScope,
+                    { RoomFetchResult.Failure }, sessionScope,
                     QueueMutationContext(Dispatchers.Unconfined) { true }, advance, observer,
                 )
                 playbackConstructions++
@@ -603,13 +614,17 @@ class HostSessionControllerInstrumentationTest {
             },
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
+        controller.awaitSetupForTest()
         assertTrue(controller.state is HostingState.Setup)
         assertNull(repository.roomCode)
         assertEquals(0, playbackConstructions)
 
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
+        controller.awaitSetupForTest()
         assertTrue(controller.state is HostingState.Setup)
         assertNull(repository.roomCode)
         assertEquals(2, queueConstructions)
@@ -646,15 +661,4 @@ class HostSessionControllerInstrumentationTest {
         }
     }
 
-    private class QueuedExecutor : Executor {
-        private val commands = ArrayDeque<Runnable>()
-
-        override fun execute(command: Runnable) {
-            commands.add(command)
-        }
-
-        fun runNext() {
-            commands.removeFirst().run()
-        }
-    }
 }

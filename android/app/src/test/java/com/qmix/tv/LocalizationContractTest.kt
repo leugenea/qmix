@@ -364,12 +364,6 @@ class LocalizationContractTest {
                 "error" to 1,
                 "ended" to 1,
             )
-            addInventory("HostSessionController.kt", "identifiers", "qmix-room-request" to 1)
-            addInventory(
-                "HostSessionController.kt",
-                "internal diagnostics",
-                "Room collection requires an explicit parent scope" to 1,
-            )
             addInventory(
                 "LiveRoomPresentation.kt",
                 "nonlinguistic formatting",

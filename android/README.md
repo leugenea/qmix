@@ -104,8 +104,10 @@ policy explicitly. A 404 ends synchronization, network failures preserve the
 last room state as stale, and cancellation closes the request, event stream,
 retry, and periodic work.
 
-`HostSessionController` publishes each current-session repository update as a
-`HostingState.LiveRoom`, carrying the safe guest invitation, synchronization
+`HostSessionController` exposes one application-owned `StateFlow<HostingState>`;
+the Activity collects it only while lifecycle-active, without owning the room.
+The serialized immediate mutation context publishes current-session repository
+updates as `HostingState.LiveRoom`, carrying the safe guest invitation, synchronization
 state, queue-command pending input, and local playback state used by the TV
 presentation. Start/Next is serialized by `QueueAdvancementCoordinator`. Its coroutine Jobs
 are children of the application-owned scope, and queue mutations use an injected
@@ -145,7 +147,7 @@ explicit `EXIT_ACTIVITY` result to the UI.
 
 Playback is foreground-only. `MainActivity.onStop` immediately pauses local audio,
 invalidates pending queue/retry work, and closes the command gate. Returning starts
-a token-bound `GET /rooms/{code}` reconciliation for the current in-memory host
+an owned child-Job `GET /rooms/{code}` reconciliation for the current in-memory host
 session. Repository updates and stale callbacks cannot reopen that gate; one
 successful matching response must establish the authoritative current first. A
 changed current replaces the prepared media but remains paused, so foreground

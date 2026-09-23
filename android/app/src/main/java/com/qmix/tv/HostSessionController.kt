@@ -1,22 +1,24 @@
 package com.qmix.tv
 
-import java.util.ArrayDeque
-import java.util.concurrent.Executor
 import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.EmptyCoroutineContext
-import kotlinx.coroutines.CoroutineScope
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 
 sealed interface HostingState {
     data class Setup(val backendUrl: String, val guestOrigin: String) : HostingState
+    data object Ending : HostingState
     data class HttpWarning(val backendUrl: String, val guestOrigin: String) : HostingState
     data class Pending(val backendUrl: String, val guestOrigin: String) : HostingState
     data class Invitation(val invite: GuestInvite) : HostingState
@@ -38,24 +40,22 @@ sealed interface HostingState {
         val isPrimaryActionEnabled: Boolean
             get() {
                 val active = synchronization as? RoomSyncState.Active ?: return false
-                return !commandPending &&
-                    !foregroundRecoveryPending &&
+                return !commandPending && !foregroundRecoveryPending &&
                     active.room?.queue?.isNotEmpty() == true &&
-                    active.freshness == Freshness.FRESH &&
-                    active.connection == LiveConnection.CONNECTED
+                    active.freshness == Freshness.FRESH && active.connection == LiveConnection.CONNECTED
             }
     }
     data class Error(val message: UserMessage, val backendUrl: String, val guestOrigin: String) : HostingState
 }
 
 enum class LiveRoomPrimaryAction { START, NEXT }
-
 enum class LiveRoomBackResult { HANDLED, EXIT_ACTIVITY, IGNORED }
 
 typealias QueueCoordinatorFactory = (
     backendUrl: String,
     credentials: RoomCredentials,
     observer: (QueueAdvancementState) -> Unit,
+    sessionScope: CoroutineScope,
 ) -> QueueAdvancementCoordinator
 
 typealias PlaybackCoordinatorFactory = (
@@ -63,6 +63,7 @@ typealias PlaybackCoordinatorFactory = (
     credentials: RoomCredentials,
     observer: (LocalPlaybackState) -> Unit,
     advanceAfterEnded: (String) -> Boolean,
+    sessionScope: CoroutineScope,
 ) -> AuthoritativePlaybackCoordinator
 
 interface LiveRoomHandler {
@@ -76,724 +77,434 @@ interface LiveRoomHandler {
     fun onBack(): LiveRoomBackResult
 }
 
+/** qmix#182: one mutation context owns every admission and state transition. */
 class HostSessionController(
     private val httpClient: OkHttpClient,
     initialBackendUrl: String = "",
     initialGuestOrigin: String = initialBackendUrl,
-    private val executor: Executor = Executor { command ->
-        Thread(command, "qmix-room-request").apply { isDaemon = true }.start()
-    },
     private val settingsPersistence: EndpointSettingsPersistence = InitialEndpointSettingsPersistence(
         EndpointSettings(initialBackendUrl, initialGuestOrigin),
     ),
     private val roomRepositoryFactory: ((String) -> RoomRepository)? = null,
-    private val roomCollectionScope: CoroutineScope? = null,
-    private val roomCollectionContext: CoroutineContext = EmptyCoroutineContext,
+    roomCollectionScope: CoroutineScope? = null,
+    private val roomCollectionContext: CoroutineContext = Dispatchers.IO,
     private val foregroundReconcilerFactory: ((String) -> suspend (String) -> RoomFetchResult)? = null,
-    private val queueMutationContext: QueueMutationContext? = null,
+    private val queueMutationContext: QueueMutationContext = QueueMutationContext(Dispatchers.Default.limitedParallelism(1)),
     private val queueCoordinatorFactory: QueueCoordinatorFactory? = null,
     private val playbackCoordinatorFactory: PlaybackCoordinatorFactory? = null,
     private val primaryActionHandler: () -> Unit = {},
-    private val observerFailureHandler: (Throwable) -> Unit = {},
-    private val logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.APP_HOST_SESSION),
     private val roomApiLogger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.ROOM_API_CREATION),
+    private val foregroundRecoveryContext: CoroutineContext = roomCollectionContext,
 ) : LiveRoomHandler {
-    private data class Notification(
-        val state: HostingState,
-        val recipients: List<(HostingState) -> Unit>,
-    )
-
+    private val ownerScope = roomCollectionScope ?: CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val initialSettings = settingsPersistence.load()
-    private val foregroundTransitionLock = Any()
-    private val observers = linkedSetOf<(HostingState) -> Unit>()
-    private val notifications = ArrayDeque<Notification>()
-    private var deliveringNotifications = false
     private var setupState = HostingState.Setup(initialSettings.backendUrl, initialSettings.guestOrigin)
+    private val mutableStates = MutableStateFlow<HostingState>(setupState)
+    val states: StateFlow<HostingState> = mutableStates.asStateFlow()
+    val state: HostingState get() = states.value
+    val roomSyncState: RoomSyncState? get() = (state as? HostingState.LiveRoom)?.synchronization
+
     private var credentials: RoomCredentials? = null
     private var activeBackendUrl: String? = null
+    private var createJob: Job? = null
+    private var sessionJob: Job? = null
     private var roomCollectionJob: Job? = null
-    private val roomCollectionMarker = ThreadLocal<Boolean>()
     private var queueCoordinator: QueueAdvancementCoordinator? = null
     private var playbackCoordinator: AuthoritativePlaybackCoordinator? = null
     private var foreground = true
     private var foregroundRecoveryJob: Job? = null
     private var httpAcknowledgementQuarantined = false
-    private var createGeneration = 0L
-    private var syncGeneration = 0L
-
-    @Volatile
-    var state: HostingState = setupState
-        private set
-
-    val roomSyncState: RoomSyncState?
-        get() = (state as? HostingState.LiveRoom)?.synchronization
-
-    fun observe(observer: (HostingState) -> Unit): AutoCloseable {
-        synchronized(this) {
-            observers += observer
-            notifications.addLast(Notification(state, listOf(observer)))
+    private var endingRoom = false
+    private fun publish(newState: HostingState) { mutableStates.value = newState }
+    private fun deliverCoordinatorUpdate(owner: Job, action: () -> Unit) {
+        if (queueMutationContext.isOnContext()) {
+            if (sessionJob === owner) action()
+        } else CoroutineScope(ownerScope.coroutineContext + owner + roomCollectionContext).launch {
+            queueMutationContext.runFromWorker { if (sessionJob === owner) action() }
         }
-        drainNotifications()
-        return AutoCloseable { synchronized(this) { observers -= observer } }
     }
 
-    fun updateSettings(backendUrl: String, guestOrigin: String) {
-        val changed = synchronized(this) {
-            if (state is HostingState.Setup || state is HostingState.Error) {
-                setupState = HostingState.Setup(backendUrl, guestOrigin)
-                publishLocked(setupState)
-                true
-            } else {
-                false
-            }
+    fun updateSettings(backendUrl: String, guestOrigin: String): Unit = queueMutationContext.run {
+        if (!endingRoom && (state is HostingState.Setup || state is HostingState.Error)) {
+            setupState = HostingState.Setup(backendUrl, guestOrigin)
+            publish(setupState)
         }
-        if (changed) drainNotifications()
     }
 
-    fun createRoom(): Boolean {
-        lateinit var settings: EndpointSettings
-        var generation = 0L
-        var executeNow = false
-        var accepted = false
-        synchronized(this) {
-            val candidate = when (val current = state) {
-                is HostingState.Setup -> current
-                is HostingState.Error -> HostingState.Setup(current.backendUrl, current.guestOrigin)
-                else -> return false
-            }
-            val validated = EndpointSettings.validate(candidate.backendUrl, candidate.guestOrigin)
-            if (validated == null) {
-                setupState = HostingState.Setup("", "")
-                publishLocked(
-                    HostingState.Error(
-                        UserMessage.INVALID_ENDPOINT,
-                        "",
-                        "",
-                    ),
-                )
-            } else {
-                settings = validated
-                setupState = HostingState.Setup(validated.backendUrl, validated.guestOrigin)
-                if (
-                    validated.usesHttp &&
-                    (httpAcknowledgementQuarantined || !settingsPersistence.isHttpWarningAcknowledged())
-                ) {
-                    publishLocked(HostingState.HttpWarning(validated.backendUrl, validated.guestOrigin))
-                } else {
-                    generation = ++createGeneration
-                    publishLocked(HostingState.Pending(validated.backendUrl, validated.guestOrigin))
-                    executeNow = true
-                }
-                accepted = true
-            }
+    fun createRoom(): Boolean = queueMutationContext.run {
+        if (endingRoom) return@run false
+        val candidate = when (val current = state) {
+            is HostingState.Setup -> current
+            is HostingState.Error -> HostingState.Setup(current.backendUrl, current.guestOrigin)
+            else -> return@run false
         }
-        drainNotifications()
-        if (executeNow) executeCreate(settings, generation)
-        return accepted
+        val settings = EndpointSettings.validate(candidate.backendUrl, candidate.guestOrigin)
+        if (settings == null) {
+            setupState = HostingState.Setup("", "")
+            publish(HostingState.Error(UserMessage.INVALID_ENDPOINT, "", ""))
+            return@run false
+        }
+        setupState = HostingState.Setup(settings.backendUrl, settings.guestOrigin)
+        if (settings.usesHttp && (httpAcknowledgementQuarantined || !settingsPersistence.isHttpWarningAcknowledged())) {
+            publish(HostingState.HttpWarning(settings.backendUrl, settings.guestOrigin))
+        } else {
+            beginCreate(settings)
+        }
+        true
     }
 
-    fun confirmHttpWarning(): Boolean {
-        lateinit var settings: EndpointSettings
-        var generation = 0L
-        val confirmed = synchronized(this) {
-            val warning = state as? HostingState.HttpWarning ?: return false
-            settings = EndpointSettings(warning.backendUrl, warning.guestOrigin)
-            httpAcknowledgementQuarantined = true
+    fun confirmHttpWarning(): Boolean = queueMutationContext.run {
+        val warning = state as? HostingState.HttpWarning ?: return@run false
+        val settings = EndpointSettings(warning.backendUrl, warning.guestOrigin)
+        httpAcknowledgementQuarantined = true
+        try {
+            settingsPersistence.acknowledgeHttpWarning()
+        } catch (_: IllegalStateException) {
+            publish(HostingState.Error(UserMessage.PERSISTENCE_ERROR, warning.backendUrl, warning.guestOrigin))
+            return@run false
+        }
+        httpAcknowledgementQuarantined = false
+        setupState = HostingState.Setup(settings.backendUrl, settings.guestOrigin)
+        beginCreate(settings)
+        true
+    }
+
+    fun cancelHttpWarning(): Unit = queueMutationContext.run {
+        val warning = state as? HostingState.HttpWarning ?: return@run
+        setupState = HostingState.Setup(warning.backendUrl, warning.guestOrigin)
+        publish(setupState)
+    }
+
+    private fun beginCreate(settings: EndpointSettings) {
+        val job = ownerScope.launch(roomCollectionContext, start = CoroutineStart.LAZY) {
+            val executingJob = coroutineContext[Job]
             try {
-                settingsPersistence.acknowledgeHttpWarning()
-            } catch (_: IllegalStateException) {
-                publishLocked(
-                    HostingState.Error(UserMessage.PERSISTENCE_ERROR, warning.backendUrl, warning.guestOrigin),
-                )
-                return@synchronized false
-            }
-            httpAcknowledgementQuarantined = false
-            setupState = HostingState.Setup(settings.backendUrl, settings.guestOrigin)
-            generation = ++createGeneration
-            publishLocked(HostingState.Pending(settings.backendUrl, settings.guestOrigin))
-            true
-        }
-        drainNotifications()
-        if (!confirmed) return false
-        executeCreate(settings, generation)
-        return true
-    }
-
-    fun cancelHttpWarning() {
-        val changed = synchronized(this) {
-            val warning = state as? HostingState.HttpWarning ?: return
-            setupState = HostingState.Setup(warning.backendUrl, warning.guestOrigin)
-            publishLocked(setupState)
-            true
-        }
-        if (changed) drainNotifications()
-    }
-
-    private fun executeCreate(settings: EndpointSettings, generation: Long) {
-        executor.execute {
-            try {
-                val created = RoomApiClient(httpClient, settings.backendUrl, roomApiLogger).createRoomBlocking()
+                val created = RoomApiClient(httpClient, settings.backendUrl, roomApiLogger).createRoom()
                 val invite = GuestInvite.create(created, settings.guestOrigin)
-                val changed = synchronized(this) {
-                    if (generation != createGeneration) {
-                        false
-                    } else {
-                        settingsPersistence.save(settings)
-                        credentials = created
-                        activeBackendUrl = settings.backendUrl
-                        publishLocked(HostingState.Invitation(invite))
-                        true
-                    }
+                val stillPending = queueMutationContext.runFromWorker {
+                    createJob === executingJob && state is HostingState.Pending
                 }
-                if (changed) drainNotifications()
+                if (!stillPending) return@launch
+                // Persistence can block on disk. Keep it off the mutation lane so endRoom
+                // can detach/cancel this worker; revalidate admission after save returns.
+                settingsPersistence.save(settings)
+                coroutineContext.ensureActive()
+                queueMutationContext.runFromWorker {
+                    if (createJob !== executingJob || state !is HostingState.Pending) return@runFromWorker
+                    credentials = created
+                    activeBackendUrl = settings.backendUrl
+                    publish(HostingState.Invitation(invite))
+                    if (createJob === executingJob) createJob = null
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: RoomApiException) {
-                publishCreateError(generation, settings, error.userMessage)
+                createError(executingJob, settings, error.userMessage)
             } catch (_: IllegalArgumentException) {
-                publishCreateError(generation, settings, UserMessage.INVALID_ENDPOINT)
+                createError(executingJob, settings, UserMessage.INVALID_ENDPOINT)
             } catch (_: IllegalStateException) {
-                publishCreateError(generation, settings, UserMessage.PERSISTENCE_ERROR)
+                createError(executingJob, settings, UserMessage.PERSISTENCE_ERROR)
             }
+        }
+        createJob = job
+        publish(HostingState.Pending(settings.backendUrl, settings.guestOrigin))
+        // A reentrant collector can end the session during Pending publication.
+        if (createJob === job) job.start() else job.cancel()
+    }
+
+    private suspend fun createError(job: Job?, settings: EndpointSettings, message: UserMessage) = queueMutationContext.runFromWorker {
+        if (createJob === job && job?.isActive == true && state is HostingState.Pending) {
+            publish(HostingState.Error(message, settings.backendUrl, settings.guestOrigin))
+            if (createJob === job) createJob = null
         }
     }
 
-    private fun publishCreateError(generation: Long, settings: EndpointSettings, message: UserMessage) {
-        val changed = synchronized(this) {
-            if (generation != createGeneration) {
-                false
-            } else {
-                publishLocked(HostingState.Error(message, settings.backendUrl, settings.guestOrigin))
-                true
-            }
-        }
-        if (changed) drainNotifications()
-    }
-
-    fun enterRoom() {
-        lateinit var invite: GuestInvite
-        var repositoryFactory: ((String) -> RoomRepository)? = null
-        var coordinatorFactory: QueueCoordinatorFactory? = null
-        var localPlaybackFactory: PlaybackCoordinatorFactory? = null
-        var backendUrl: String? = null
-        var sessionCredentials: RoomCredentials? = null
-        var previousCollection: Job? = null
-        var previousCoordinator: QueueAdvancementCoordinator? = null
-        var previousPlayback: AuthoritativePlaybackCoordinator? = null
-        var generation = 0L
-        synchronized(this) {
-            val invitation = state as? HostingState.Invitation ?: return
-            invite = invitation.invite
-            publishLocked(
-                HostingState.LiveRoom(
-                    invite,
-                    RoomSyncState.Active(
-                        invite.code,
-                        room = null,
-                        freshness = Freshness.LOADING,
-                        connection = LiveConnection.CONNECTING,
-                    ),
-                ),
-            )
-            repositoryFactory = roomRepositoryFactory
-            coordinatorFactory = queueCoordinatorFactory
-            localPlaybackFactory = playbackCoordinatorFactory
-            backendUrl = activeBackendUrl
-            sessionCredentials = credentials
-            if (repositoryFactory != null && backendUrl != null) {
-                previousCollection = roomCollectionJob
-                previousCoordinator = queueCoordinator
-                previousPlayback = playbackCoordinator
-                roomCollectionJob = null
-                queueCoordinator = null
-                playbackCoordinator = null
-                generation = ++syncGeneration
-            }
-        }
-        drainNotifications()
-        cancelRoomCollectionAndJoin(previousCollection)
-        previousCoordinator?.close()
-        previousPlayback?.close()
-
-        val activeRepositoryFactory = repositoryFactory ?: return
-        val activeUrl = backendUrl ?: return
-        val activeCredentials = sessionCredentials
-        val createdCoordinator = if (coordinatorFactory != null && activeCredentials != null) {
-            coordinatorFactory.invoke(activeUrl, activeCredentials) { advancement ->
-                val changed = synchronized(this@HostSessionController) {
-                    val current = state as? HostingState.LiveRoom
-                    if (generation != syncGeneration || current?.invite?.code != invite.code ||
-                        current.commandPending == advancement.pending
-                    ) {
-                        false
-                    } else {
-                        publishLocked(current.copy(commandPending = advancement.pending))
-                        true
-                    }
+    fun enterRoom(): Unit = queueMutationContext.run {
+        val invitation = state as? HostingState.Invitation ?: return@run
+        val invite = invitation.invite
+        val backend = activeBackendUrl
+        val owner = SupervisorJob(ownerScope.coroutineContext[Job])
+        sessionJob = owner
+        publish(HostingState.LiveRoom(
+            invite, RoomSyncState.Active(invite.code, null, Freshness.LOADING, LiveConnection.CONNECTING),
+        ))
+        if (sessionJob !== owner) return@run
+        if (backend == null) return@run
+        val sessionCredentials = credentials
+        // Transport uses the worker context; all publications re-enter the mutation context.
+        // The detached owner is joined only by the off-dispatcher finalizer.
+        val sessionScope = CoroutineScope(ownerScope.coroutineContext + owner + roomCollectionContext)
+        queueCoordinator = if (sessionCredentials != null) queueCoordinatorFactory?.invoke(backend, sessionCredentials, { update ->
+            deliverCoordinatorUpdate(owner) delivery@{
+                val current = state as? HostingState.LiveRoom ?: return@delivery
+                if (sessionJob === owner && queueCoordinator?.state === update && current.commandPending != update.pending) {
+                    publish(current.copy(commandPending = update.pending))
                 }
-                if (changed) drainNotifications()
             }
-        } else {
-            null
-        }
-        val closeCoordinatorImmediately = synchronized(this) {
-            val current = state as? HostingState.LiveRoom
-            if (generation == syncGeneration && current?.invite?.code == invite.code) {
-                queueCoordinator = createdCoordinator
-                false
-            } else {
-                true
-            }
-        }
-        if (closeCoordinatorImmediately) {
-            createdCoordinator?.close()
-            return
-        }
-
-        val createdPlayback = if (localPlaybackFactory != null && activeCredentials != null) {
-            localPlaybackFactory.invoke(
-                activeUrl,
-                activeCredentials,
-                { playback ->
-                    val changed = synchronized(this@HostSessionController) {
-                        val current = state as? HostingState.LiveRoom
-                        if (generation != syncGeneration || current?.invite?.code != invite.code ||
-                            current.playback == playback
-                        ) {
-                            false
-                        } else {
-                            publishLocked(current.copy(playback = playback))
-                            true
-                        }
-                    }
-                    if (changed) drainNotifications()
-                },
-                { trackId ->
-                    val active = synchronized(this@HostSessionController) {
-                        val current = state as? HostingState.LiveRoom
-                        if (generation == syncGeneration && current?.invite?.code == invite.code) {
-                            queueCoordinator
-                        } else {
-                            null
-                        }
-                    }
-                    active?.onPlaybackEnded(trackId) == true
-                },
-            )
-        } else {
-            null
-        }
-        val closePlaybackImmediately = synchronized(this) {
-            val current = state as? HostingState.LiveRoom
-            if (generation == syncGeneration && current?.invite?.code == invite.code) {
-                playbackCoordinator = createdPlayback
-                false
-            } else {
-                true
-            }
-        }
-        if (closePlaybackImmediately) {
-            createdPlayback?.close()
-            createdCoordinator?.close()
-            return
-        }
-
-        startRoomCollection(activeRepositoryFactory, activeUrl, invite, generation)
+        }, sessionScope) else null
+        if (sessionJob !== owner) { queueCoordinator?.close(); queueCoordinator = null; return@run }
+        playbackCoordinator = if (sessionCredentials != null) playbackCoordinatorFactory?.invoke(
+            backend, sessionCredentials,
+            { playback ->
+                deliverCoordinatorUpdate(owner) delivery@{
+                    val current = state as? HostingState.LiveRoom ?: return@delivery
+                    if (sessionJob === owner && current.playback != playback) publish(current.copy(playback = playback))
+                }
+            },
+            { trackId -> queueMutationContext.run {
+                if (sessionJob === owner) queueCoordinator?.onPlaybackEnded(trackId) == true else false
+            } }, sessionScope,
+        ) else null
+        if (sessionJob !== owner) { playbackCoordinator?.close(); playbackCoordinator = null; return@run }
+        startRoomCollection(owner, backend, invite)
     }
 
-    private fun startRoomCollection(
-        repositoryFactory: (String) -> RoomRepository,
-        backendUrl: String,
-        invite: GuestInvite,
-        generation: Long,
-    ) {
-        val scope = checkNotNull(roomCollectionScope) {
-            "Room collection requires an explicit parent scope"
+    private fun startRoomCollection(owner: Job, backend: String, invite: GuestInvite) {
+        if (sessionJob !== owner || !foreground) return
+        val repository = roomRepositoryFactory?.invoke(backend) ?: return
+        if (sessionJob !== owner || !foreground) return
+        val scope = CoroutineScope(ownerScope.coroutineContext + owner)
+        val job = scope.launch(roomCollectionContext, start = CoroutineStart.LAZY) {
+            repository.observe(invite.code).collect { sync ->
+                val collectingJob = coroutineContext[Job]
+                queueMutationContext.runFromWorker {
+                    if (roomCollectionJob === collectingJob) publishRoomSynchronization(owner, sync)
+                }
+            }
         }
-        val repository = repositoryFactory(backendUrl)
-        lateinit var job: Job
-        job = scope.launch(
-            roomCollectionContext + roomCollectionMarker.asContextElement(true),
-            start = CoroutineStart.LAZY,
+        roomCollectionJob = job
+        if (sessionJob === owner && foreground && roomCollectionJob === job) job.start() else job.cancel()
+    }
+
+    private fun publishRoomSynchronization(owner: Job, sync: RoomSyncState) {
+        val current = state as? HostingState.LiveRoom ?: return
+        if (sessionJob !== owner || current.invite.code != sync.roomCode) return
+        publish(current.copy(synchronization = retainLastKnownRoom(current.synchronization, sync)))
+        if (sessionJob !== owner) return
+        playbackCoordinator?.onSynchronization(sync)
+        if (sessionJob !== owner) return
+        val active = sync as? RoomSyncState.Active
+        if (!current.foregroundRecoveryPending && active?.freshness == Freshness.FRESH && active.room != null) {
+            queueCoordinator?.onAuthoritativeRoom(active.room)
+        } else if (current.foregroundRecoveryPending && foreground && active?.freshness == Freshness.FRESH &&
+            active.room != null && foregroundRecoveryJob == null
         ) {
-            try {
-                repository.observe(invite.code).collect { syncState ->
-                    publishRoomSynchronization(generation, syncState)
-                }
-            } finally {
-                synchronized(this@HostSessionController) {
-                    if (roomCollectionJob === job) roomCollectionJob = null
-                }
-            }
+            startForegroundRecovery(owner)
         }
-        val cancelImmediately = synchronized(this) {
-            val current = state as? HostingState.LiveRoom
-            if (generation == syncGeneration && current?.invite?.code == invite.code && foreground) {
-                roomCollectionJob = job
-                false
-            } else {
-                true
-            }
-        }
-        if (cancelImmediately) {
-            cancelRoomCollectionAndJoin(job)
-        } else {
-            job.start()
-        }
-    }
-
-    private fun publishRoomSynchronization(generation: Long, syncState: RoomSyncState) {
-        var authoritativeRoom: RoomState? = null
-        var activeCoordinator: QueueAdvancementCoordinator? = null
-        var activePlayback: AuthoritativePlaybackCoordinator? = null
-        var retryForegroundRecovery = false
-        val changed = synchronized(this) {
-            val current = state as? HostingState.LiveRoom
-            if (generation != syncGeneration || current?.invite?.code != syncState.roomCode) {
-                false
-            } else {
-                publishLocked(current.copy(synchronization = retainLastKnownRoom(current.synchronization, syncState)))
-                activePlayback = playbackCoordinator
-                val active = syncState as? RoomSyncState.Active
-                if (!current.foregroundRecoveryPending &&
-                    active?.freshness == Freshness.FRESH && active.room != null
-                ) {
-                    authoritativeRoom = active.room
-                    activeCoordinator = queueCoordinator
-                } else if (current.foregroundRecoveryPending && foreground &&
-                    active?.freshness == Freshness.FRESH && active.room != null &&
-                    foregroundRecoveryJob == null
-                ) {
-                    retryForegroundRecovery = true
-                }
-                true
-            }
-        }
-        if (changed) {
-            activePlayback?.onSynchronization(syncState)
-            activeCoordinator?.onAuthoritativeRoom(checkNotNull(authoritativeRoom))
-            drainNotifications()
-            if (retryForegroundRecovery) startForegroundRecovery()
-        }
-    }
-
-    private fun cancelRoomCollectionAndJoin(job: Job?) {
-        if (job == null) return
-        job.cancel()
-        if (roomCollectionMarker.get() == true) return
-        runBlocking { job.join() }
     }
 
     private fun retainLastKnownRoom(previous: RoomSyncState, update: RoomSyncState): RoomSyncState {
-        if (update !is RoomSyncState.Active || update.freshness != Freshness.STALE || update.room != null) {
-            return update
-        }
+        if (update !is RoomSyncState.Active || update.freshness != Freshness.STALE || update.room != null) return update
         val lastKnown = (previous as? RoomSyncState.Active)?.room ?: return update
         return update.copy(room = lastKnown)
     }
 
-    fun setCommandPending(pending: Boolean) {
-        val changed = synchronized(this) {
-            val current = state as? HostingState.LiveRoom ?: return
-            if (current.commandPending == pending) {
-                false
-            } else {
-                publishLocked(current.copy(commandPending = pending))
-                true
+    fun setCommandPending(pending: Boolean): Unit = queueMutationContext.run {
+        val current = state as? HostingState.LiveRoom ?: return@run
+        if (current.commandPending != pending) publish(current.copy(commandPending = pending))
+    }
+
+    private var stoppingCollection: Job? = null
+    private var stoppingRecovery: Job? = null
+
+    private fun resumeAfterForegroundCleanup(owner: Job?) {
+        if (foreground && owner != null && sessionJob === owner &&
+            stoppingCollection == null && stoppingRecovery == null) startForegroundRecovery(owner)
+    }
+
+    fun onHostStopped(): Unit = queueMutationContext.run {
+        val current = state as? HostingState.LiveRoom ?: return@run
+        val owner = sessionJob
+        if (!foreground) return@run
+        foreground = false
+        val recovery = foregroundRecoveryJob
+        foregroundRecoveryJob = null
+        val collection = roomCollectionJob
+        roomCollectionJob = null
+        if (collection != null) stoppingCollection = collection
+        if (recovery != null) stoppingRecovery = recovery
+        recovery?.cancel()
+        collection?.cancel()
+        queueCoordinator?.onForegroundLost()
+        if (sessionJob === owner) playbackCoordinator?.onForegroundLost()
+        if (sessionJob !== owner) return@run
+        val latest = state as? HostingState.LiveRoom ?: return@run
+        if (latest.invite !== current.invite) return@run
+        publish(latest.copy(foregroundRecoveryPending = true, commandPending = false))
+        if (collection != null) ownerScope.launch(Dispatchers.IO) {
+            collection.join()
+            queueMutationContext.runFromWorker {
+                if (stoppingCollection === collection) {
+                    stoppingCollection = null
+                    resumeAfterForegroundCleanup(owner)
+                }
             }
         }
-        if (changed) drainNotifications()
+        if (recovery != null) ownerScope.launch(Dispatchers.IO) {
+            recovery.join()
+            queueMutationContext.runFromWorker {
+                if (stoppingRecovery === recovery) {
+                    stoppingRecovery = null
+                    resumeAfterForegroundCleanup(owner)
+                }
+            }
+        }
     }
 
-    fun onHostStopped() = onQueueMutationContext { stopHostOnMutationContext() }
+    fun onHostStarted(): Unit = queueMutationContext.run {
+        if (foreground) return@run
+        foreground = true
+        if (stoppingCollection == null && stoppingRecovery == null) sessionJob?.let(::startForegroundRecovery)
+    }
 
-    private fun stopHostOnMutationContext(): Unit = synchronized(foregroundTransitionLock) {
-        var queue: QueueAdvancementCoordinator? = null
-        var playback: AuthoritativePlaybackCoordinator? = null
-        var recovery: Job? = null
-        var collection: Job? = null
-        val changed = synchronized(this) {
-            val current = state as? HostingState.LiveRoom ?: return
-            if (!foreground) return
-            foreground = false
-            recovery = foregroundRecoveryJob
-            foregroundRecoveryJob = null
-            collection = roomCollectionJob
+    private fun startForegroundRecovery(owner: Job) {
+        val current = state as? HostingState.LiveRoom ?: return
+        if (sessionJob !== owner || !foreground || stoppingCollection != null || stoppingRecovery != null ||
+            !current.foregroundRecoveryPending || foregroundRecoveryJob != null) return
+        val backend = activeBackendUrl ?: return
+        val fetch = foregroundReconcilerFactory?.invoke(backend) ?: return
+        val collection = roomCollectionJob
+        if (collection != null) {
             roomCollectionJob = null
-            queue = queueCoordinator
-            playback = playbackCoordinator
-            publishLocked(current.copy(foregroundRecoveryPending = true, commandPending = false))
-            true
+            stoppingCollection = collection
+            collection.cancel()
+            ownerScope.launch(Dispatchers.IO) {
+                collection.join()
+                queueMutationContext.runFromWorker {
+                    if (stoppingCollection === collection) {
+                        stoppingCollection = null
+                        resumeAfterForegroundCleanup(owner)
+                    }
+                }
+            }
+            return
         }
-        recovery?.cancel()
-        cancelRoomCollectionAndJoin(collection)
-        queue?.onForegroundLost()
-        playback?.onForegroundLost()
-        if (changed) drainNotifications()
-    }
-
-    fun onHostStarted() = onQueueMutationContext { startHostOnMutationContext() }
-
-    private fun startHostOnMutationContext(): Unit = synchronized(foregroundTransitionLock) {
-        val shouldRecover = synchronized(this) {
-            if (foreground) return
-            foreground = true
-            state is HostingState.LiveRoom
-        }
-        if (shouldRecover) startForegroundRecovery()
-    }
-
-    private fun startForegroundRecovery() {
-        val scope = roomCollectionScope ?: return
-        lateinit var code: String
-        lateinit var fetch: suspend (String) -> RoomFetchResult
-        var staleCollection: Job? = null
-        synchronized(this) {
-            val current = state as? HostingState.LiveRoom ?: return
-            if (!foreground || !current.foregroundRecoveryPending || foregroundRecoveryJob != null) return
-            val backend = activeBackendUrl ?: return
-            fetch = foregroundReconcilerFactory?.invoke(backend) ?: return
-            code = current.invite.code
-            staleCollection = roomCollectionJob
-            roomCollectionJob = null
-        }
-        cancelRoomCollectionAndJoin(staleCollection)
-        lateinit var job: Job
-        job = scope.launch(checkNotNull(queueMutationContext).dispatcher, start = CoroutineStart.LAZY) {
+        val code = current.invite.code
+        val scope = CoroutineScope(ownerScope.coroutineContext + owner)
+        val job = scope.launch(foregroundRecoveryContext, start = CoroutineStart.LAZY) {
             val result = try {
                 fetch(code)
-            } catch (canceled: CancellationException) {
-                throw canceled
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 RoomFetchResult.Failure
             }
             coroutineContext.ensureActive()
-            completeForegroundRecoveryOnMutationContext(job, code, result)
-        }
-        val cancel = synchronized(this) {
-            val current = state as? HostingState.LiveRoom
-            if (!foreground || current?.invite?.code != code || !current.foregroundRecoveryPending ||
-                foregroundRecoveryJob != null
-            ) {
-                true
-            } else {
-                foregroundRecoveryJob = job
-                false
+            val recoveringJob = coroutineContext[Job]
+            queueMutationContext.runFromWorker {
+                completeForegroundRecovery(owner, recoveringJob, code, result)
             }
         }
-        if (cancel) job.cancel() else job.start()
+        foregroundRecoveryJob = job
+        if (sessionJob === owner && foreground && foregroundRecoveryJob === job) job.start() else job.cancel()
     }
 
-    private fun onQueueMutationContext(action: () -> Unit) {
-        val context = queueMutationContext
-        if (context == null) action() else context.run(action)
-    }
-
-    private fun completeForegroundRecoveryOnMutationContext(job: Job, code: String, result: RoomFetchResult): Unit =
-        synchronized(foregroundTransitionLock) {
-            var queue: QueueAdvancementCoordinator? = null
-            var playback: AuthoritativePlaybackCoordinator? = null
-            var room: RoomState? = null
-            var repositoryFactory: ((String) -> RoomRepository)? = null
-            var backendUrl: String? = null
-            var invite: GuestInvite? = null
-            var collectionGeneration = 0L
-            var restartCollection = false
-            var changed = false
-            synchronized(this) {
-                val current = state as? HostingState.LiveRoom
-                if (!foreground || foregroundRecoveryJob !== job || current?.invite?.code != code) return
-                foregroundRecoveryJob = null
-                when (result) {
-                    RoomFetchResult.Failure -> restartCollection = true
-                    RoomFetchResult.Missing -> {
-                        publishLocked(current.copy(synchronization = RoomSyncState.Missing(code)))
-                        changed = true
-                    }
-                    is RoomFetchResult.Success -> {
-                        val fresh = result.room
-                        if (fresh.code != code) {
-                            restartCollection = true
-                        } else {
-                            room = fresh
-                            queue = queueCoordinator
-                            playback = playbackCoordinator
-                            val connection = (current.synchronization as? RoomSyncState.Active)?.connection
-                                ?: LiveConnection.CONNECTING
-                            publishLocked(
-                                current.copy(
-                                    synchronization = RoomSyncState.Active(
-                                        code, fresh, Freshness.FRESH, connection,
-                                    ),
-                                    foregroundRecoveryPending = false,
-                                ),
-                            )
-                            changed = true
-                            restartCollection = true
-                        }
-                    }
+    private fun completeForegroundRecovery(owner: Job, job: Job?, code: String, result: RoomFetchResult) {
+        val current = state as? HostingState.LiveRoom ?: return
+        if (!foreground || sessionJob !== owner || foregroundRecoveryJob !== job || current.invite.code != code) return
+        foregroundRecoveryJob = null
+        when (result) {
+            RoomFetchResult.Missing -> publish(current.copy(synchronization = RoomSyncState.Missing(code)))
+            is RoomFetchResult.Success -> if (result.room.code == code) {
+                val connection = (current.synchronization as? RoomSyncState.Active)?.connection ?: LiveConnection.CONNECTING
+                publish(current.copy(
+                    synchronization = RoomSyncState.Active(code, result.room, Freshness.FRESH, connection),
+                    foregroundRecoveryPending = false,
+                ))
+                // StateFlow collectors and coordinator callbacks can synchronously stop/end this room.
+                fun stillRecovered(): Boolean {
+                    val latest = state as? HostingState.LiveRoom ?: return false
+                    val sync = latest.synchronization as? RoomSyncState.Active ?: return false
+                    return sessionJob === owner && foreground && latest.invite === current.invite &&
+                        !latest.foregroundRecoveryPending && sync.room === result.room &&
+                        sync.freshness == Freshness.FRESH
                 }
-                if (restartCollection) {
-                    repositoryFactory = roomRepositoryFactory
-                    backendUrl = activeBackendUrl
-                    invite = current.invite
-                    collectionGeneration = syncGeneration
-                }
+                if (!stillRecovered()) return
+                queueCoordinator?.onForegroundReconciled(result.room)
+                if (!stillRecovered()) return
+                playbackCoordinator?.onForegroundReconciled(result.room)
             }
-            room?.let { fresh ->
-                queue?.onForegroundReconciled(fresh)
-                playback?.onForegroundReconciled(fresh)
-            }
-            if (changed) drainNotifications()
-            if (repositoryFactory != null && backendUrl != null && invite != null) {
-                startRoomCollection(
-                    checkNotNull(repositoryFactory), checkNotNull(backendUrl),
-                    checkNotNull(invite), collectionGeneration,
-                )
-            }
+            RoomFetchResult.Failure -> Unit
         }
-
-    override fun onStartOrNext() {
-        var coordinator: QueueAdvancementCoordinator? = null
-        val enabled = synchronized(this) {
-            val allowed = (state as? HostingState.LiveRoom)?.isPrimaryActionEnabled == true
-            if (allowed) coordinator = queueCoordinator
-            allowed
-        }
-        if (!enabled) return
-        val activeCoordinator = coordinator
-        if (activeCoordinator != null) {
-            activeCoordinator.requestExplicitAdvance()
-        } else {
-            primaryActionHandler()
+        if (sessionJob === owner && foreground && result != RoomFetchResult.Missing) {
+            activeBackendUrl?.let { startRoomCollection(owner, it, current.invite) }
         }
     }
 
-    fun onPlaybackEnded(trackId: String): Boolean {
-        val coordinator = synchronized(this) { queueCoordinator }
-        return coordinator?.onPlaybackEnded(trackId) == true
+    override fun onStartOrNext(): Unit = queueMutationContext.run {
+        if (endingRoom) return@run
+        if ((state as? HostingState.LiveRoom)?.isPrimaryActionEnabled != true) return@run
+        val coordinator = queueCoordinator
+        if (coordinator != null) coordinator.requestExplicitAdvance() else primaryActionHandler()
     }
-
-    override fun onPlayPause() {
-        synchronized(this) { playbackCoordinator }?.togglePlayPause()
+    fun onPlaybackEnded(trackId: String): Boolean = queueMutationContext.run {
+        queueCoordinator?.onPlaybackEnded(trackId) == true
     }
-
-    override fun onSeekBy(offsetMs: Long) {
-        synchronized(this) { playbackCoordinator }?.seekBy(offsetMs)
-    }
-
+    override fun onPlayPause(): Unit = queueMutationContext.run { playbackCoordinator?.togglePlayPause(); Unit }
+    override fun onSeekBy(offsetMs: Long): Unit = queueMutationContext.run { playbackCoordinator?.seekBy(offsetMs); Unit }
     override fun onPlay() = resumePlayback()
-
     override fun onPause() = pausePlayback()
-
-    fun pausePlayback() {
-        synchronized(this) { playbackCoordinator }?.pause()
-    }
-
-    fun resumePlayback() {
-        synchronized(this) { playbackCoordinator }?.resume()
-    }
-
+    fun pausePlayback(): Unit = queueMutationContext.run { playbackCoordinator?.pause(); Unit }
+    fun resumePlayback(): Unit = queueMutationContext.run { playbackCoordinator?.resume(); Unit }
     override fun onRetryCurrent() = retryCurrent()
-
-    fun retryCurrent() {
-        synchronized(this) { playbackCoordinator }?.retryCurrent()
+    fun retryCurrent(): Unit = queueMutationContext.run { playbackCoordinator?.retryCurrent(); Unit }
+    override fun onInvite(): Unit = queueMutationContext.run {
+        val current = state as? HostingState.LiveRoom ?: return@run
+        if (!current.invitationVisible) publish(current.copy(invitationVisible = true))
     }
-
-    override fun onInvite() {
-        val changed = synchronized(this) {
-            val current = state as? HostingState.LiveRoom ?: return
-            if (current.invitationVisible) {
-                false
-            } else {
-                publishLocked(current.copy(invitationVisible = true))
-                true
-            }
-        }
-        if (changed) drainNotifications()
-    }
-
-    override fun onBack(): LiveRoomBackResult {
-        val result = synchronized(this) {
-            val current = state as? HostingState.LiveRoom ?: return LiveRoomBackResult.IGNORED
-            if (current.invitationVisible) {
-                publishLocked(current.copy(invitationVisible = false))
-                LiveRoomBackResult.HANDLED
-            } else {
-                LiveRoomBackResult.EXIT_ACTIVITY
-            }
-        }
-        if (result == LiveRoomBackResult.HANDLED) {
-            drainNotifications()
+    override fun onBack(): LiveRoomBackResult = queueMutationContext.run {
+        if (endingRoom) return@run LiveRoomBackResult.EXIT_ACTIVITY
+        val current = state as? HostingState.LiveRoom ?: return@run LiveRoomBackResult.IGNORED
+        if (current.invitationVisible) {
+            publish(current.copy(invitationVisible = false))
+            LiveRoomBackResult.HANDLED
         } else {
-            endRoom()
-        }
-        return result
-    }
-
-    fun endRoom() {
-        var coordinator: QueueAdvancementCoordinator? = null
-        var localPlayback: AuthoritativePlaybackCoordinator? = null
-        var recoveryJob: Job? = null
-        val collection = synchronized(this) {
-            createGeneration++
-            syncGeneration++
-            recoveryJob = foregroundRecoveryJob
-            foregroundRecoveryJob = null
-            val owned = roomCollectionJob
-            roomCollectionJob = null
-            coordinator = queueCoordinator
-            queueCoordinator = null
-            localPlayback = playbackCoordinator
-            playbackCoordinator = null
-            credentials = null
-            activeBackendUrl = null
-            foreground = true
-            publishLocked(setupState)
-            owned
-        }
-        try {
-            cancelRoomCollectionAndJoin(collection)
-            recoveryJob?.cancel()
-        } finally {
-            try {
-                coordinator?.close()
-            } finally {
-                try {
-                    localPlayback?.close()
-                } finally {
-                    drainNotifications()
-                }
-            }
+            endRoomOnMutationContext()
+            LiveRoomBackResult.EXIT_ACTIVITY
         }
     }
 
-    private fun publishLocked(newState: HostingState) {
-        state = newState
-        notifications.addLast(Notification(newState, observers.toList()))
-    }
+    fun endRoom(): Unit = queueMutationContext.run { endRoomOnMutationContext() }
 
-    private fun drainNotifications() {
-        synchronized(this) {
-            if (deliveringNotifications) return
-            deliveringNotifications = true
-        }
-        while (true) {
-            val notification = synchronized(this) {
-                if (notifications.isEmpty()) {
-                    deliveringNotifications = false
-                    return
-                }
-                notifications.removeFirst()
-            }
-            notification.recipients.forEach { observer ->
-                try {
-                    observer(notification.state)
-                } catch (failure: Throwable) {
-                    try {
-                        logger.error(QMixLogOperation.OBSERVER_NOTIFICATION, QMixLogCause.CALLBACK_FAILURE)
-                        observerFailureHandler(failure)
-                    } catch (_: Throwable) {
-                        // One observer must not block later state delivery or lifecycle cleanup.
-                    }
+    private fun endRoomOnMutationContext() {
+        if (endingRoom) return
+        endingRoom = true
+        val create = createJob
+        val owner = sessionJob
+        val collection = roomCollectionJob
+        val recovery = foregroundRecoveryJob
+        val stopping = stoppingCollection
+        val stoppingFetch = stoppingRecovery
+        val queue = queueCoordinator
+        val playback = playbackCoordinator
+        createJob = null
+        sessionJob = null
+        roomCollectionJob = null
+        foregroundRecoveryJob = null
+        stoppingCollection = null
+        stoppingRecovery = null
+        queueCoordinator = null
+        playbackCoordinator = null
+        credentials = null
+        activeBackendUrl = null
+        foreground = true
+        publish(HostingState.Ending)
+        create?.cancel()
+        owner?.cancel()
+        collection?.cancel()
+        recovery?.cancel()
+        stopping?.cancel()
+        stoppingFetch?.cancel()
+        runCatching { queue?.close() }
+        runCatching { playback?.close() }
+        // Never wait on a child in its reducer or publication callback. This sibling finalizer
+        // waits for the entire detached tree and only then reopens admission on the reducer.
+        ownerScope.launch(Dispatchers.IO) {
+            listOfNotNull(create, owner, collection, recovery, stopping, stoppingFetch).forEach { it.join() }
+            queueMutationContext.runFromWorker {
+                if (endingRoom && state === HostingState.Ending) {
+                    endingRoom = false
+                    publish(setupState)
                 }
             }
         }

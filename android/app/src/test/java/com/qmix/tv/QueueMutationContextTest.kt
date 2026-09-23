@@ -13,6 +13,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class QueueMutationContextTest {
+    @Test
+    fun nested_distinct_context_markers_do_not_leak_between_owners() {
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun isDispatchNeeded(context: CoroutineContext) = false
+            override fun dispatch(context: CoroutineContext, block: Runnable) = block.run()
+        }
+        val first = QueueMutationContext(dispatcher)
+        val second = QueueMutationContext(dispatcher)
+        assertFalse(first.isOnContext())
+        first.run {
+            assertTrue(first.isOnContext())
+            assertFalse(second.isOnContext())
+            second.run {
+                assertTrue(first.isOnContext())
+                assertTrue(second.isOnContext())
+            }
+            assertTrue(first.isOnContext())
+            assertFalse(second.isOnContext())
+        }
+        assertFalse(first.isOnContext())
+        assertFalse(second.isOnContext())
+    }
+
     /** qmix#178: legacy callers retain synchronous admission on the injected immediate context. */
     @Test
     fun foreign_thread_admission_and_reentrant_observers_share_one_immediate_context() {
