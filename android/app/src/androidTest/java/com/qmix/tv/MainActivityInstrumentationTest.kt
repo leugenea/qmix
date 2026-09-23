@@ -6,6 +6,7 @@ import android.view.KeyEvent
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
@@ -89,6 +90,7 @@ class MainActivityInstrumentationTest {
     }
 
     /** qmix#182: stopped collectors resume at the latest application-owned state. */
+    @OptIn(ExperimentalTestApi::class)
     @Test
     fun stopped_activity_collects_latest_room_and_recreation_keeps_the_same_session() {
         val server = MockWebServer()
@@ -114,14 +116,13 @@ class MainActivityInstrumentationTest {
                 controller.enterRoom()
                 assertTrue(controller.state is HostingState.LiveRoom)
                 scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-                val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
                 val title = application.getString(R.string.room_title, "ABCD")
-                assertTrue(device.wait(Until.hasObject(By.text(title)), 10_000))
+                composeRule.waitUntilAtLeastOneExists(hasText(title), timeoutMillis = 10_000)
                 scenario.recreate()
                 scenario.onActivity { activity ->
                     assertTrue((activity.application as QMixApplication).hostSessionForActivity() === controller)
                 }
-                assertTrue(device.wait(Until.hasObject(By.text(title)), 10_000))
+                composeRule.waitUntilAtLeastOneExists(hasText(title), timeoutMillis = 10_000)
                 assertTrue(controller.state is HostingState.LiveRoom)
             }
         } finally {

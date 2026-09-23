@@ -174,7 +174,7 @@ class HostSessionControllerInstrumentationTest {
         )
 
         assertTrue(controller.createRoom())
-
+        controller.awaitCreatedForTest()
         assertEquals(
             HostingState.Error(
                 UserMessage.INVALID_ENDPOINT,
@@ -211,6 +211,7 @@ class HostSessionControllerInstrumentationTest {
 
         try {
             assertTrue(controller.createRoom())
+            controller.awaitCreatedForTest()
             controller.enterRoom()
             val synchronized = RoomSyncState.Active(
                 "ABCD",
@@ -220,6 +221,7 @@ class HostSessionControllerInstrumentationTest {
             )
             repository.publish(synchronized)
 
+            controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization == synchronized }
             assertEquals("ABCD", repository.roomCode)
             assertEquals(synchronized, controller.roomSyncState)
             assertEquals(synchronized, (observed.last() as HostingState.LiveRoom).synchronization)
@@ -268,7 +270,9 @@ class HostSessionControllerInstrumentationTest {
         controller.enterRoom()
         val queue = listOf(QueuedTrack("track-1", "https://example/1", "Title", "Artist", 0, "fixture"))
         val room = RoomState("ABCD", null, queue)
-        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        val synchronized = RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED)
+        repository.publish(synchronized)
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization == synchronized }
         val ready = controller.state as HostingState.LiveRoom
         assertEquals(LiveRoomPrimaryAction.START, ready.primaryAction)
         assertTrue(ready.isPrimaryActionEnabled)
@@ -330,8 +334,12 @@ class HostSessionControllerInstrumentationTest {
         controller.enterRoom()
         val room = RoomState("ABCD", null, emptyList())
         firstRepository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization ==
+            RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED) }
         firstRepository.publish(RoomSyncState.Active("ABCD", null, Freshness.STALE, LiveConnection.RECONNECTING))
 
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization ==
+            RoomSyncState.Active("ABCD", room, Freshness.STALE, LiveConnection.RECONNECTING) }
         val stale = controller.roomSyncState as RoomSyncState.Active
         assertEquals(room, stale.room)
         assertEquals(Freshness.STALE, stale.freshness)
@@ -383,11 +391,13 @@ class HostSessionControllerInstrumentationTest {
         val room = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.isPrimaryActionEnabled == true }
         assertTrue((controller.state as HostingState.LiveRoom).isPrimaryActionEnabled)
 
         controller.onHostStopped()
-        assertTrue(repository.closed)
+        awaitConditionForTest { repository.closed }
         controller.onHostStarted()
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization is RoomSyncState.Missing }
         assertEquals(1, fetches)
         assertEquals(RoomSyncState.Missing("ABCD"), controller.roomSyncState)
         assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
@@ -426,20 +436,25 @@ class HostSessionControllerInstrumentationTest {
         controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization ==
+            RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED) }
         controller.onHostStopped()
         controller.onHostStarted()
+        awaitConditionForTest { fetches == 1 && repository.observations >= 2 }
         assertEquals(1, fetches)
         assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         controller.onStartOrNext()
         assertEquals(0, commands)
 
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        awaitConditionForTest { fetches == 2 && repository.observations >= 3 }
         assertEquals(2, fetches)
         assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         controller.onStartOrNext()
         assertEquals(0, commands)
 
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.foregroundRecoveryPending == false }
         assertEquals(3, fetches)
         assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         controller.onStartOrNext()
@@ -510,6 +525,11 @@ class HostSessionControllerInstrumentationTest {
         controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        awaitConditionForTest {
+            dispatcher.runPending()
+            (controller.state as? HostingState.LiveRoom)?.synchronization ==
+                RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED)
+        }
         controller.onHostStopped()
         controller.onHostStarted()
         controller.onHostStopped()
@@ -520,7 +540,10 @@ class HostSessionControllerInstrumentationTest {
         assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
 
         controller.onHostStarted()
-        dispatcher.runPending()
+        awaitConditionForTest {
+            dispatcher.runPending()
+            fetches == 1 && (controller.state as HostingState.LiveRoom).foregroundRecoveryPending == false
+        }
         assertEquals(1, fetches)
         assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         controller.onStartOrNext()
@@ -644,11 +667,13 @@ class HostSessionControllerInstrumentationTest {
 
     private class RecordingRoomRepository : RoomRepository {
         var roomCode: String? = null
-        var closed = false
+        @Volatile var closed = false
+        @Volatile var observations = 0
         private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
             this@RecordingRoomRepository.roomCode = roomCode
+            observations++
             try {
                 for (state in states) emit(state)
             } finally {

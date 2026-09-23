@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 
 internal fun HostSessionController.collectStatesForTest(observer: (HostingState) -> Unit): AutoCloseable {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -22,4 +23,15 @@ internal fun HostSessionController.awaitCreatedForTest() {
 
 internal fun HostSessionController.awaitSetupForTest() {
     runBlocking { withTimeout(5_000) { states.first { it is HostingState.Setup } } }
+}
+
+internal fun HostSessionController.awaitStateForTest(predicate: (HostingState) -> Boolean): HostingState =
+    runBlocking { withTimeout(5_000) { states.first(predicate) } }
+
+internal fun awaitConditionForTest(predicate: () -> Boolean) {
+    runBlocking {
+        withTimeout(5_000) {
+            while (!predicate()) delay(10)
+        }
+    }
 }

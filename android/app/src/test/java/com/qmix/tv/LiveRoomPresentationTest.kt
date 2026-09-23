@@ -289,6 +289,7 @@ class LiveRoomPresentationTest {
 
         createAndEnter(controller)
         controller.endRoom()
+        assertTrue(controller.awaitSetupForTest())
         createAndEnter(controller)
         val secondInitialState = controller.state
         first.publish(active(RoomState("ABCD", null, emptyList())))

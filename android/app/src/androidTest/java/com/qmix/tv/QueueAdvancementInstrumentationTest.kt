@@ -258,6 +258,8 @@ class QueueAdvancementInstrumentationTest {
         controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+            LocalPlaybackStatus.BUFFERING }
         assertEquals(listOf("current"), playback.prepared.map(PlaybackMedia::trackId))
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
 
@@ -271,6 +273,8 @@ class QueueAdvancementInstrumentationTest {
                 isSeekable = true,
             ),
         )
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+            LocalPlaybackStatus.PLAYING }
         assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
         controller.onSeekBy(Long.MIN_VALUE)
         controller.onSeekBy(Long.MAX_VALUE)
@@ -299,6 +303,8 @@ class QueueAdvancementInstrumentationTest {
         controller.onSeekBy(10_000)
         assertEquals(listOf(0L, 60_000L), playback.seeks)
         controller.onPlayPause()
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+            LocalPlaybackStatus.PAUSED }
         assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
         controller.onPlayPause()
         assertEquals(2, playback.playCount)
@@ -309,12 +315,17 @@ class QueueAdvancementInstrumentationTest {
                 error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
             ),
         )
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+            LocalPlaybackStatus.ERROR }
         controller.onRetryCurrent()
+        awaitConditionForTest { retryRequests.size == 1 }
         assertEquals(listOf("ABCD"), retryRequests)
         checkNotNull(retry)(RoomFetchResult.Success(selected))
+        awaitConditionForTest { playback.prepared.size == 2 }
         assertEquals(listOf("current", "current"), playback.prepared.map(PlaybackMedia::trackId))
 
         playback.emit(PlaybackState("current", PlaybackStatus.ENDED))
+        awaitConditionForTest { commands.size == 1 }
         assertEquals(1, commands.size)
         controller.endRoom()
         assertEquals(2, playback.pauseCount)
