@@ -4,13 +4,19 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.ArrayDeque
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -549,6 +555,73 @@ class HostSessionControllerInstrumentationTest {
         controller.onStartOrNext()
         assertEquals(1, commands)
         controller.endRoom()
+    }
+
+    @Test
+    fun restarting_after_a_cancelled_recovery_waits_for_its_cleanup() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val started = CountDownLatch(1)
+        val cleanup = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val restarted = CountDownLatch(1)
+        val fetches = AtomicInteger()
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomCollectionScope = roomScope,
+            foregroundReconcilerFactory = { { _: String ->
+                if (fetches.incrementAndGet() == 1) {
+                    started.countDown()
+                    try { awaitCancellation() }
+                    finally { withContext(NonCancellable + Dispatchers.IO) {
+                        cleanup.countDown()
+                        check(release.await(5, TimeUnit.SECONDS))
+                    } }
+                } else {
+                    restarted.countDown()
+                    RoomFetchResult.Failure
+                }
+            } },
+        )
+        try {
+            assertTrue(controller.createRoom())
+            controller.awaitCreatedForTest()
+            controller.enterRoom()
+            controller.onHostStopped()
+            controller.onHostStarted()
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            controller.onHostStopped()
+            assertTrue(cleanup.await(5, TimeUnit.SECONDS))
+            controller.onHostStarted()
+            assertEquals("recovery overlapped cancelled cleanup", 1, fetches.get())
+            release.countDown()
+            assertTrue("recovery did not restart after cleanup", restarted.await(5, TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+            controller.endRoom()
+            controller.awaitSetupForTest()
+        }
+    }
+
+    @Test
+    fun failed_settings_save_never_exposes_an_invitation_or_host_token() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            settingsPersistence = object : EndpointSettingsPersistence {
+                override fun load() = EndpointSettings.EMPTY
+                override fun save(settings: EndpointSettings): Unit = throw IllegalStateException("host-secret")
+                override fun isHttpWarningAcknowledged() = true
+                override fun acknowledgeHttpWarning() = Unit
+            },
+        )
+        assertTrue(controller.createRoom())
+        controller.awaitStateForTest { it is HostingState.Error }
+        assertEquals(UserMessage.PERSISTENCE_ERROR, (controller.state as HostingState.Error).message)
+        assertFalse(controller.state.toString().contains("host-secret"))
+        assertEquals(1, server.requestCount)
     }
 
     @Test
