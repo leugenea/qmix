@@ -611,7 +611,7 @@ class HostSessionControllerInstrumentationTest {
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
             settingsPersistence = object : EndpointSettingsPersistence {
-                override fun load() = EndpointSettings.EMPTY
+                override fun load() = EndpointSettings(server.url("/").toString(), "https://guest.example")
                 override fun save(settings: EndpointSettings): Unit = throw IllegalStateException("host-secret")
                 override fun isHttpWarningAcknowledged() = true
                 override fun acknowledgeHttpWarning() = Unit
