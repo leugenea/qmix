@@ -261,6 +261,7 @@ class QueueAdvancementInstrumentationTest {
         repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
             LocalPlaybackStatus.BUFFERING }
+        awaitConditionForTest { playback.prepared.map(PlaybackMedia::trackId) == listOf("current") }
         assertEquals(listOf("current"), playback.prepared.map(PlaybackMedia::trackId))
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
 
