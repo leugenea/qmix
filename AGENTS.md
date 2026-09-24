@@ -8,8 +8,11 @@
 - Work from a canonical issue. Use a sub-issue for each bounded implementation
   unit and preserve issue references in tests, docs, and pull requests where
   they explain a contract.
-- Follow TDD: add one focused failing test, run it to prove RED, make the minimum
-  change, prove GREEN, and then refactor. Do not weaken tests or coverage gates.
+- Add or update automated tests for every behavior change: new features need
+  tests covering the new behavior, and bug fixes need a regression test that
+  fails without the fix. Behavior-preserving refactors and dependency or
+  toolchain upgrades rely on the existing tests and gates. Do not weaken tests
+  or coverage gates.
 - Run `make lint test test-integration test-workflow-routing
   test-public-readiness test-sbom test-actionlint`. For Android changes, also
   run the Gradle assemble, lint, and JVM test commands in `CONTRIBUTING.md` with
