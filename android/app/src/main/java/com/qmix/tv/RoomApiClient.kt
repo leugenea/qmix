@@ -5,7 +5,6 @@ import java.net.SocketTimeoutException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -82,8 +81,6 @@ class RoomApiClient(
         .build()
     private val backend = backendUrl.trimEnd('/').toHttpUrl()
 
-    /** Temporary synchronous caller owned by qmix#182; all transport uses the suspend primitive. */
-    fun createRoomBlocking(): RoomCredentials = runBlocking { createRoom() }
 
     suspend fun createRoom(): RoomCredentials {
         val request = Request.Builder()

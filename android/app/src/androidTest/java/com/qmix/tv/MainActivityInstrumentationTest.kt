@@ -6,6 +6,7 @@ import android.view.KeyEvent
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
@@ -16,7 +17,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
-import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -89,6 +89,49 @@ class MainActivityInstrumentationTest {
         }
     }
 
+    /** qmix#182: stopped collectors resume at the latest application-owned state. */
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun stopped_activity_collects_latest_room_and_recreation_keeps_the_same_session() {
+        val server = MockWebServer()
+        server.start()
+        server.enqueue(MockResponse().setResponseCode(201).setBody(
+            """{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""",
+        ))
+        val application = ApplicationProvider.getApplicationContext<QMixApplication>()
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            roomCollectionScope = roomScope,
+            queueMutationContext = QueueMutationContext(Dispatchers.Main.immediate) {
+                android.os.Looper.myLooper() === android.os.Looper.getMainLooper()
+            },
+        )
+        val lease = application.installActivityHostSessionProvider { controller }
+        try {
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                assertTrue(controller.createRoom())
+                controller.awaitCreatedForTest()
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                controller.enterRoom()
+                assertTrue(controller.state is HostingState.LiveRoom)
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                val title = application.getString(R.string.room_title, "ABCD")
+                composeRule.waitUntilAtLeastOneExists(hasText(title), timeoutMillis = 10_000)
+                scenario.recreate()
+                scenario.onActivity { activity ->
+                    assertTrue((activity.application as QMixApplication).hostSessionForActivity() === controller)
+                }
+                composeRule.waitUntilAtLeastOneExists(hasText(title), timeoutMillis = 10_000)
+                assertTrue(controller.state is HostingState.LiveRoom)
+            }
+        } finally {
+            controller.endRoom()
+            lease.close()
+            server.shutdown()
+        }
+    }
+
     @Test
     fun activity_uses_its_on_create_controller_for_framework_media_key_dispatch() {
         val server = MockWebServer()
@@ -110,6 +153,7 @@ class MainActivityInstrumentationTest {
             providerLease = application.installActivityHostSessionProvider { createdController }
 
             assertTrue(createdController.createRoom())
+            createdController.awaitCreatedForTest()
             createdController.enterRoom()
             repository.publish(
                 RoomSyncState.Active(
@@ -237,6 +281,7 @@ class MainActivityInstrumentationTest {
             val application = ApplicationProvider.getApplicationContext<QMixApplication>()
             providerLease = application.installActivityHostSessionProvider { createdController }
             assertTrue(createdController.createRoom())
+            createdController.awaitCreatedForTest()
             createdController.enterRoom()
             val initial = RoomState(
                 "ABCD",
@@ -312,7 +357,6 @@ class MainActivityInstrumentationTest {
         httpClient = OkHttpClient(),
         initialBackendUrl = server.url("/").toString(),
         initialGuestOrigin = "https://guest.example",
-        executor = Executor { it.run() },
         roomRepositoryFactory = { repository },
         roomCollectionScope = roomScope,
         roomCollectionContext = Dispatchers.Unconfined,
@@ -320,13 +364,13 @@ class MainActivityInstrumentationTest {
             android.os.Looper.myLooper() === android.os.Looper.getMainLooper()
         },
         foregroundReconcilerFactory = { foregroundFetcher::fetchRoom },
-        playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
+        playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded, sessionScope ->
             AuthoritativePlaybackCoordinator(
                 roomCode = credentials.code,
                 streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                 playbackEngine = playback,
                 reconciler = { RoomFetchResult.Failure },
-                parentScope = roomScope,
+                parentScope = sessionScope,
                 mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
                 advanceAfterEnded = advanceAfterEnded,
                 observer = observer,

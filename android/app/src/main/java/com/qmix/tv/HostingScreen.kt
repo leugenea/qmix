@@ -16,6 +16,7 @@ internal fun HostingScreen(
 ) {
     MaterialTheme {
         when (state) {
+            HostingState.Ending -> Unit // Admission remains closed until detached cleanup completes.
             is HostingState.Setup -> SetupScreen(state, false, null, onSettingsChanged, onCreate)
             is HostingState.HttpWarning -> HttpWarningScreen(onConfirmHttpWarning, onCancelHttpWarning)
             is HostingState.Pending -> SetupScreen(

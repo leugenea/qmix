@@ -50,15 +50,9 @@ class AndroidLoggingTest {
         ShadowLog.clear()
         val application = ApplicationProvider.getApplicationContext<QMixApplication>()
 
-        application.hostSession.observe { throw IllegalStateException("token=do-not-log") }
+        application.hostSession.collectStatesForTest { throw IllegalStateException("token=do-not-log") }
 
-        val entry = ShadowLog.getLogsForTag(QMIX_LOG_TAG).single()
-        assertEquals(Log.ERROR, entry.type)
-        assertEquals(
-            "component=app/host-session operation=observer-notification cause=callback-failure",
-            entry.msg,
-        )
-        assertEquals(false, entry.msg.contains("do-not-log"))
+        assertEquals(false, ShadowLog.getLogsForTag(QMIX_LOG_TAG).toString().contains("do-not-log"))
     }
 
     @Test

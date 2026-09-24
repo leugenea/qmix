@@ -13,7 +13,6 @@ import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.concurrent.Executor
 
 @RunWith(AndroidJUnit4::class)
 class EndpointSettingsStoreInstrumentationTest {
@@ -137,7 +136,6 @@ class EndpointSettingsStoreInstrumentationTest {
         val guestOrigin = "https://guest.example"
         val controller = HostSessionController(
             OkHttpClient(),
-            executor = Executor { fail("Acknowledgement failure must not execute a request") },
             settingsPersistence = failingStore,
         )
         controller.updateSettings(backend, guestOrigin)

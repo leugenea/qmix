@@ -4,10 +4,8 @@ import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
     private lateinit var controller: HostSessionController
@@ -15,14 +13,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         controller = (application as QMixApplication).hostSessionForActivity()
-        var uiState by mutableStateOf(controller.state)
         setContent {
-            DisposableEffect(controller) {
-                val subscription = controller.observe { newState ->
-                    runOnUiThread { uiState = newState }
-                }
-                onDispose { subscription.close() }
-            }
+            val uiState by controller.states.collectAsStateWithLifecycle()
             HostingScreen(
                 state = uiState,
                 onSettingsChanged = controller::updateSettings,

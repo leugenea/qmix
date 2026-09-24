@@ -22,7 +22,7 @@ internal fun currentPlaybackStreamUrl(backendUrl: String, roomCode: String): Str
         .toString()
 
 class QMixApplication : Application() {
-    // Process-owned parent for #178, #180, and #181; session coordinators own child Jobs.
+    // Process-owned parent for #178, #180, #181, and #182; session coordinators own child Jobs.
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val queueMutationContext = QueueMutationContext(Dispatchers.Main.immediate) {
         Looper.myLooper() === Looper.getMainLooper()
@@ -56,7 +56,6 @@ class QMixApplication : Application() {
         HostSessionController(
             httpClient = client,
             settingsPersistence = EndpointSettingsStore(this),
-            logger = logger.component(QMixLogComponent.APP_HOST_SESSION),
             roomApiLogger = logger.component(QMixLogComponent.ROOM_API_CREATION),
             roomRepositoryFactory = { backendUrl ->
                 val api = RoomApiClient(
@@ -80,10 +79,10 @@ class QMixApplication : Application() {
                 )::fetchRoom
             },
             queueMutationContext = queueMutationContext,
-            queueCoordinatorFactory = { backendUrl, credentials, observer ->
-                createQueueCoordinator(client, backendUrl, credentials, observer)
+            queueCoordinatorFactory = { backendUrl, credentials, observer, sessionScope ->
+                createQueueCoordinator(client, backendUrl, credentials, observer, sessionScope)
             },
-            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
+            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded, sessionScope ->
                 val api = RoomApiClient(
                     client,
                     backendUrl,
@@ -96,7 +95,7 @@ class QMixApplication : Application() {
                         streamUrl = streamUrl,
                         playbackEngine = playbackEngine,
                         reconciler = api::fetchRoom,
-                        parentScope = applicationScope,
+                        parentScope = sessionScope,
                         mutationContext = queueMutationContext,
                         advanceAfterEnded = advanceAfterEnded,
                         observer = observer,
@@ -104,7 +103,7 @@ class QMixApplication : Application() {
                             roomCode = credentials.code,
                             hostToken = credentials.hostToken,
                             reportPlayer = api::reportPlayer,
-                            parentScope = applicationScope,
+                            parentScope = sessionScope,
                             mutationContext = queueMutationContext,
                             listener = listener,
                         ) },
@@ -119,6 +118,7 @@ class QMixApplication : Application() {
         backendUrl: String,
         credentials: RoomCredentials,
         observer: (QueueAdvancementState) -> Unit,
+        sessionScope: CoroutineScope = applicationScope,
     ): QueueAdvancementCoordinator {
         val api = RoomApiClient(client, backendUrl, logger.component(QMixLogComponent.ROOM_API_CREATION))
         return QueueAdvancementCoordinator(
@@ -127,7 +127,7 @@ class QMixApplication : Application() {
             command = RoomAdvanceCommand(api),
             reconciler = QueueRoomReconciler(api::fetchRoom),
             observer = observer,
-            parentScope = applicationScope,
+            parentScope = sessionScope,
             mutationContext = queueMutationContext,
         )
     }

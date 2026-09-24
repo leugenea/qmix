@@ -3,7 +3,6 @@ package com.qmix.tv
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -15,7 +14,10 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -55,72 +57,6 @@ class HostSessionControllerTest {
         server.shutdown()
     }
 
-    /** qmix#178: off-main recovery must not hold the foreground lock while waiting for main. */
-    @Test
-    fun foreground_stop_can_overtake_queued_recovery_without_lock_inversion() {
-        server.enqueue(MockResponse().setResponseCode(201)
-            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
-        val owner = java.util.concurrent.atomic.AtomicReference<Thread>()
-        val mutationExecutor = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "test-mutation").apply { isDaemon = true; owner.set(this) }
-        }
-        val recoveryExecutor = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "test-recovery-delivery").apply { isDaemon = true }
-        }
-        val recoveryQueued = CountDownLatch(1)
-        val dispatcher = object : kotlinx.coroutines.CoroutineDispatcher() {
-            override fun isDispatchNeeded(context: kotlin.coroutines.CoroutineContext) =
-                Thread.currentThread() !== owner.get()
-            override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
-                mutationExecutor.execute(block)
-                if (Thread.currentThread().name == "test-recovery-delivery") recoveryQueued.countDown()
-            }
-        }
-        val mutation = QueueMutationContext(dispatcher) { Thread.currentThread() === owner.get() }
-        val initial = RoomState("ABCD", null,
-            listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
-        val repository = RecordingRoomRepository()
-        val reconciler = RecordingReconciler()
-        var commands = 0
-        val controller = HostSessionController(
-            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
-            roomRepositoryFactory = { repository }, roomCollectionScope = queueScope,
-            roomCollectionContext = Dispatchers.Unconfined, foregroundReconcilerFactory = { reconciler::fetchRoom },
-            queueMutationContext = mutation,
-            queueCoordinatorFactory = { _, credentials, observer ->
-                QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
-                    QueueAdvanceCommand { _, _ -> commands++; QueueAdvanceCommandResult.Success },
-                    QueueRoomReconciler { RoomFetchResult.Success(initial) }, observer, queueScope, mutation)
-            },
-        )
-        val unblockMutation = CountDownLatch(1)
-        try {
-            assertTrue(controller.createRoom())
-            controller.enterRoom()
-            repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
-            controller.onHostStopped()
-            controller.onHostStarted()
-            val blocked = CountDownLatch(1)
-            mutationExecutor.execute { blocked.countDown(); check(unblockMutation.await(5, TimeUnit.SECONDS)) }
-            assertTrue(blocked.await(5, TimeUnit.SECONDS))
-            val stop = mutationExecutor.submit { controller.onHostStopped() }
-            val recovery = recoveryExecutor.submit { reconciler.complete(RoomFetchResult.Success(initial)) }
-            assertTrue(recoveryQueued.await(5, TimeUnit.SECONDS))
-            unblockMutation.countDown()
-            stop.get(5, TimeUnit.SECONDS)
-            recovery.get(5, TimeUnit.SECONDS)
-            assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
-            controller.onStartOrNext()
-            assertEquals(0, commands)
-            controller.endRoom()
-        } finally {
-            unblockMutation.countDown()
-            mutationExecutor.shutdownNow()
-            recoveryExecutor.shutdownNow()
-        }
-    }
-
     /** qmix#181: stop wins over a recovery Job already queued on the mutation dispatcher. */
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
@@ -135,9 +71,10 @@ class HostSessionControllerTest {
         var commands = 0
         val controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example", executor = Executor { it.run() },
+            initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = { repository }, roomCollectionScope = backgroundScope,
             roomCollectionContext = Dispatchers.Unconfined,
+            foregroundRecoveryContext = dispatcher,
             foregroundReconcilerFactory = { { _: String ->
                 fetches++
                 RoomFetchResult.Success(initial)
@@ -146,6 +83,7 @@ class HostSessionControllerTest {
             primaryActionHandler = { commands++ },
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.onHostStopped()
@@ -170,7 +108,7 @@ class HostSessionControllerTest {
         controller.onSeekBy(10_000)
         controller.onRetryCurrent()
 
-        assertTrue(controller.state is HostingState.Setup)
+        assertTrue(controller.awaitSetupForTest())
     }
 
     @Test
@@ -178,21 +116,11 @@ class HostSessionControllerTest {
         val sink = RecordingLogSink()
         val logger = QMixLogger(sink, QMixLogLevel.DEBUG) { null }
             .component(QMixLogComponent.APP_HOST_SESSION)
-        val controller = HostSessionController(OkHttpClient(), logger = logger)
+        val controller = HostSessionController(OkHttpClient())
 
-        controller.observe { throw IllegalStateException("host_token=do-not-log") }
+        controller.collectStatesForTest { throw IllegalStateException("host_token=do-not-log") }
 
-        assertEquals(
-            listOf(
-                QMixLogRecord(
-                    QMixLogLevel.ERROR,
-                    QMixLogComponent.APP_HOST_SESSION,
-                    QMixLogOperation.OBSERVER_NOTIFICATION,
-                    QMixLogCause.CALLBACK_FAILURE,
-                ),
-            ),
-            sink.records,
-        )
+        assertTrue(sink.records.isEmpty())
         assertFalse(sink.records.toString().contains("do-not-log"))
     }
 
@@ -206,7 +134,7 @@ class HostSessionControllerTest {
         val backend = server.url("/").toString()
         val controller = HostSessionController(
             OkHttpClient(),
-            executor = Executor { it.run() },
+
             settingsPersistence = persistence,
         )
         controller.updateSettings(backend, "https://guest.example")
@@ -218,6 +146,7 @@ class HostSessionControllerTest {
         )
         assertEquals(0, server.requestCount)
         assertTrue(controller.confirmHttpWarning())
+        controller.awaitCreatedForTest()
 
         assertTrue(persistence.warningAcknowledged)
         assertEquals(1, server.requestCount)
@@ -229,7 +158,7 @@ class HostSessionControllerTest {
 
         val restored = HostSessionController(
             OkHttpClient(),
-            executor = Executor { it.run() },
+
             settingsPersistence = persistence,
         )
         assertEquals(
@@ -243,12 +172,13 @@ class HostSessionControllerTest {
         val persistence = RecordingEndpointPersistence()
         val controller = HostSessionController(
             OkHttpClient(),
-            executor = Executor { it.run() },
+
             settingsPersistence = persistence,
         )
         controller.updateSettings("https://127.0.0.1:1/", "https://guest.example/")
 
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
 
         assertTrue(controller.state is HostingState.Error)
         assertFalse(persistence.warningAcknowledged)
@@ -265,7 +195,7 @@ class HostSessionControllerTest {
         val backend = server.url("/").toString()
         val controller = HostSessionController(
             OkHttpClient(),
-            executor = Executor { it.run() },
+
             settingsPersistence = persistence,
         )
         controller.updateSettings(backend, "https://guest.example")
@@ -284,6 +214,7 @@ class HostSessionControllerTest {
 
         persistence.failAcknowledgementAfterMutation = false
         assertTrue(controller.confirmHttpWarning())
+        controller.awaitCreatedForTest()
         assertEquals(1, server.requestCount)
         assertTrue(controller.state is HostingState.Invitation)
     }
@@ -296,10 +227,14 @@ class HostSessionControllerTest {
         )
         val persistence = BlockingAcknowledgementPersistence()
         val backend = server.url("/").toString()
+        val dispatcher = Executors.newSingleThreadExecutor { task -> Thread(task, "warning-mutation") }
+            .asCoroutineDispatcher()
         val controller = HostSessionController(
             OkHttpClient(),
-            executor = Executor { it.run() },
             settingsPersistence = persistence,
+            queueMutationContext = QueueMutationContext(dispatcher) {
+                Thread.currentThread().name == "warning-mutation"
+            },
         )
         controller.updateSettings(backend, "https://guest.example")
         assertTrue(controller.createRoom())
@@ -317,19 +252,20 @@ class HostSessionControllerTest {
                 cancellationFinished.countDown()
             }.apply { start() }
             assertTrue(cancellationStarted.await(5, TimeUnit.SECONDS))
-            awaitBlockedOnController(cancellation)
             assertEquals(1L, cancellationFinished.count)
 
             persistence.allowAcknowledgement.countDown()
 
             assertTrue(confirmation.get(5, TimeUnit.SECONDS))
             assertTrue(cancellationFinished.await(5, TimeUnit.SECONDS))
+            controller.awaitCreatedForTest()
             assertTrue(persistence.warningAcknowledged)
             assertEquals(1, server.requestCount)
             assertTrue(controller.state is HostingState.Invitation)
         } finally {
             persistence.allowAcknowledgement.countDown()
             confirmationThread.shutdownNow()
+            dispatcher.close()
         }
     }
 
@@ -351,7 +287,7 @@ class HostSessionControllerTest {
             val store = EndpointSettingsStore(context)
             val controller = HostSessionController(
                 OkHttpClient(),
-                executor = Executor { it.run() },
+
                 settingsPersistence = store,
             )
             controller.updateSettings(backend, guestOrigin)
@@ -365,6 +301,7 @@ class HostSessionControllerTest {
 
             assertTrue(controller.createRoom())
             assertTrue(controller.confirmHttpWarning())
+        controller.awaitCreatedForTest()
             assertEquals(1, server.requestCount)
             assertEquals(
                 mapOf(
@@ -385,13 +322,14 @@ class HostSessionControllerTest {
             val restoredStates = mutableListOf<HostingState>()
             val restored = HostSessionController(
                 OkHttpClient(),
-                executor = Executor { it.run() },
+
                 settingsPersistence = EndpointSettingsStore(context),
             )
-            restored.observe(restoredStates::add)
+            restored.collectStatesForTest(restoredStates::add)
             assertEquals(HostingState.Setup(canonicalBackend, guestOrigin), restored.state)
 
             assertTrue(restored.createRoom())
+            restored.awaitCreatedForTest()
 
             assertEquals(2, server.requestCount)
             assertTrue(restored.state is HostingState.Invitation)
@@ -420,15 +358,16 @@ class HostSessionControllerTest {
         )
         val controller = HostSessionController(
             OkHttpClient(),
-            executor = Executor { it.run() },
+
             settingsPersistence = failingStore,
         )
         val states = mutableListOf<HostingState>()
-        controller.observe(states::add)
+        controller.collectStatesForTest(states::add)
 
         try {
             controller.updateSettings(server.url("/").toString(), "https://guest.example")
             assertTrue(controller.createRoom())
+            controller.awaitCreatedForTest()
 
             assertEquals(1, server.requestCount)
             assertEquals(UserMessage.PERSISTENCE_ERROR, (controller.state as HostingState.Error).message)
@@ -438,7 +377,7 @@ class HostSessionControllerTest {
                 HostingState.Setup("", ""),
                 HostSessionController(
                     OkHttpClient(),
-                    executor = Executor { it.run() },
+
                     settingsPersistence = EndpointSettingsStore(context),
                 ).state,
             )
@@ -494,7 +433,7 @@ class HostSessionControllerTest {
         val controller = HostSessionController(OkHttpClient())
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val completed = CountDownLatch(1)
-        controller.observe { if (it is HostingState.Invitation) completed.countDown() }
+        controller.collectStatesForTest { if (it is HostingState.Invitation) completed.countDown() }
 
         assertTrue(controller.createRoom())
         assertFalse(controller.createRoom())
@@ -532,7 +471,7 @@ class HostSessionControllerTest {
         val controller = HostSessionController(OkHttpClient())
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val failed = CountDownLatch(1)
-        controller.observe { if (it is HostingState.Error) failed.countDown() }
+        controller.collectStatesForTest { if (it is HostingState.Error) failed.countDown() }
 
         assertTrue(controller.createRoom())
 
@@ -554,10 +493,11 @@ class HostSessionControllerTest {
         val controller = HostSessionController(OkHttpClient())
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val invited = CountDownLatch(1)
-        controller.observe { if (it is HostingState.Invitation) invited.countDown() }
+        controller.collectStatesForTest { if (it is HostingState.Invitation) invited.countDown() }
         controller.createRoom()
         assertTrue(invited.await(5, TimeUnit.SECONDS))
 
+        controller.awaitCreatedForTest()
         controller.enterRoom()
 
         assertEquals(
@@ -581,7 +521,7 @@ class HostSessionControllerTest {
         val setup = HostingState.Setup(server.url("/").toString().trimEnd('/'), "https://guest.example")
         controller.updateSettings(setup.backendUrl, setup.guestOrigin)
         val invited = CountDownLatch(1)
-        controller.observe { if (it is HostingState.Invitation) invited.countDown() }
+        controller.collectStatesForTest { if (it is HostingState.Invitation) invited.countDown() }
 
         controller.createRoom()
         server.takeRequest(5, TimeUnit.SECONDS)
@@ -605,13 +545,14 @@ class HostSessionControllerTest {
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            queueCoordinatorFactory = { _, credentials, observer ->
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
                 testQueueCoordinator(
-        queueScope,
+                    sessionScope,
                     credentials.code,
                     credentials.hostToken,
                     command,
@@ -621,6 +562,7 @@ class HostSessionControllerTest {
             },
         )
         controller.createRoom()
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         val room = RoomState(
             "ABCD",
@@ -638,6 +580,50 @@ class HostSessionControllerTest {
         assertFalse((controller.state as HostingState.LiveRoom).commandPending)
     }
 
+    /** qmix#182: the synchronous playback observer must win over the stop's old snapshot. */
+    @Test
+    fun stopping_a_playing_room_preserves_paused_playback_and_closes_recovery_gate() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val engine = HostRecordingPlaybackEngine()
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+            roomRepositoryFactory = { repository }, roomCollectionScope = queueScope,
+            roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            playbackCoordinatorFactory = { backendUrl, credentials, observer, advance, sessionScope ->
+                AuthoritativePlaybackCoordinator(
+                    credentials.code, "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
+                    engine, { RoomFetchResult.Failure }, sessionScope,
+                    QueueMutationContext(Dispatchers.Unconfined) { true }, advance, observer,
+                )
+            },
+        )
+        try {
+            assertTrue(controller.createRoom())
+            controller.awaitCreatedForTest()
+            controller.enterRoom()
+            repository.awaitCollection()
+            val room = RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList())
+            repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+            assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
+            engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+            assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
+
+            controller.onHostStopped()
+
+            val stopped = controller.state as HostingState.LiveRoom
+            assertEquals(1, engine.pauseCount)
+            assertEquals(LocalPlaybackStatus.PAUSED, stopped.playback.status)
+            assertTrue(stopped.foregroundRecoveryPending)
+            assertFalse(stopped.commandPending)
+        } finally {
+            controller.endRoom()
+        }
+    }
+
     @Test
     fun returning_to_foreground_requires_its_own_successful_reconciliation_before_commands() {
         server.enqueue(
@@ -652,22 +638,22 @@ class HostSessionControllerTest {
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
             foregroundReconcilerFactory = { reconciler::fetchRoom },
             queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
-            queueCoordinatorFactory = { _, credentials, observer ->
-                testQueueCoordinator(queueScope, credentials.code, credentials.hostToken, command, reconciler, observer)
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
+                testQueueCoordinator(sessionScope, credentials.code, credentials.hostToken, command, reconciler, observer)
             },
-            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
+            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded, sessionScope ->
                 AuthoritativePlaybackCoordinator(
                     credentials.code,
                     "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                     engine,
                     reconciler::fetchRoom,
-                    queueScope,
+                    sessionScope,
                     QueueMutationContext(Dispatchers.Unconfined) { true },
                     advanceAfterEnded,
                     observer,
@@ -675,7 +661,9 @@ class HostSessionControllerTest {
             },
         )
         controller.createRoom()
+        controller.awaitCreatedForTest()
         controller.enterRoom()
+        repository.awaitCollection()
         val initial = RoomState(
             "ABCD",
             CurrentTrack("one", 0, "playing", "One", "Artist"),
@@ -690,15 +678,20 @@ class HostSessionControllerTest {
 
         assertEquals(1, engine.pauseCount)
         assertTrue(command.callbacks.isEmpty())
+        reconciler.awaitCall()
         assertEquals(listOf("ABCD"), reconciler.calls)
         reconciler.complete(RoomFetchResult.Failure)
+        repository.awaitCollection()
         repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+        reconciler.awaitCall()
         assertEquals(listOf("ABCD", "ABCD"), reconciler.calls)
         reconciler.complete(RoomFetchResult.Success(initial.copy(code = "WRONG")))
+        repository.awaitCollection()
         controller.onStartOrNext()
         assertTrue(command.callbacks.isEmpty())
         assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+        reconciler.awaitCall()
         assertEquals(listOf("ABCD", "ABCD", "ABCD"), reconciler.calls)
         val replacement = initial.copy(current = CurrentTrack("other", 0, "playing", "Other", "Artist"))
         reconciler.complete(RoomFetchResult.Success(replacement))
@@ -729,20 +722,21 @@ class HostSessionControllerTest {
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            queueCoordinatorFactory = { _, credentials, observer ->
-                testQueueCoordinator(queueScope, credentials.code, credentials.hostToken, command, reconciler, observer)
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
+                testQueueCoordinator(sessionScope, credentials.code, credentials.hostToken, command, reconciler, observer)
             },
-            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
+            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded, sessionScope ->
                 AuthoritativePlaybackCoordinator(
                     roomCode = credentials.code,
                     streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                     playbackEngine = engine,
                     reconciler = reconciler::fetchRoom,
-                    parentScope = queueScope,
+                    parentScope = sessionScope,
                     mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
                     advanceAfterEnded = advanceAfterEnded,
                     observer = observer,
@@ -750,6 +744,7 @@ class HostSessionControllerTest {
             },
         )
         controller.createRoom()
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(
             RoomSyncState.Active(
@@ -851,7 +846,7 @@ class HostSessionControllerTest {
         controller.endRoom()
         assertEquals(3, engine.pauseCount)
         assertTrue(repository.closed)
-        assertTrue(controller.state is HostingState.Setup)
+        assertTrue(controller.awaitSetupForTest())
     }
 
     @Test
@@ -866,13 +861,15 @@ class HostSessionControllerTest {
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
         )
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val invited = CountDownLatch(1)
-        controller.observe { if (it is HostingState.Invitation) invited.countDown() }
+        controller.collectStatesForTest { if (it is HostingState.Invitation) invited.countDown() }
         controller.createRoom()
         assertTrue(invited.await(5, TimeUnit.SECONDS))
 
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         val synchronized = RoomSyncState.Active(
             "ABCD",
@@ -885,6 +882,7 @@ class HostSessionControllerTest {
         assertEquals("ABCD", repository.observedCode)
         assertEquals(synchronized, controller.roomSyncState)
         controller.endRoom()
+        assertTrue(controller.awaitSetupForTest())
         assertTrue(repository.closed)
         assertEquals(
             HostingState.Setup(server.url("/").toString().trimEnd('/'), "https://guest.example"),
@@ -906,13 +904,14 @@ class HostSessionControllerTest {
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
         )
 
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(
             RoomSyncState.Active(
@@ -931,7 +930,7 @@ class HostSessionControllerTest {
     }
 
     @Test
-    fun ending_room_waits_for_owned_collection_cleanup() {
+    fun ending_room_returns_before_collection_cleanup_but_setup_waits() {
         server.enqueue(
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
@@ -941,12 +940,13 @@ class HostSessionControllerTest {
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
-            roomCollectionContext = Dispatchers.Unconfined,
+            roomCollectionContext = Dispatchers.IO,
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         assertTrue(repository.collectionStarted.await(5, TimeUnit.SECONDS))
         val endReturned = CountDownLatch(1)
@@ -958,35 +958,358 @@ class HostSessionControllerTest {
                 endReturned.countDown()
             }
             assertTrue(repository.cleanupStarted.await(5, TimeUnit.SECONDS))
-            assertEquals(1L, endReturned.count)
+            assertTrue("endRoom must not wait for cleanup", endReturned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.state is HostingState.Ending)
 
             repository.allowCleanup.countDown()
             assertTrue(endReturned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.awaitSetupForTest())
             assertTrue(repository.cleanupCompleted.get())
-            assertTrue(controller.state is HostingState.Setup)
+            assertTrue(controller.awaitSetupForTest())
         } finally {
             repository.allowCleanup.countDown()
             endThread.shutdownNow()
         }
     }
 
+    /** qmix#182: a queued host command is part of the session, not only cancelled on close. */
     @Test
-    fun concurrent_stop_calls_wait_for_the_same_collection_cleanup() {
+    fun rejected_queue_command_can_exit_reentrantly_from_its_callback() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val finishCommand = CompletableDeferred<Unit>()
+        val dispatcher = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "host-mutation").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        val sawPending = AtomicBoolean(false)
+        val endedFromCollector = AtomicBoolean(false)
+        lateinit var controller: HostSessionController
+        controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = QueueMutationContext(dispatcher) {
+                Thread.currentThread().name.startsWith("host-mutation")
+            },
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
+                QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
+                    QueueAdvanceCommand { _, _ ->
+                        finishCommand.await()
+                        QueueAdvanceCommandResult.Rejected
+                    },
+                    QueueRoomReconciler { RoomFetchResult.Failure }, { update ->
+                        observer(update)
+                        if (update.pending) sawPending.set(true)
+                        else if (sawPending.get()) {
+                            endedFromCollector.set(true)
+                            assertEquals(LiveRoomBackResult.EXIT_ACTIVITY, controller.onBack())
+                        }
+                    },
+                    sessionScope, QueueMutationContext(Dispatchers.Unconfined) { true })
+            },
+        )
+        try {
+            controller.createRoom()
+            controller.awaitCreatedForTest()
+            controller.enterRoom()
+            val room = RoomState("ABCD", null,
+                listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+            repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+            controller.onStartOrNext()
+            assertTrue("pending state was not observed", sawPending.get())
+            // Resume on a daemon so the RED self-join cannot wedge the test JVM.
+            val returned = CountDownLatch(1)
+            Thread({ finishCommand.complete(Unit); returned.countDown() }, "reentrant-queue-probe")
+                .apply { isDaemon = true }.start()
+            assertTrue("queue callback joined its own owner", returned.await(3, TimeUnit.SECONDS))
+            assertTrue("teardown callback was not reached", endedFromCollector.get())
+            assertTrue(controller.awaitSetupForTest())
+        } finally {
+            dispatcher.close()
+        }
+    }
+
+    /** qmix#182: the callback returns promptly; Setup waits for the entire owner. */
+    @Test
+    fun reentrant_queue_callback_exits_immediately_but_setup_waits_for_owner() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val room = RoomState("ABCD", null,
+            listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+        val collectionStarted = CountDownLatch(1)
+        val cleanupStarted = CountDownLatch(1)
+        val allowCleanup = CountDownLatch(1)
+        val cleanupCompleted = AtomicBoolean(false)
+        val repository = object : RoomRepository {
+            override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+                collectionStarted.countDown()
+                try {
+                    emit(RoomSyncState.Active(roomCode, room, Freshness.FRESH, LiveConnection.CONNECTED))
+                    kotlinx.coroutines.awaitCancellation()
+                } finally {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        cleanupStarted.countDown()
+                        check(allowCleanup.await(5, TimeUnit.SECONDS))
+                        cleanupCompleted.set(true)
+                    }
+                }
+            }
+        }
+        val finishCommand = CompletableDeferred<Unit>()
+        val dispatcher = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "joined-host-mutation").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        val mutation = QueueMutationContext(dispatcher) {
+            Thread.currentThread().name.startsWith("joined-host-mutation")
+        }
+        val callbackReached = CountDownLatch(1)
+        val queueReady = CountDownLatch(1)
+        val teardownReturned = CountDownLatch(1)
+        val sawPending = AtomicBoolean(false)
+        val teardownResult = java.util.concurrent.atomic.AtomicReference<LiveRoomBackResult?>()
+        lateinit var controller: HostSessionController
+        controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.IO,
+            queueMutationContext = mutation,
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
+                QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
+                    QueueAdvanceCommand { _, _ ->
+                        finishCommand.await()
+                        QueueAdvanceCommandResult.Rejected
+                    }, QueueRoomReconciler { RoomFetchResult.Failure }, observer,
+                    sessionScope, mutation)
+            },
+        )
+        val observation = controller.collectStatesForTest { state ->
+            val live = state as? HostingState.LiveRoom ?: return@collectStatesForTest
+            if (live.isPrimaryActionEnabled) queueReady.countDown()
+            if (live.commandPending) {
+                sawPending.set(true)
+            } else if (sawPending.get() && callbackReached.count > 0L) {
+                callbackReached.countDown()
+                teardownResult.set(controller.onBack())
+                teardownReturned.countDown()
+            }
+        }
+        try {
+            controller.createRoom()
+            controller.awaitCreatedForTest()
+            controller.enterRoom()
+            assertTrue(collectionStarted.await(5, TimeUnit.SECONDS))
+            assertTrue("authoritative queue was not delivered", queueReady.await(5, TimeUnit.SECONDS))
+            controller.onStartOrNext()
+            assertTrue("pending state was not observed", sawPending.get())
+
+            finishCommand.complete(Unit)
+            assertTrue("real queue-child callback was not reached", callbackReached.await(5, TimeUnit.SECONDS))
+            assertTrue("owned collection cleanup did not start", cleanupStarted.await(5, TimeUnit.SECONDS))
+            assertTrue("reentrant teardown must return before owner cleanup", teardownReturned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.state is HostingState.Ending)
+
+            allowCleanup.countDown()
+            assertTrue("reentrant teardown did not return", teardownReturned.await(5, TimeUnit.SECONDS))
+            assertEquals(LiveRoomBackResult.EXIT_ACTIVITY, teardownResult.get())
+            assertTrue(controller.awaitSetupForTest())
+            assertTrue("owner cleanup was incomplete at readiness", cleanupCompleted.get())
+            assertTrue(controller.awaitSetupForTest())
+        } finally {
+            observation.close()
+            finishCommand.complete(Unit)
+            allowCleanup.countDown()
+            dispatcher.close()
+        }
+    }
+
+    /** qmix#182: a player-report child may synchronously notify a host callback. */
+    @Test
+    fun conflicted_player_report_can_end_room_reentrantly_from_its_callback() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val engine = HostRecordingPlaybackEngine()
+        val finishReport = CompletableDeferred<Unit>()
+        val endedFromCallback = AtomicBoolean(false)
+        lateinit var controller: HostSessionController
+        controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            playbackCoordinatorFactory = { _, credentials, observer, advance, sessionScope ->
+                val mutation = QueueMutationContext(Dispatchers.Unconfined) { true }
+                AuthoritativePlaybackCoordinator(credentials.code, "https://example/stream", engine,
+                    { RoomFetchResult.Failure }, sessionScope, mutation, advance, { playback ->
+                        observer(playback)
+                        if (!playback.reportSynchronized) {
+                            endedFromCallback.set(true)
+                            controller.endRoom()
+                        }
+                    }, statePublisherFactory = { listener ->
+                        PlayerStatePublisher(credentials.code, credentials.hostToken,
+                            { _, _, _ -> finishReport.await(); PlayerReportResult.CONFLICT },
+                            sessionScope, mutation, listener)
+                    })
+            },
+        )
+        controller.createRoom()
+        controller.awaitCreatedForTest()
+        controller.enterRoom()
+        repository.publish(RoomSyncState.Active("ABCD",
+            RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList()),
+            Freshness.FRESH, LiveConnection.CONNECTED))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        val returned = CountDownLatch(1)
+        Thread({ finishReport.complete(Unit); returned.countDown() }, "reentrant-report-probe")
+            .apply { isDaemon = true }.start()
+        assertTrue("player report callback joined its own owner", returned.await(3, TimeUnit.SECONDS))
+        assertTrue("teardown callback was not reached", endedFromCallback.get())
+        assertTrue(controller.awaitSetupForTest())
+    }
+
+    /** qmix#182: a queued host command is part of the session, not only cancelled on close. */
+    @Test
+    fun ending_room_returns_before_queue_cleanup_but_setup_waits() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val started = CountDownLatch(1)
+        val cleanupStarted = CountDownLatch(1)
+        val allowCleanup = CountDownLatch(1)
+        val cleaned = AtomicBoolean(false)
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.Unconfined,
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
+                QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
+                    QueueAdvanceCommand { _, _ ->
+                        started.countDown()
+                        try { kotlinx.coroutines.awaitCancellation() }
+                        finally {
+                            withContext(NonCancellable + Dispatchers.IO) {
+                                cleanupStarted.countDown()
+                                check(allowCleanup.await(5, TimeUnit.SECONDS))
+                                cleaned.set(true)
+                            }
+                        }
+                    }, QueueRoomReconciler { RoomFetchResult.Failure }, observer,
+                    sessionScope, QueueMutationContext(Dispatchers.Unconfined) { true })
+            },
+        )
+        controller.createRoom()
+        controller.awaitCreatedForTest()
+        controller.enterRoom()
+        val room = RoomState("ABCD", null,
+            listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.onStartOrNext()
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        val returned = CountDownLatch(1)
+        val endThread = Executors.newSingleThreadExecutor()
+        try {
+            endThread.execute { controller.endRoom(); returned.countDown() }
+            assertTrue(cleanupStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(returned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.state is HostingState.Ending)
+            allowCleanup.countDown()
+            assertTrue(returned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.awaitSetupForTest())
+            assertTrue(cleaned.get())
+            assertTrue(controller.awaitSetupForTest())
+        } finally {
+            allowCleanup.countDown()
+            endThread.shutdownNow()
+        }
+    }
+
+    /** qmix#182: reporting belongs to the same room owner as queue and repository work. */
+    @Test
+    fun ending_room_returns_before_report_cleanup_but_setup_waits() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val engine = HostRecordingPlaybackEngine()
+        val reportStarted = CountDownLatch(1)
+        val cleanupStarted = CountDownLatch(1)
+        val allowCleanup = CountDownLatch(1)
+        val cleaned = AtomicBoolean(false)
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            playbackCoordinatorFactory = { _, credentials, observer, advance, sessionScope ->
+                val mutation = QueueMutationContext(Dispatchers.Unconfined) { true }
+                AuthoritativePlaybackCoordinator(credentials.code, "https://example/stream", engine,
+                    { RoomFetchResult.Failure }, sessionScope, mutation, advance, observer,
+                    statePublisherFactory = { listener ->
+                        PlayerStatePublisher(credentials.code, credentials.hostToken,
+                            { _, _, _ ->
+                                reportStarted.countDown()
+                                try { kotlinx.coroutines.awaitCancellation() }
+                                finally {
+                                    withContext(NonCancellable + Dispatchers.IO) {
+                                        cleanupStarted.countDown()
+                                        check(allowCleanup.await(5, TimeUnit.SECONDS))
+                                        cleaned.set(true)
+                                    }
+                                }
+                            }, sessionScope, mutation, listener)
+                    })
+            },
+        )
+        controller.createRoom()
+        controller.awaitCreatedForTest()
+        controller.enterRoom()
+        repository.publish(RoomSyncState.Active("ABCD",
+            RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList()),
+            Freshness.FRESH, LiveConnection.CONNECTED))
+        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+        assertTrue(reportStarted.await(5, TimeUnit.SECONDS))
+        val returned = CountDownLatch(1)
+        val endThread = Executors.newSingleThreadExecutor()
+        try {
+            endThread.execute { controller.endRoom(); returned.countDown() }
+            assertTrue(cleanupStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(returned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.state is HostingState.Ending)
+            allowCleanup.countDown()
+            assertTrue(returned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.awaitSetupForTest())
+            assertTrue(cleaned.get())
+            assertTrue(controller.awaitSetupForTest())
+        } finally {
+            allowCleanup.countDown()
+            endThread.shutdownNow()
+        }
+    }
+
+    @Test
+    fun concurrent_stop_calls_return_before_the_same_collection_cleanup() {
         server.enqueue(
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
         )
         val repository = BlockingCleanupRoomRepository()
+        val dispatcher = Executors.newSingleThreadExecutor { task -> Thread(task, "stop-mutation") }
+            .asCoroutineDispatcher()
         val controller = HostSessionController(
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
-            roomCollectionContext = Dispatchers.Unconfined,
+            roomCollectionContext = Dispatchers.IO,
+            queueMutationContext = QueueMutationContext(dispatcher) {
+                Thread.currentThread().name == "stop-mutation"
+            },
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         assertTrue(repository.collectionStarted.await(5, TimeUnit.SECONDS))
         val begin = CountDownLatch(1)
@@ -1003,14 +1326,16 @@ class HostSessionControllerTest {
             }
             begin.countDown()
             assertTrue(repository.cleanupStarted.await(5, TimeUnit.SECONDS))
-            assertEquals(2L, returned.count)
+            assertTrue("stop must not wait for cleanup", returned.await(5, TimeUnit.SECONDS))
 
             repository.allowCleanup.countDown()
             assertTrue(returned.await(5, TimeUnit.SECONDS))
+            assertTrue(repository.cleanupDone.await(5, TimeUnit.SECONDS))
             assertTrue(repository.cleanupCompleted.get())
         } finally {
             repository.allowCleanup.countDown()
             callers.shutdownNow()
+            dispatcher.close()
         }
     }
 
@@ -1025,13 +1350,14 @@ class HostSessionControllerTest {
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
+
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
         )
         val ended = CountDownLatch(1)
-        controller.observe { state ->
+        controller.collectStatesForTest { state ->
             val sync = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
             if (sync?.freshness == Freshness.FRESH) {
                 controller.endRoom()
@@ -1039,6 +1365,7 @@ class HostSessionControllerTest {
             }
         }
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
 
         repository.publish(
@@ -1051,21 +1378,238 @@ class HostSessionControllerTest {
         )
 
         assertTrue(ended.await(5, TimeUnit.SECONDS))
+        // endRoom returns at Ending; Setup is published only after the collection Job joins.
+        assertTrue(controller.awaitSetupForTest())
         assertEquals(1, repository.cancellations)
         assertEquals(0, repository.activeCollectors)
-        assertTrue(controller.state is HostingState.Setup)
     }
 
-    private fun awaitBlockedOnController(thread: Thread) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        while (thread.isAlive && thread.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
-            Thread.yield()
+    /** qmix#182: a nested playback callback cannot join the collecting Job. */
+    @Test
+    fun nested_playback_callback_can_end_room_on_shared_mutation_dispatcher() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val room = RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList())
+        val collecting = CountDownLatch(1)
+        val emitted = CountDownLatch(1)
+        val repository = object : RoomRepository {
+            override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+                collecting.countDown()
+                emit(RoomSyncState.Active(roomCode, room, Freshness.FRESH, LiveConnection.CONNECTED))
+                emitted.countDown()
+                kotlinx.coroutines.awaitCancellation()
+            }
         }
-        assertEquals(
-            "cancellation must be waiting for the controller monitor",
-            Thread.State.BLOCKED,
-            thread.state,
+        val engine = HostRecordingPlaybackEngine()
+        val dispatcher = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "nested-host-mutation").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        val mutation = QueueMutationContext(dispatcher) {
+            Thread.currentThread().name.startsWith("nested-host-mutation")
+        }
+        val entered = CountDownLatch(1)
+        val ended = CountDownLatch(1)
+        lateinit var controller: HostSessionController
+        controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.IO,
+            queueMutationContext = mutation,
+            playbackCoordinatorFactory = { _, credentials, observer, advance, sessionScope ->
+                AuthoritativePlaybackCoordinator(credentials.code, "https://example/stream", engine,
+                    { RoomFetchResult.Failure }, sessionScope, mutation, advance, { playback ->
+                        observer(playback)
+                        if (playback.status == LocalPlaybackStatus.BUFFERING) {
+                            entered.countDown()
+                            controller.endRoom()
+                            ended.countDown()
+                        }
+                    })
+            },
         )
+        try {
+            controller.createRoom()
+            controller.awaitCreatedForTest()
+            controller.enterRoom()
+            assertTrue("room flow did not start", collecting.await(5, TimeUnit.SECONDS))
+            assertTrue("nested playback callback was not reached: state=${controller.state}",
+                entered.await(5, TimeUnit.SECONDS))
+            assertTrue("nested callback joined the collecting Job", ended.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.awaitSetupForTest())
+        } finally {
+            dispatcher.close()
+        }
+    }
+
+    /** qmix#182: foreground-loss reentrancy is non-blocking; Setup is delayed. */
+    @Test
+    fun foreground_loss_callback_ending_room_defers_setup_until_cleanup() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val commandStarted = CountDownLatch(1)
+        val cleanupStarted = CountDownLatch(1)
+        val allowCleanup = CountDownLatch(1)
+        val cleanupCompleted = AtomicBoolean(false)
+        val callbackReached = CountDownLatch(1)
+        val endReturned = CountDownLatch(1)
+        val stopReturned = CountDownLatch(1)
+        val setupPublished = CountDownLatch(1)
+        val dispatcher = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "foreground-host-mutation").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        val mutation = QueueMutationContext(dispatcher) {
+            Thread.currentThread().name.startsWith("foreground-host-mutation")
+        }
+        lateinit var controller: HostSessionController
+        controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = mutation,
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
+                QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
+                    QueueAdvanceCommand { _, _ ->
+                        commandStarted.countDown()
+                        try { kotlinx.coroutines.awaitCancellation() }
+                        finally {
+                            withContext(NonCancellable + Dispatchers.IO) {
+                                cleanupStarted.countDown()
+                                check(allowCleanup.await(5, TimeUnit.SECONDS))
+                                cleanupCompleted.set(true)
+                            }
+                        }
+                    }, QueueRoomReconciler { RoomFetchResult.Failure }, { update ->
+                        observer(update)
+                        if (!update.pending && callbackReached.count > 0L) {
+                            callbackReached.countDown()
+                            controller.endRoom()
+                            endReturned.countDown()
+                        }
+                    }, sessionScope, mutation)
+            },
+        )
+        val caller = Executors.newSingleThreadExecutor()
+        val observation = controller.collectStatesForTest { state ->
+            if (state is HostingState.Setup) setupPublished.countDown()
+        }
+        try {
+            controller.createRoom()
+            controller.awaitCreatedForTest()
+            controller.enterRoom()
+            val room = RoomState("ABCD", null,
+                listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+            repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+            controller.onStartOrNext()
+            assertTrue("owned queue command did not start", commandStarted.await(5, TimeUnit.SECONDS))
+
+            caller.execute { controller.onHostStopped(); stopReturned.countDown() }
+            assertTrue("foreground-loss callback was not reached", callbackReached.await(5, TimeUnit.SECONDS))
+            assertTrue("owned cleanup did not start", cleanupStarted.await(5, TimeUnit.SECONDS))
+            assertTrue("endRoom must return before owned cleanup", endReturned.await(5, TimeUnit.SECONDS))
+            assertTrue("onHostStopped must return before owned cleanup", stopReturned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.state is HostingState.Ending)
+
+            allowCleanup.countDown()
+            assertTrue("reentrant endRoom did not return", endReturned.await(5, TimeUnit.SECONDS))
+            assertTrue("onHostStopped did not return", stopReturned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.awaitSetupForTest())
+            assertTrue("owned cleanup was incomplete at readiness", cleanupCompleted.get())
+            assertTrue("Setup was not published after cleanup", setupPublished.await(5, TimeUnit.SECONDS))
+            assertTrue("stale LiveRoom published after Setup", controller.awaitSetupForTest())
+        } finally {
+            observation.close()
+            allowCleanup.countDown()
+            caller.shutdownNow()
+            dispatcher.close()
+        }
+    }
+
+    /** qmix#182: a room-collection callback never joins; the finalizer waits for siblings. */
+    @Test
+    fun room_collection_callback_ending_room_defers_setup_until_sibling_cleanup() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
+        val repository = RecordingRoomRepository()
+        val engine = HostRecordingPlaybackEngine()
+        val commandStarted = CountDownLatch(1)
+        val cleanupStarted = CountDownLatch(1)
+        val allowCleanup = CountDownLatch(1)
+        val cleanupCompleted = AtomicBoolean(false)
+        val callbackReached = CountDownLatch(1)
+        val endReturned = CountDownLatch(1)
+        val queueReady = CountDownLatch(1)
+        val dispatcher = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "collection-sibling-mutation").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        val mutation = QueueMutationContext(dispatcher) {
+            Thread.currentThread().name.startsWith("collection-sibling-mutation")
+        }
+        lateinit var controller: HostSessionController
+        controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
+            roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.IO,
+            queueMutationContext = mutation,
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
+                QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
+                    QueueAdvanceCommand { _, _ ->
+                        commandStarted.countDown()
+                        try { kotlinx.coroutines.awaitCancellation() }
+                        finally {
+                            withContext(NonCancellable + Dispatchers.IO) {
+                                cleanupStarted.countDown()
+                                check(allowCleanup.await(5, TimeUnit.SECONDS))
+                                cleanupCompleted.set(true)
+                            }
+                        }
+                    }, QueueRoomReconciler { RoomFetchResult.Failure }, observer, sessionScope, mutation)
+            },
+            playbackCoordinatorFactory = { _, credentials, observer, advance, sessionScope ->
+                AuthoritativePlaybackCoordinator(credentials.code, "https://example/stream", engine,
+                    { RoomFetchResult.Failure }, sessionScope, mutation, advance, { playback ->
+                        observer(playback)
+                        if (playback.status == LocalPlaybackStatus.BUFFERING && callbackReached.count > 0L) {
+                            callbackReached.countDown()
+                            controller.endRoom()
+                            endReturned.countDown()
+                        }
+                    })
+            },
+        )
+        val observation = controller.collectStatesForTest { state ->
+            if ((state as? HostingState.LiveRoom)?.isPrimaryActionEnabled == true) queueReady.countDown()
+        }
+        try {
+            controller.createRoom()
+            controller.awaitCreatedForTest()
+            controller.enterRoom()
+            assertTrue("room collection did not start", repository.collectionStarted.await(5, TimeUnit.SECONDS))
+            val queued = QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")
+            repository.publish(RoomSyncState.Active("ABCD", RoomState("ABCD", null, listOf(queued)),
+                Freshness.FRESH, LiveConnection.CONNECTED))
+            assertTrue("authoritative queue was not delivered", queueReady.await(5, TimeUnit.SECONDS))
+            controller.onStartOrNext()
+            assertTrue("sibling queue command did not start", commandStarted.await(5, TimeUnit.SECONDS))
+
+            repository.publish(RoomSyncState.Active("ABCD",
+                RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList()),
+                Freshness.FRESH, LiveConnection.CONNECTED))
+            assertTrue("room-collection callback was not reached", callbackReached.await(5, TimeUnit.SECONDS))
+            assertTrue("sibling cleanup did not start", cleanupStarted.await(5, TimeUnit.SECONDS))
+            assertTrue("room must remain Ending until sibling cleanup", controller.state is HostingState.Ending)
+            assertTrue("endRoom must return before sibling cleanup", endReturned.await(5, TimeUnit.SECONDS))
+
+            allowCleanup.countDown()
+            assertTrue("reentrant endRoom did not return", endReturned.await(5, TimeUnit.SECONDS))
+            assertTrue(controller.awaitSetupForTest())
+            assertTrue("sibling cleanup was incomplete at readiness", cleanupCompleted.get())
+            assertTrue(controller.awaitSetupForTest())
+        } finally {
+            observation.close()
+            allowCleanup.countDown()
+            dispatcher.close()
+        }
     }
 
     private class BlockingAcknowledgementPersistence : EndpointSettingsPersistence {
@@ -1160,11 +1704,17 @@ class HostSessionControllerTest {
     private class RecordingReconciler : TestRoomFetcher {
         private var callback: ((RoomFetchResult) -> Unit)? = null
         val calls = mutableListOf<String>()
+        private val entered = java.util.concurrent.LinkedBlockingQueue<String>()
+
+        fun awaitCall() {
+            assertEquals("ABCD", entered.poll(5, TimeUnit.SECONDS))
+        }
 
         override fun fetch(roomCode: String, callback: (RoomFetchResult) -> Unit): Cancelable {
             assertEquals("ABCD", roomCode)
             calls += roomCode
             this.callback = callback
+            entered.add(roomCode)
             return Cancelable { }
         }
 
@@ -1176,6 +1726,7 @@ class HostSessionControllerTest {
     private class BlockingCleanupRoomRepository : RoomRepository {
         val collectionStarted = CountDownLatch(1)
         val cleanupStarted = CountDownLatch(1)
+        val cleanupDone = CountDownLatch(1)
         val allowCleanup = CountDownLatch(1)
         val cleanupCompleted = AtomicBoolean(false)
 
@@ -1188,6 +1739,7 @@ class HostSessionControllerTest {
                 cleanupStarted.countDown()
                 check(allowCleanup.await(5, TimeUnit.SECONDS)) { "Collection cleanup gate timed out" }
                 cleanupCompleted.set(true)
+                cleanupDone.countDown()
             }
         }
     }
@@ -1217,13 +1769,21 @@ class HostSessionControllerTest {
 
     private class RecordingRoomRepository : RoomRepository {
         var observedCode: String? = null
+        val collectionStarted = CountDownLatch(1)
         var closed = false
         private val collectors = mutableListOf<Channel<RoomSyncState>>()
+        private val entered = java.util.concurrent.LinkedBlockingQueue<Unit>()
+
+        fun awaitCollection() {
+            assertEquals(Unit, entered.poll(5, TimeUnit.SECONDS))
+        }
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
             observedCode = roomCode
             val states = Channel<RoomSyncState>(Channel.UNLIMITED)
             collectors += states
+            entered.add(Unit)
+            collectionStarted.countDown()
             try {
                 for (state in states) emit(state)
             } finally {

@@ -1,6 +1,8 @@
 package com.qmix.tv
 
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -10,6 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 sealed interface QueueAdvanceCommandResult {
     data object Success : QueueAdvanceCommandResult
@@ -30,10 +33,37 @@ fun interface QueueRoomReconciler {
  */
 class QueueMutationContext(
     val dispatcher: CoroutineDispatcher,
-    private val isCurrent: () -> Boolean,
+    private val isCurrent: () -> Boolean = { false },
 ) {
+    // The marker identifies this context's executing action, not merely a thread in a
+    // shared dispatcher pool. Nested synchronous calls must not dispatch onto themselves.
+    private val executing = ThreadLocal<Boolean>()
+
+    fun isOnContext(): Boolean = executing.get() == true || isCurrent()
+    private fun <T> marked(action: () -> T): T {
+        val previous = executing.get()
+        executing.set(true)
+        try { return action() } finally {
+            if (previous == null) executing.remove() else executing.set(previous)
+        }
+    }
+
     fun <T> run(action: () -> T): T =
-        if (isCurrent()) action() else runBlocking(dispatcher) { action() }
+        if (isOnContext()) marked(action) else runBlocking(dispatcher) { marked(action) }
+
+    // Cancellation removes a worker from the dispatcher queue without requiring that
+    // dispatcher to resume first; synchronous teardown may be joining the worker on it.
+    suspend fun <T> runFromWorker(action: () -> T): T =
+        if (isOnContext()) marked(action) else suspendCancellableCoroutine { continuation ->
+            dispatcher.dispatch(EmptyCoroutineContext, Runnable {
+                if (!continuation.isActive) return@Runnable
+                try {
+                    continuation.resume(marked(action))
+                } catch (failure: Throwable) {
+                    continuation.resumeWith(Result.failure(failure))
+                }
+            })
+        }
 }
 
 enum class QueueAdvanceOutcome { ADVANCED, RECONCILED_NO_ADVANCE, REJECTED }
@@ -57,7 +87,7 @@ class QueueAdvancementCoordinator(
     private class Selection(val trackId: String?, var endedConsumed: Boolean = false)
 
     private val sessionJob = SupervisorJob(requireNotNull(parentScope.coroutineContext[Job]))
-    private val scope = CoroutineScope(parentScope.coroutineContext + sessionJob + mutationContext.dispatcher)
+    private val scope = CoroutineScope(parentScope.coroutineContext + sessionJob)
     private var latestRoom: RoomState? = null
     private var selection: Selection? = null
     private var pending: Pending? = null
@@ -120,6 +150,7 @@ class QueueAdvancementCoordinator(
 
     private fun createOperation(unresolved: Pending, commandRequired: Boolean): Job =
         scope.launch(start = CoroutineStart.LAZY) {
+            val activeJob = requireNotNull(coroutineContext[Job])
             if (commandRequired) {
                 val result = try {
                     command.skip(roomCode, hostToken)
@@ -130,10 +161,22 @@ class QueueAdvancementCoordinator(
                 }
                 coroutineContext.ensureActive()
                 if (result == QueueAdvanceCommandResult.Rejected) {
-                    settle(QueueAdvanceOutcome.REJECTED)
+                    mutationContext.runFromWorker {
+                        if (operation === activeJob && pending === unresolved && sessionJob.isActive) {
+                            settle(QueueAdvanceOutcome.REJECTED, activeJob)
+                        }
+                    }
                     return@launch
                 }
-                unresolved.needsReconciliation = true
+                val stillOwned = mutationContext.runFromWorker {
+                    if (operation !== activeJob || pending !== unresolved || !sessionJob.isActive || !foregroundReady) {
+                        false
+                    } else {
+                        unresolved.needsReconciliation = true
+                        true
+                    }
+                }
+                if (!stillOwned) return@launch
             }
             val result = try {
                 reconciler.fetch(roomCode)
@@ -143,24 +186,38 @@ class QueueAdvancementCoordinator(
                 RoomFetchResult.Failure
             }
             coroutineContext.ensureActive()
-            when (result) {
-                is RoomFetchResult.Success -> if (result.room.code == roomCode) {
-                    updateRoom(result.room)
-                    settle(if (unresolved.previousCurrentId != result.room.current?.trackId) {
-                        QueueAdvanceOutcome.ADVANCED
-                    } else {
-                        QueueAdvanceOutcome.RECONCILED_NO_ADVANCE
-                    })
+            mutationContext.runFromWorker {
+                if (operation !== activeJob || pending !== unresolved || !sessionJob.isActive || !foregroundReady) {
+                    return@runFromWorker
                 }
-                RoomFetchResult.Missing -> settle(QueueAdvanceOutcome.REJECTED)
-                RoomFetchResult.Failure -> Unit
+                when (result) {
+                    is RoomFetchResult.Success -> if (result.room.code == roomCode) {
+                        updateRoom(result.room)
+                        settle(if (unresolved.previousCurrentId != result.room.current?.trackId) {
+                            QueueAdvanceOutcome.ADVANCED
+                        } else {
+                            QueueAdvanceOutcome.RECONCILED_NO_ADVANCE
+                        }, activeJob)
+                    }
+                    RoomFetchResult.Missing -> settle(QueueAdvanceOutcome.REJECTED, activeJob)
+                    RoomFetchResult.Failure -> Unit
+                }
             }
             // Keep a completed Job rather than cleanup that could clear a newer operation.
         }
 
-    private fun settle(outcome: QueueAdvanceOutcome) {
+    private fun settle(outcome: QueueAdvanceOutcome, activeJob: Job) {
         pending = null
-        publish(QueueAdvancementState(lastOutcome = outcome))
+        val next = QueueAdvancementState(lastOutcome = outcome)
+        state = next
+        // Complete the operation before notifying. A synchronous observer may tear down the
+        // session and must never have to exclude the operation that invoked it from joining.
+        scope.launch {
+            activeJob.join()
+            mutationContext.runFromWorker {
+                if (sessionJob.isActive && state === next) observer(next)
+            }
+        }
     }
 
     private fun publish(next: QueueAdvancementState) {

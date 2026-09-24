@@ -110,7 +110,7 @@ class HostSessionLifecycleTest {
             scenario.onActivity { activity ->
                 controller = (activity.application as QMixApplication).hostSession
                 controller.updateSettings(server.url("/").toString(), "https://guest.example")
-                observation = controller.observe { state ->
+                observation = controller.collectStatesForTest { state ->
                     if (state is HostingState.Invitation) invitationReady.countDown()
                 }
                 server.enqueue(
@@ -122,7 +122,12 @@ class HostSessionLifecycleTest {
                     assertTrue(controller.confirmHttpWarning())
                 }
             }
-            assertTrue(invitationReady.await(5, TimeUnit.SECONDS))
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (invitationReady.count != 0L && System.nanoTime() < deadline) {
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+                invitationReady.await(10, TimeUnit.MILLISECONDS)
+            }
+            assertEquals(0L, invitationReady.count)
 
             scenario.onActivity {
                 controller.enterRoom()
@@ -134,6 +139,11 @@ class HostSessionLifecycleTest {
                 assertTrue(activity.isFinishing)
             }
 
+            val readyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (controller.state !is HostingState.Setup && System.nanoTime() < readyDeadline) {
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+                Thread.yield()
+            }
             assertTrue(controller.state is HostingState.Setup)
         } finally {
             observation?.close()

@@ -3,7 +3,6 @@ package com.qmix.tv
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,9 +58,10 @@ class QueueAdvancementInstrumentationTest {
         val application = ApplicationProvider.getApplicationContext<QMixApplication>()
         val controller = application.hostSession
         controller.endRoom()
+        controller.awaitSetupForTest()
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val invited = CountDownLatch(1)
-        val subscription = controller.observe { if (it is HostingState.Invitation) invited.countDown() }
+        val subscription = controller.collectStatesForTest { if (it is HostingState.Invitation) invited.countDown() }
         try {
             assertTrue(controller.createRoom())
             if (controller.state is HostingState.HttpWarning) {
@@ -164,13 +164,12 @@ class QueueAdvancementInstrumentationTest {
             httpClient = OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            queueCoordinatorFactory = { _, credentials, observer ->
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
                 testQueueCoordinator(
-        queueScope,
+                    sessionScope,
                     credentials.code,
                     credentials.hostToken,
                     testQueueCommand { _, _, callback -> commands += callback },
@@ -180,6 +179,7 @@ class QueueAdvancementInstrumentationTest {
             },
         )
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(
             RoomSyncState.Active(
@@ -224,13 +224,12 @@ class QueueAdvancementInstrumentationTest {
             httpClient = OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
-            executor = Executor { it.run() },
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            queueCoordinatorFactory = { _, credentials, observer ->
+            queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
                 testQueueCoordinator(
-        queueScope,
+                    sessionScope,
                     credentials.code,
                     credentials.hostToken,
                     testQueueCommand { _, _, callback -> commands += callback },
@@ -238,7 +237,7 @@ class QueueAdvancementInstrumentationTest {
                     observer,
                 )
             },
-            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded ->
+            playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded, sessionScope ->
                 AuthoritativePlaybackCoordinator(
                     roomCode = credentials.code,
                     streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
@@ -248,7 +247,7 @@ class QueueAdvancementInstrumentationTest {
                         retry = callback
                         Cancelable { retry = null }
                     }::fetchRoom,
-                    parentScope = queueScope,
+                    parentScope = sessionScope,
                     mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
                     advanceAfterEnded = advanceAfterEnded,
                     observer = observer,
@@ -257,8 +256,12 @@ class QueueAdvancementInstrumentationTest {
         )
 
         assertTrue(controller.createRoom())
+        controller.awaitCreatedForTest()
         controller.enterRoom()
         repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+            LocalPlaybackStatus.BUFFERING }
+        awaitConditionForTest { playback.prepared.map(PlaybackMedia::trackId) == listOf("current") }
         assertEquals(listOf("current"), playback.prepared.map(PlaybackMedia::trackId))
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
 
@@ -272,6 +275,8 @@ class QueueAdvancementInstrumentationTest {
                 isSeekable = true,
             ),
         )
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+            LocalPlaybackStatus.PLAYING }
         assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
         controller.onSeekBy(Long.MIN_VALUE)
         controller.onSeekBy(Long.MAX_VALUE)
@@ -300,6 +305,8 @@ class QueueAdvancementInstrumentationTest {
         controller.onSeekBy(10_000)
         assertEquals(listOf(0L, 60_000L), playback.seeks)
         controller.onPlayPause()
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+            LocalPlaybackStatus.PAUSED }
         assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
         controller.onPlayPause()
         assertEquals(2, playback.playCount)
@@ -310,12 +317,17 @@ class QueueAdvancementInstrumentationTest {
                 error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
             ),
         )
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+            LocalPlaybackStatus.ERROR }
         controller.onRetryCurrent()
+        awaitConditionForTest { retryRequests.size == 1 }
         assertEquals(listOf("ABCD"), retryRequests)
         checkNotNull(retry)(RoomFetchResult.Success(selected))
+        awaitConditionForTest { playback.prepared.size == 2 }
         assertEquals(listOf("current", "current"), playback.prepared.map(PlaybackMedia::trackId))
 
         playback.emit(PlaybackState("current", PlaybackStatus.ENDED))
+        awaitConditionForTest { commands.size == 1 }
         assertEquals(1, commands.size)
         controller.endRoom()
         assertEquals(2, playback.pauseCount)
@@ -334,10 +346,11 @@ class QueueAdvancementInstrumentationTest {
         val application = ApplicationProvider.getApplicationContext<QMixApplication>()
         val coordinator = application.createQueueCoordinator(
             OkHttpClient(), server.url("/").toString(), RoomCredentials("ABCD", "fixture", "/r/ABCD"),
-        ) { state ->
-            assertEquals(android.os.Looper.getMainLooper(), android.os.Looper.myLooper())
-            if (state.lastOutcome == QueueAdvanceOutcome.ADVANCED) settled.countDown()
-        }
+            observer = { state ->
+                assertEquals(android.os.Looper.getMainLooper(), android.os.Looper.myLooper())
+                if (state.lastOutcome == QueueAdvanceOutcome.ADVANCED) settled.countDown()
+            },
+        )
         try {
             androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync {
                 coordinator.onAuthoritativeRoom(RoomState("ABCD", null,
