@@ -395,7 +395,7 @@ class PublicReadinessPolicyTest(unittest.TestCase):
             "ARCHITECTURE.md",
             "English",
             "sub-issue",
-            "TDD",
+            "regression test",
             "full commit SHA",
             "secret",
             "Do not merge",

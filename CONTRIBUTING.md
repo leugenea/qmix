@@ -13,8 +13,11 @@ parts of a larger issue, keep documentation and maintained repository text in
 English, and keep pull requests focused. Describe the change, tests, and related
 issue in the pull request.
 
-Use TDD for behavior changes: write a focused failing test, observe the expected
-failure, implement the smallest fix, then run the relevant full gates:
+Add or update automated tests for every behavior change: new features need
+tests covering the new behavior, and bug fixes need a regression test that
+fails without the fix. Behavior-preserving refactors and dependency or
+toolchain upgrades rely on the existing tests and gates. Do not weaken tests
+or coverage gates. Then run the relevant full gates:
 
 ```bash
 make lint
