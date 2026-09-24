@@ -624,6 +624,106 @@ class HostSessionControllerInstrumentationTest {
         assertEquals(1, server.requestCount)
     }
 
+    /** qmix#182: a completed POST is not permission to publish before durable settings. */
+    @Test
+    fun create_waits_for_settings_save_before_publishing_invitation() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val saving = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val saved = CountDownLatch(1)
+        val backend = server.url("/").toString().trimEnd('/')
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = backend, initialGuestOrigin = "https://guest.example",
+            settingsPersistence = object : EndpointSettingsPersistence {
+                override fun load() = EndpointSettings(backend, "https://guest.example")
+                override fun save(settings: EndpointSettings) {
+                    saving.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                    assertEquals(EndpointSettings(backend, "https://guest.example"), settings)
+                    saved.countDown()
+                }
+                override fun isHttpWarningAcknowledged() = true
+                override fun acknowledgeHttpWarning() = Unit
+            },
+        )
+        try {
+            assertTrue(controller.createRoom())
+            assertTrue("create did not reach persistence", saving.await(5, TimeUnit.SECONDS))
+            assertEquals(1, server.requestCount)
+            assertEquals(HostingState.Pending(backend, "https://guest.example"), controller.state)
+        } finally {
+            release.countDown()
+        }
+        controller.awaitCreatedForTest()
+        assertEquals(0L, saved.count)
+        assertEquals(HostingState.Invitation(GuestInvite("ABCD", "https://guest.example/r/ABCD")), controller.state)
+        controller.endRoom()
+        controller.awaitSetupForTest()
+    }
+
+    /** qmix#182: a canceled create must not publish credentials after disk unblocks. */
+    @Test
+    fun ending_create_during_settings_save_never_publishes_invitation() {
+        server.enqueue(MockResponse().setResponseCode(201)
+            .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
+        val saving = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val backend = server.url("/").toString().trimEnd('/')
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = backend, initialGuestOrigin = "https://guest.example",
+            settingsPersistence = object : EndpointSettingsPersistence {
+                override fun load() = EndpointSettings(backend, "https://guest.example")
+                override fun save(settings: EndpointSettings) {
+                    saving.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                }
+                override fun isHttpWarningAcknowledged() = true
+                override fun acknowledgeHttpWarning() = Unit
+            },
+        )
+        val observed = java.util.concurrent.CopyOnWriteArrayList<HostingState>()
+        val subscription = controller.collectStatesForTest(observed::add)
+        try {
+            assertTrue(controller.createRoom())
+            assertTrue("create did not reach persistence", saving.await(5, TimeUnit.SECONDS))
+            controller.endRoom()
+            assertEquals(HostingState.Ending, controller.state)
+        } finally {
+            release.countDown()
+        }
+        controller.awaitSetupForTest()
+        assertEquals(1, server.requestCount)
+        assertEquals(HostingState.Setup(backend, "https://guest.example"), controller.state)
+        assertFalse(observed.any { it is HostingState.Invitation || it is HostingState.LiveRoom })
+        assertFalse(observed.toString().contains("host-secret"))
+        subscription.close()
+    }
+
+    /** qmix#182: a Pending observer may revoke admission before the POST starts. */
+    @Test
+    fun pending_observer_ending_create_prevents_network_request_and_invitation() {
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example",
+        )
+        val observed = java.util.concurrent.CopyOnWriteArrayList<HostingState>()
+        val subscription = controller.collectStatesForTest { state ->
+            observed.add(state)
+            if (state is HostingState.Pending) controller.endRoom()
+        }
+        try {
+            assertTrue(controller.createRoom())
+            controller.awaitSetupForTest()
+            assertEquals(0, server.requestCount)
+            assertEquals(HostingState.Setup(server.url("/").toString().trimEnd('/'), "https://guest.example"), controller.state)
+            assertTrue(observed.any { it is HostingState.Pending })
+            assertFalse(observed.any { it is HostingState.Invitation || it is HostingState.LiveRoom })
+        } finally {
+            subscription.close()
+        }
+    }
+
     @Test
     fun foreground_loss_during_repository_creation_cancels_unstarted_collection_and_recovers() {
         server.enqueue(MockResponse().setResponseCode(201)

@@ -1,18 +1,70 @@
 package com.qmix.tv
 
 import java.util.concurrent.Executors
+import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class QueueMutationContextTest {
+    /** qmix#182: teardown must remove queued mutations before the worker resumes. */
+    @Test
+    fun cancelled_worker_does_not_execute_queued_mutation() = runBlocking {
+        val pending = ArrayDeque<Runnable>()
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) { pending.addLast(block) }
+        }
+        val mutation = QueueMutationContext(dispatcher)
+        var published = false
+        val worker = launch(start = CoroutineStart.UNDISPATCHED) {
+            mutation.runFromWorker { published = true }
+        }
+        assertEquals(1, pending.size)
+        worker.cancel()
+        worker.join()
+        pending.removeFirst().run()
+        assertFalse("cancelled session published a stale mutation", published)
+    }
+
+    /** qmix#182: a failed dispatched mutation propagates to its worker, not into the dispatcher. */
+    @Test
+    fun worker_dispatch_propagates_action_failure_and_can_dispatch_again() = runBlocking {
+        val pending = ArrayDeque<Runnable>()
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) { pending.addLast(block) }
+        }
+        val mutation = QueueMutationContext(dispatcher)
+        val failure = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                mutation.runFromWorker { throw IllegalStateException("rejected mutation") }
+                org.junit.Assert.fail("failed mutation was accepted")
+            } catch (expected: IllegalStateException) {
+                assertEquals("rejected mutation", expected.message)
+            }
+        }
+        assertEquals(1, pending.size)
+        pending.removeFirst().run()
+        failure.join()
+        assertTrue(failure.isCompleted)
+        val accepted = launch(start = CoroutineStart.UNDISPATCHED) {
+            assertEquals("next", mutation.runFromWorker { "next" })
+        }
+        assertEquals(1, pending.size)
+        pending.removeFirst().run()
+        accepted.join()
+        assertTrue(accepted.isCompleted)
+    }
+
     @Test
     fun nested_distinct_context_markers_do_not_leak_between_owners() {
         val dispatcher = object : CoroutineDispatcher() {
