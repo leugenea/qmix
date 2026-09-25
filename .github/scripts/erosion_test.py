@@ -110,18 +110,106 @@ class ErosionTest(unittest.TestCase):
         self.assertEqual([row["id"] for row in reversed(shuffled)], expected)
         self.assertEqual(len({row["id"] for row in first}), len(first))
 
-    def test_same_start_uses_end_to_disambiguate_anonymous_functions(self):
-        csv_text = (
-            'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
-            '1,1,3,0,1,"",android/app/src/main/A.kt,(anonymous),(anonymous),2,2\n'
-            '2,1,6,0,2,"",android/app/src/main/A.kt,(anonymous),(anonymous),2,3\n'
-        )
-        first, second = erosion.parse_csv(csv_text, {"android/app/src/main/A.kt"})
-        self.assertEqual(first["id"], "android/app/src/main/A.kt::(anonymous)")
-        self.assertEqual(second["id"], "android/app/src/main/A.kt::(anonymous)#2")
-        reversed_rows = erosion.parse_csv("\n".join(csv_text.splitlines()[:1] + list(reversed(csv_text.splitlines()[1:]))) + "\n",
-                                          {"android/app/src/main/A.kt"})
-        self.assertEqual([row["id"] for row in reversed(reversed_rows)], [first["id"], second["id"]])
+    def test_nested_anonymous_ids_follow_direct_parent_and_sibling_order(self):
+        header = 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
+        path = 'cmd/a.go'
+        lines = [
+            f'1,1,3,0,1,"",{path},,func,12,13\n',
+            f'1,1,3,0,1,"",{path},,func,10,30\n',
+            f'1,1,3,0,1,"",{path},outer,outer,1,40\n',
+            f'1,1,3,0,1,"",{path},,func,32,35\n',
+        ]
+        rows = erosion.parse_csv(header + ''.join(lines), {path})
+        self.assertEqual([row['id'] for row in rows],
+                         [f'{path}::outer$1$1', f'{path}::outer$1',
+                          f'{path}::outer', f'{path}::outer$2'])
+        self.assertEqual([row['parent'] for row in rows],
+                         [f'{path}::outer$1', f'{path}::outer', None,
+                          f'{path}::outer'])
+        self.assertEqual(len({row['id'] for row in rows}), len(rows))
+
+    def test_anonymous_ordinals_are_scoped_to_direct_parent(self):
+        header = 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
+        path = 'android/app/src/main/A.kt'
+        before = [
+            f'1,1,3,0,1,"",{path},a,a(),1,30\n',
+            f'1,1,3,0,1,"",{path},(anonymous),(anonymous),10,11\n',
+            f'1,1,3,0,1,"",{path},b,b(),40,70\n',
+            f'1,1,3,0,1,"",{path},(anonymous),(anonymous),50,51\n',
+        ]
+        inserted = f'1,1,3,0,1,"",{path},(anonymous),(anonymous),5,6\n'
+        original = erosion.parse_csv(header + ''.join(before), {path})
+        changed = erosion.parse_csv(header + ''.join(before + [inserted]), {path})
+        self.assertEqual(original[1]['id'], f'{path}::a()$1')
+        self.assertEqual(original[3]['id'], f'{path}::b()$1')
+        self.assertEqual(changed[1]['id'], f'{path}::a()$2')
+        self.assertEqual(changed[3]['id'], original[3]['id'])
+        self.assertEqual(changed[4]['id'], f'{path}::a()$1')
+        self.assertEqual(changed[3]['parent'], f'{path}::b()')
+
+    def test_top_level_anonymous_ids_and_moved_lines(self):
+        header = 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
+        path = 'internal/server/guest/app.js'
+        def rows(offset):
+            return erosion.parse_csv(header +
+                f'1,1,3,0,1,"",{path},(anonymous),(anonymous),{offset},{offset}\n' +
+                f'1,1,3,0,1,"",{path},(anonymous),(anonymous),{offset + 8},{offset + 8}\n', {path})
+        before, after = rows(2), rows(20)
+        self.assertEqual([row['id'] for row in before], [f'{path}::$1', f'{path}::$2'])
+        self.assertEqual([row['id'] for row in after], [row['id'] for row in before])
+        self.assertEqual([row['parent'] for row in after], [None, None])
+
+    def test_same_start_uses_containment_to_nest_anonymous_functions(self):
+        path = 'android/app/src/main/A.kt'
+        header = 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
+        outer = f'3,1,9,0,3,"",{path},render,render,1,10\n'
+        short = f'1,1,3,0,1,"",{path},(anonymous),(anonymous),2,2\n'
+        long = f'2,1,6,0,2,"",{path},(anonymous),(anonymous),2,3\n'
+        rows = erosion.parse_csv(header + short + long + outer, {path})
+        self.assertEqual([row['id'] for row in rows],
+                         [f'{path}::render$1$1', f'{path}::render$1', f'{path}::render'])
+        reversed_rows = erosion.parse_csv(header + outer + long + short, {path})
+        self.assertEqual([row['id'] for row in reversed_rows],
+                         [f'{path}::render', f'{path}::render$1', f'{path}::render$1$1'])
+
+    def test_equal_ranges_are_siblings_unless_a_named_parent_has_same_range(self):
+        path = 'cmd/a.go'
+        header = 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
+        named = f'1,1,3,0,1,"",{path},outer,outer,1,1\n'
+        anon = f'1,1,3,0,1,"",{path},,func,1,1\n'
+        other_anon = f'1,1,6,0,1,"",{path},,func,1,1\n'
+        rows = erosion.parse_csv(header + anon + other_anon + named, {path})
+        self.assertEqual([row['id'] for row in rows],
+                         [f'{path}::outer$1', f'{path}::outer$2', f'{path}::outer'])
+        self.assertEqual([row['parent'] for row in rows],
+                         [f'{path}::outer', f'{path}::outer', None])
+        self.assertEqual(len({row['id'] for row in rows}), len(rows))
+        reversed_rows = erosion.parse_csv(header + other_anon + anon + named, {path})
+        self.assertEqual([row['token'] for row in reversed_rows[:2]], [6, 3])
+        self.assertEqual([row['id'] for row in reversed_rows[:2]],
+                         [f'{path}::outer$1', f'{path}::outer$2'])
+
+    def test_line_movement_preserves_nested_ids_and_named_local_parent(self):
+        path = 'cmd/a.go'
+        header = 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
+        def rows(offset):
+            return erosion.parse_csv(header +
+                f'5,1,20,0,5,"",{path},outer,outer,{offset},{offset + 20}\n' +
+                f'3,1,10,0,3,"",{path},local,local,{offset + 2},{offset + 10}\n' +
+                f'1,1,3,0,1,"",{path},,func,{offset + 4},{offset + 5}\n', {path})
+        before, after = rows(1), rows(100)
+        self.assertEqual([row['id'] for row in after], [row['id'] for row in before])
+        self.assertEqual([row['parent'] for row in before],
+                         [None, f'{path}::outer', f'{path}::local'])
+        self.assertEqual(before[2]['id'], f'{path}::local$1')
+
+    def test_named_identity_collision_is_rejected(self):
+        path = 'cmd/a.go'
+        header = 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
+        with self.assertRaisesRegex(ValueError, 'duplicate lizard function identity'):
+            erosion.parse_csv(header +
+                f'1,1,3,0,1,"",{path},named,$1,1,1\n' +
+                f'1,1,3,0,1,"",{path},,func,4,4\n', {path})
 
     def test_excludes_tests_generated_build_and_third_party(self):
         with tempfile.TemporaryDirectory() as temp:

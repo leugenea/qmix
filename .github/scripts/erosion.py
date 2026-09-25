@@ -4,13 +4,25 @@
 Only score can never fail the job. A missing tool, malformed CSV, or an entire
 nonempty language producing no functions is an analysis failure, not zero erosion.
 The lizard invocation omits -C: warning exit codes are not a metric.
-JSON schema_version 1 function IDs use file::long_name for the first occurrence
+JSON schema_version 1 named IDs use file::long_name for the first occurrence
 by start line, then file::long_name#2, #3, ... for later occurrences (end line
 breaks start ties). Named functions use lizard's signature-bearing long names,
 so their IDs survive line movement unless another same-name duplicate precedes
-them. Anonymous functions (anonymous: true) have positional ordinal IDs: adding
-one with the same long name earlier in the file shifts later IDs. Consumers such
-as history and gates must not treat anonymous IDs as stable identities.
+them. Anonymous functions (anonymous: true) use $n ordinals scoped to their
+inferred direct enclosing function, e.g. file::Outer$1$1, or file::$n at file
+top level. Inserting an anonymous function shifts later siblings under the
+same inferred parent and all their descendants; it is intended to leave IDs
+under other parents alone. Parents are inferred from lizard line ranges.
+Lizard 1.24.0 can misparse some Kotlin (missed functions, merged anonymous
+spans) and some Go (receiver methods after a package-level immediately-invoked
+closure reported without names). This can place unrelated functions under
+the same inferred parent or mark named functions anonymous. Consumers such as
+history and gates must not treat anonymous IDs as stable identities. Equal
+line ranges cannot establish anonymous nesting; equal-range anonymous rows
+are siblings (a named row may enclose them), with CSV order breaking ties
+because lizard's location has no column. A remaining
+limitation: lizard's Kotlin long names omit the enclosing class, so identical
+signatures in different classes of one file still get #n ordinals.
 """
 
 import argparse
@@ -106,18 +118,63 @@ def parse_csv(text, allowed):
                      "long_name": row["long_name"], "start": start, "end": end,
                      "language": language_for(path), "ccn": ccn, "nloc": nloc,
                      "token": token, "params": params, "mass": ccn * math.sqrt(nloc)})
-    # #198/#199 join on file + lizard long_name. First occurrence keeps
-    # the plain ID; later ones use #2, #3, ... in source order.
+    # Named IDs retain their original file-scoped scheme and tiebreaks.
     grouped = collections.defaultdict(list)
-    for row in rows:
-        grouped[(row["file"], row["long_name"])].append(row)
+    for index, row in enumerate(rows):
+        if not row["anonymous"]:
+            grouped[(row["file"], row["long_name"])].append(index)
     for (path, long_name), group in grouped.items():
-        for ordinal, row in enumerate(sorted(group, key=lambda item: (
-            item["start"], item["end"], item["function"], item["ccn"],
-            item["nloc"], item["token"], item["params"]
+        for ordinal, index in enumerate(sorted(group, key=lambda i: (
+            rows[i]["start"], rows[i]["end"], rows[i]["function"], rows[i]["ccn"],
+            rows[i]["nloc"], rows[i]["token"], rows[i]["params"]
         )), start=1):
             base = f"{path}::{long_name}"
-            row["id"] = base if ordinal == 1 else f"{base}#{ordinal}"
+            rows[index]["id"] = base if ordinal == 1 else f"{base}#{ordinal}"
+
+    by_file = collections.defaultdict(list)
+    for index, row in enumerate(rows):
+        by_file[row["file"]].append(index)
+    parents = {}
+    for indices in by_file.values():
+        for index in indices:
+            child = rows[index]
+            candidates = [other for other in indices if other != index and
+                          rows[other]["start"] <= child["start"] and
+                          child["end"] <= rows[other]["end"] and (
+                              (rows[other]["start"], rows[other]["end"]) !=
+                              (child["start"], child["end"]) or
+                              child["anonymous"] and not rows[other]["anonymous"])]
+            # Strictly enclosing ranges come first; equal-range anonymous rows
+            # cannot infer nesting from lizard's line-only location. Prefer a
+            # named equal-range parent when present. CSV order is the last tie.
+            parents[index] = min(candidates, key=lambda i: (
+                rows[i]["end"] - rows[i]["start"],
+                rows[i]["anonymous"], rows[i]["start"], rows[i]["end"], i
+            )) if candidates else None
+
+    siblings = collections.defaultdict(list)
+    for index, row in enumerate(rows):
+        if row["anonymous"]:
+            siblings[(row["file"], parents[index])].append(index)
+    ordinals = {}
+    for group in siblings.values():
+        for ordinal, index in enumerate(sorted(group, key=lambda i: (
+            rows[i]["start"], rows[i]["end"], i
+        )), start=1):
+            ordinals[index] = ordinal
+
+    def identity(index):
+        row = rows[index]
+        if "id" not in row:
+            parent = parents[index]
+            base = identity(parent) if parent is not None else f"{row['file']}::"
+            row["id"] = f"{base}${ordinals[index]}"
+        return row["id"]
+
+    for index, row in enumerate(rows):
+        identity(index)
+        parent = parents[index]
+        row["parent"] = identity(parent) if parent is not None else None
     ids = set()
     for row in rows:
         if row["id"] in ids:
