@@ -31,6 +31,7 @@ test-integration:
 test-workflow-routing:
 	python3 .github/scripts/workflow_paths_test.py -v
 	python3 .github/scripts/erosion_test.py -v
+	python3 .github/scripts/benchmark_metrics_test.py -v
 
 test-public-readiness:
 	python3 .github/scripts/public_readiness_test.py -v
@@ -38,8 +39,10 @@ test-public-readiness:
 test-sbom:
 	python3 .github/scripts/generate_sbom_test.py -v
 
+# actionlint v1.7.7 predates GitHub's concurrency.queue syntax; suppress only
+# that exact parser diagnostic. Policy tests require queue: max on both jobs.
 test-actionlint:
-	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml
+	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -ignore 'unexpected key "queue" for "concurrency" section[.] expected one of "cancel-in-progress", "group"' .github/workflows/*.yml
 
 test-cyrillic:
 	python3 .github/scripts/check_cyrillic_test.py -v

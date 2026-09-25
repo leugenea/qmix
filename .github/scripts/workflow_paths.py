@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Classify changed repository paths for GitHub Actions routing."""
 
+import os
 import pathlib
 import sys
 
@@ -23,7 +24,10 @@ def classify(paths, root=None):
 
         if path.startswith(".github/scripts/workflow_paths"):
             routes.update(OUTPUTS)
-        if is_in_scope(path, root) or path == ".github/scripts/erosion.py" or path == ".github/requirements-lizard.txt":
+        if is_in_scope(path, root) or path in {
+            ".github/scripts/erosion.py", ".github/scripts/benchmark_metrics.py",
+            ".github/scripts/benchmark_metrics_test.py", ".github/requirements-lizard.txt",
+        }:
             routes.add("erosion")
         # The erosion job executes this test suite, even for a test-only edit.
         if path == ".github/scripts/erosion_test.py":
@@ -54,6 +58,8 @@ def classify(paths, root=None):
 def main():
     paths = (part.decode() for part in sys.stdin.buffer.read().split(b"\0"))
     selected = classify(paths)
+    if os.environ.get("FORCE_EROSION") == "true":
+        selected.add("erosion")
     for route in OUTPUTS:
         print(f"{route}={'true' if route in selected else 'false'}")
 

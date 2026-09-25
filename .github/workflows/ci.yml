@@ -6,8 +6,10 @@ on:
   pull_request:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # PR updates replace stale runs. Main pushes each get a distinct group: even
+  # a pending run must survive a third push to write its own history point.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -27,6 +29,8 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Every main push records a point, including documentation-only pushes.
+          FORCE_EROSION: ${{ github.event_name == 'push' }}
         run: |
           if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
             printf 'ci=true\nandroid=true\nlive=true\nerosion=true\n' >> "$GITHUB_OUTPUT"
@@ -148,8 +152,10 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/lizard-venv"
           "$RUNNER_TEMP/lizard-venv/bin/python" -m pip install \
             --require-hashes --no-deps -r .github/requirements-lizard.txt
-      - name: Test erosion metric
-        run: python3 .github/scripts/erosion_test.py -v
+      - name: Test erosion metric and benchmark conversion
+        run: |
+          python3 .github/scripts/erosion_test.py -v
+          python3 .github/scripts/benchmark_metrics_test.py -v
       - name: Analyze production source
         run: |
           mkdir -p "$RUNNER_TEMP/erosion"
@@ -196,6 +202,81 @@ jobs:
             gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
               -f body="$(< erosion/report.md)" > /dev/null
           fi
+
+  # History writes are trusted main pushes only; PR source has no write token.
+  erosion-history:
+    needs: erosion
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.erosion.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: erosion-history-main
+      # Retain every pending push, rather than replacing the older pending job.
+      # GitHub caps this queue at 100; above that limit, manual recovery is needed.
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download erosion report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: lizard-erosion
+          path: ${{ runner.temp }}/erosion
+      - name: Convert report to named benchmark metrics
+        run: |
+          python3 .github/scripts/benchmark_metrics.py \
+            --input "$RUNNER_TEMP/erosion/report.json" \
+            --output "$RUNNER_TEMP/erosion/benchmark.json"
+      - name: Publish history and alert on regression
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
+        with:
+          name: Lizard erosion
+          tool: customSmallerIsBetter
+          output-file-path: ${{ runner.temp }}/erosion/benchmark.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          github-token: ${{ github.token }}
+          auto-push: true
+          alert-threshold: "110%"
+          comment-on-alert: true
+          fail-on-alert: false
+
+  # GitHub Actions Pages deployment is required because GITHUB_TOKEN branch
+  # writes do not trigger branch-based Pages builds. Read is explicit: a job-level
+  # permissions map does not inherit workflow-level contents: read.
+  erosion-pages:
+    needs: erosion-history
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.erosion-history.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: erosion-pages
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: gh-pages
+          persist-credentials: false
+      - name: Bypass Jekyll in the uploaded snapshot
+        run: touch .nojekyll
+      - name: Upload chart snapshot
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: .
+          include-hidden-files: true
+      - name: Deploy chart
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
   # Test reports are published from artifacts so this privileged job never
   # checks out or executes pull-request-controlled repository code.
@@ -333,7 +414,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [route, policy, ci, integration-mandatory, publish-test-reports, docker, erosion, publish-erosion]
+    needs: [route, policy, ci, integration-mandatory, publish-test-reports, docker, erosion, publish-erosion, erosion-history, erosion-pages]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
@@ -343,6 +424,8 @@ jobs:
           EROSION_OUTPUT: ${{ needs.route.outputs.erosion }}
           EROSION_RESULT: ${{ needs.erosion.result }}
           EROSION_REPORT_RESULT: ${{ needs.publish-erosion.result }}
+          HISTORY_RESULT: ${{ needs.erosion-history.result }}
+          PAGES_RESULT: ${{ needs.erosion-pages.result }}
           POLICY_RESULT: ${{ needs.policy.result }}
           CI_RESULT: ${{ needs.ci.result }}
           INTEGRATION_RESULT: ${{ needs.integration-mandatory.result }}
@@ -381,4 +464,17 @@ jobs:
             [[ "$EROSION_REPORT_RESULT" == success ]]
           else
             [[ "$EROSION_REPORT_RESULT" == skipped ]]
+          fi
+          # Publisher failures stay red on their own jobs, without making the
+          # stable required check a merge gate. Skipped is valid only when the
+          # upstream condition cannot run; cancellation loses a point and fails.
+          if [[ "$EVENT_NAME" == push && "$EROSION_RESULT" == success ]]; then
+            [[ "$HISTORY_RESULT" == success || "$HISTORY_RESULT" == failure ]]
+          else
+            [[ "$HISTORY_RESULT" == skipped ]]
+          fi
+          if [[ "$EVENT_NAME" == push && "$HISTORY_RESULT" == success ]]; then
+            [[ "$PAGES_RESULT" == success || "$PAGES_RESULT" == failure ]]
+          else
+            [[ "$PAGES_RESULT" == skipped ]]
           fi
