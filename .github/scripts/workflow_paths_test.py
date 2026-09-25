@@ -42,6 +42,8 @@ class WorkflowPathsTest(unittest.TestCase):
             "android/app/src/main/build/Build.kt": False,
             ".github/scripts/erosion.py": True,
             ".github/scripts/erosion_test.py": True,
+            ".github/scripts/benchmark_metrics.py": True,
+            ".github/scripts/benchmark_metrics_test.py": True,
             ".github/requirements-lizard.txt": True,
             "cmd/qmix/main_test.go": False,
             "internal/server/server_integration_test.go": False,
@@ -133,8 +135,32 @@ class WorkflowPathsTest(unittest.TestCase):
         for path in list(WORKFLOW_DIR.glob("*.yml")) + list(WORKFLOW_DIR.glob("*.yaml")):
             with self.subTest(path=path.name):
                 text = path.read_text()
-                self.assertIn(group, text)
-                self.assertIn("cancel-in-progress: true", text)
+                if path.name == "ci.yml":
+                    self.assertIn(
+                        "group: ${{ github.workflow }}-${{ github.event_name }}-"
+                        "${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}",
+                        text,
+                    )
+                    self.assertNotIn("github.event.pull_request.number || github.ref", text)
+                    self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", text)
+                    for name in ("erosion-history", "erosion-pages"):
+                        block = self._job(text, name)
+                        self.assertIn("queue: max", block)
+                        self.assertIn("cancel-in-progress: false", block)
+                else:
+                    self.assertIn(group, text)
+                    self.assertIn("cancel-in-progress: true", text)
+
+    def test_main_push_forces_erosion_even_when_no_source_changed(self):
+        for force, expected in (("true", "erosion=true"), ("false", "erosion=false")):
+            completed = subprocess.run(
+                [sys.executable, str(MODULE_PATH)], input=b"README.md\0",
+                capture_output=True, check=True, env=os.environ | {"FORCE_EROSION": force},
+            )
+            with self.subTest(force=force):
+                self.assertIn(expected, completed.stdout.decode().splitlines())
+        ci = (WORKFLOW_DIR / "ci.yml").read_text()
+        self.assertIn("FORCE_EROSION: ${{ github.event_name == 'push' }}", self._job(ci, "route"))
 
     def test_every_action_is_pinned_to_a_full_commit(self):
         action = re.compile(r"^\s*-?\s*uses:\s+[^@\s]+@([^\s#]+)", re.MULTILINE)
@@ -301,10 +327,14 @@ class WorkflowPathsTest(unittest.TestCase):
                 "EROSION_OUTPUT": "false",
                 "EROSION_RESULT": "skipped",
                 "EROSION_REPORT_RESULT": "skipped",
+                "HISTORY_RESULT": "skipped",
+                "PAGES_RESULT": "skipped",
                 "REF": "refs/heads/main",
-                "EVENT_NAME": "push",
-                "HEAD_REPOSITORY": "",
+                "EVENT_NAME": "pull_request",
+                "HEAD_REPOSITORY": "leugenea/qmix",
                 "REPOSITORY": "leugenea/qmix",
+                "ACTOR": "leugenea",
+                "PR_AUTHOR": "leugenea",
             }
             for route, result, succeeds in (
                 ("true", "success", True),
@@ -339,6 +369,8 @@ class WorkflowPathsTest(unittest.TestCase):
             "EROSION_OUTPUT": "false",
             "EROSION_RESULT": "skipped",
             "EROSION_REPORT_RESULT": "skipped",
+            "HISTORY_RESULT": "skipped",
+            "PAGES_RESULT": "skipped",
             "EVENT_NAME": "pull_request",
             "REPOSITORY": "leugenea/qmix",
         }
@@ -370,6 +402,8 @@ class WorkflowPathsTest(unittest.TestCase):
             "POLICY_RESULT": "success", "CI_RESULT": "skipped",
             "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
             "REPORT_RESULT": "skipped", "EVENT_NAME": "pull_request",
+            "HISTORY_RESULT": "skipped",
+            "PAGES_RESULT": "skipped",
             "REPOSITORY": "leugenea/qmix", "HEAD_REPOSITORY": "leugenea/qmix",
             "ACTOR": "leugenea", "PR_AUTHOR": "leugenea",
         }
@@ -411,6 +445,38 @@ class WorkflowPathsTest(unittest.TestCase):
         )
         self.assertEqual(skipped.returncode, 0)
         self.assertNotEqual(ran.returncode, 0)
+
+    def test_history_is_main_push_only_and_does_not_block_ci_result(self):
+        script = self._result_script("ci.yml")
+        base = {
+            "ROUTE_RESULT": "success", "POLICY_RESULT": "success",
+            "ROUTE_OUTPUT": "false", "CI_RESULT": "skipped",
+            "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
+            "REPORT_RESULT": "skipped", "EROSION_OUTPUT": "true",
+            "EROSION_RESULT": "success", "EROSION_REPORT_RESULT": "skipped",
+            "PAGES_RESULT": "skipped",
+            "REPOSITORY": "leugenea/qmix", "HEAD_REPOSITORY": "",
+            "ACTOR": "leugenea", "PR_AUTHOR": "",
+        }
+        for event, history, pages, succeeds in (
+            ("push", "success", "success", True),
+            ("push", "success", "failure", True),
+            ("push", "success", "skipped", False),
+            ("push", "success", "cancelled", False),
+            ("push", "failure", "skipped", True),
+            ("push", "skipped", "skipped", False),
+            ("push", "cancelled", "skipped", False),
+            ("pull_request", "skipped", "skipped", True),
+            ("pull_request", "success", "skipped", False),
+        ):
+            # External PRs skip their privileged erosion comment publisher.
+            env = base | {"EVENT_NAME": event, "HISTORY_RESULT": history,
+                          "PAGES_RESULT": pages}
+            if event == "pull_request":
+                env["HEAD_REPOSITORY"] = "contributor/qmix"
+            completed = subprocess.run(["bash", "-e", "-c", script], env=env)
+            with self.subTest(event=event, history=history, pages=pages):
+                self.assertEqual(completed.returncode == 0, succeeds)
 
     def test_trusted_service_result_accepts_only_expected_ref_outcome(self):
         script = self._result_script("service-integration.yml")

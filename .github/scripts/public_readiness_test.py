@@ -287,6 +287,68 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertNotRegex(publisher, r"(?m)^\s+run:")
         self.assertEqual(publisher.count("uses: mikepenz/action-junit-report@"), 2)
 
+    def test_erosion_history_has_only_main_push_write_permission(self):
+        ci = read(".github/workflows/ci.yml")
+        history = job(ci, "erosion-history")
+        self.assertRegex(ci, r"(?m)^permissions:\n  contents: read$")
+        self.assertIn("github.event_name == 'push'", history)
+        self.assertIn("github.ref == 'refs/heads/main'", history)
+        self.assertIn("needs.erosion.result == 'success'", history)
+        self.assertRegex(history, r"(?m)^    permissions:\n      contents: write$")
+        self.assertEqual(ci.count("contents: write"), 1)
+        self.assertIn("persist-credentials: false", history)
+        self.assertIn("cancel-in-progress: false", history)
+        self.assertIn("queue: max", history)
+        self.assertIn("name: lizard-erosion", history)
+        self.assertIn("--input \"$RUNNER_TEMP/erosion/report.json\"", history)
+        self.assertIn("tool: customSmallerIsBetter", history)
+        self.assertIn('alert-threshold: "110%"', history)
+        self.assertIn("comment-on-alert: true", history)
+        self.assertIn("fail-on-alert: false", history)
+        self.assertIn("auto-push: true", history)
+        self.assertIn("needs.erosion-history.result", job(ci, "result"))
+
+    def test_pages_deploys_only_successful_main_history_with_minimal_permissions(self):
+        ci = read(".github/workflows/ci.yml")
+        pages = job(ci, "erosion-pages")
+        self.assertIn("needs: erosion-history", pages)
+        self.assertIn("github.event_name == 'push'", pages)
+        self.assertIn("github.ref == 'refs/heads/main'", pages)
+        self.assertIn("needs.erosion-history.result == 'success'", pages)
+        # A job-level permission map replaces, rather than inherits, the
+        # workflow-level contents: read. Checkout requires explicit read.
+        self.assertRegex(
+            pages,
+            r"(?m)^    permissions:\n      contents: read\n"
+            r"      pages: write\n      id-token: write$",
+        )
+        self.assertRegex(pages, r"(?m)^    environment:\n      name: github-pages\n"
+                                r"      url: \$\{\{ steps.deploy.outputs.page_url \}\}$")
+        self.assertIn("group: erosion-pages", pages)
+        self.assertIn("queue: max", pages)
+        self.assertIn("cancel-in-progress: false", pages)
+        self.assertIn("ref: gh-pages", pages)
+        self.assertIn("persist-credentials: false", pages)
+        self.assertIn("run: touch .nojekyll", pages)
+        self.assertIn("include-hidden-files: true", pages)
+        self.assertIn("actions/upload-pages-artifact@", pages)
+        self.assertIn("actions/deploy-pages@", pages)
+        self.assertIn("needs.erosion-pages.result", job(ci, "result"))
+
+        self.assertEqual(ci.count("queue: max"), 2)
+        expected_writes = {
+            "publish-erosion": {"pull-requests: write"},
+            "erosion-history": {"contents: write"},
+            "erosion-pages": {"pages: write", "id-token: write"},
+            "publish-test-reports": {"checks: write"},
+        }
+        names = re.findall(r"(?m)^  ([a-z][a-z-]+):$", ci.split("\njobs:\n", 1)[1])
+        for name in names:
+            body = job(ci, name)
+            actual = set(re.findall(r"(?m)^      [a-z-]+: write$", body))
+            self.assertEqual({line.strip() for line in actual},
+                             expected_writes.get(name, set()), name)
+
     def test_fork_pull_requests_skip_privileged_check_publication(self):
         ci = read(".github/workflows/ci.yml")
         reporter_condition = (
