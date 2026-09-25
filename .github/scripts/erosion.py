@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Informational lizard complexity erosion for production sources (qmix#197).
+"""Informational per-language complexity erosion for production sources (qmix#228).
 
-Only score can never fail the job. A missing tool, malformed CSV, or an entire
-nonempty language producing no functions is an analysis failure, not zero erosion.
+Only the score can never fail the job. A missing tool, malformed CSV, or parse
+error is an analysis failure, not zero erosion. Valid bodyless Kotlin sources
+produce zero function rows.
 The lizard invocation omits -C: warning exit codes are not a metric.
-JSON schema_version 1 named IDs use file::long_name for the first occurrence
+JSON schema_version 2 named Go/JS IDs use file::long_name for the first occurrence
 by start line, then file::long_name#2, #3, ... for later occurrences (end line
 breaks start ties). Named functions use lizard's signature-bearing long names,
 so their IDs survive line movement unless another same-name duplicate precedes
@@ -13,16 +14,12 @@ inferred direct enclosing function, e.g. file::Outer$1$1, or file::$n at file
 top level. Inserting an anonymous function shifts later siblings under the
 same inferred parent and all their descendants; it is intended to leave IDs
 under other parents alone. Parents are inferred from lizard line ranges.
-Lizard 1.24.0 can misparse some Kotlin (missed functions, merged anonymous
-spans) and some Go (receiver methods after a package-level immediately-invoked
-closure reported without names). This can place unrelated functions under
-the same inferred parent or mark named functions anonymous. Consumers such as
-history and gates must not treat anonymous IDs as stable identities. Equal
-line ranges cannot establish anonymous nesting; equal-range anonymous rows
-are siblings (a named row may enclose them), with CSV order breaking ties
-because lizard's location has no column. A remaining
-limitation: lizard's Kotlin long names omit the enclosing class, so identical
-signatures in different classes of one file still get #n ordinals.
+Lizard 1.24.0 can misparse some Go (receiver methods after a package-level
+immediately-invoked closure reported without names). Consumers such as gates
+must not treat its anonymous IDs as stable identities. Equal line ranges cannot
+establish anonymous nesting; equal-range anonymous rows are siblings (a named
+row may enclose them), with CSV order breaking ties because lizard's location
+has no column. Kotlin instead uses a repository-owned tree-sitter counter.
 """
 
 import argparse
@@ -71,8 +68,11 @@ def is_in_scope(path, root=None):
         return False
     source = root / path if root is not None else None
     if source is not None and source.is_file():
-        with source.open(encoding="utf-8") as stream:
-            header = "".join(stream.readline() for _ in range(20))
+        try:
+            with source.open(encoding="utf-8") as stream:
+                header = "".join(stream.readline() for _ in range(20))
+        except (OSError, UnicodeError) as exc:
+            raise ValueError(f"{path}:1: cannot read source header: {exc}") from exc
         if "Code generated" in header and "DO NOT EDIT" in header:
             return False
     return True
@@ -103,7 +103,7 @@ def parse_csv(text, allowed):
         if None in row or any(row.get(field) is None for field in CSV_FIELDS):
             raise ValueError("malformed lizard CSV row")
         path = row["file"]
-        if path not in allowed:
+        if path not in allowed or language_for(path) == "Kotlin":
             raise ValueError(f"lizard reported unexpected source: {path}")
         try:
             ccn, nloc, token, params, start, end = (
@@ -117,7 +117,8 @@ def parse_csv(text, allowed):
                      "anonymous": row["function"] in ("", "(anonymous)"),
                      "long_name": row["long_name"], "start": start, "end": end,
                      "language": language_for(path), "ccn": ccn, "nloc": nloc,
-                     "token": token, "params": params, "mass": ccn * math.sqrt(nloc)})
+                     "token": token, "params": params, "mass": ccn * math.sqrt(nloc),
+                     "analyzer": "lizard"})
     # Named IDs retain their original file-scoped scheme and tiebreaks.
     grouped = collections.defaultdict(list)
     for index, row in enumerate(rows):
@@ -182,7 +183,7 @@ def parse_csv(text, allowed):
         ids.add(row["id"])
     if allowed and not rows:
         raise ValueError("lizard produced no functions for nonempty source")
-    for language in LANGUAGES:
+    for language in ("Go", "JS"):
         if any(language_for(path) == language for path in allowed) and not any(
             row["language"] == language for row in rows
         ):
@@ -207,12 +208,14 @@ def calculate(rows, sources=None):
                 "files_selected": len(source_paths),
                 "files_with_functions": len(with_functions & source_paths)}
 
-    return {"schema_version": 1, "overall": aggregate(rows, selected),
+    return {"schema_version": 2,
             "languages": {lang: aggregate([row for row in rows if row["language"] == lang],
                                           {path for path in selected if language_for(path) == lang})
                           for lang in LANGUAGES},
             "functions": rows,
-            "top_five": sorted(rows, key=lambda row: (-row["mass"], row["file"], row["function"]))[:5]}
+            "top_five": {lang: sorted((row for row in rows if row["language"] == lang),
+                                     key=lambda row: (-row["mass"], row["file"], row["function"]))[:5]
+                         for lang in LANGUAGES}}
 
 
 def render_markdown(report):
@@ -220,29 +223,44 @@ def render_markdown(report):
     def cell(value):
         return html.escape(str(value), quote=True).replace("|", "\\|").replace("\n", " ")
 
-    lines = [MARKER, "### Lizard complexity erosion", "", "Informational only; CCN > 10 contributes to erosion.", "",
+    lines = [MARKER, "### Code complexity erosion", "", "Informational only; CCN > 10 contributes to erosion.",
+             "Kotlin CCN follows the repository tree-sitter counter's rules and is not directly comparable with lizard's Go/JS CCN.", "",
              "| Scope | Erosion | Functions | Functions with CCN > 10 | Files selected | Files with functions |",
              "| --- | ---: | ---: | ---: | ---: | ---: |"]
-    for label, metrics in (("Overall", report["overall"]), *report["languages"].items()):
+    for label, metrics in report["languages"].items():
         lines.append(f"| {label} | {metrics['erosion']:.2%} | {metrics['function_count']} | {metrics['high_ccn_count']} | {metrics['files_selected']} | {metrics['files_with_functions']} |")
-    lines += ["", "A selected file may contain no functions; these counts expose gaps without treating declarations as failures.",
-              "", "Top 5 functions by mass (CCN × √NLOC):", "",
-              "| File | Function | CCN | NLOC | Mass |", "| --- | --- | ---: | ---: | ---: |"]
-    for row in report["top_five"]:
-        lines.append(f"| {cell(row['file'])} | {cell(row['function'])} | {row['ccn']} | {row['nloc']} | {row['mass']:.2f} |")
+    lines += ["", "A selected file may contain no functions; these counts expose gaps without treating declarations as failures."]
+    for language, rows in report["top_five"].items():
+        lines += ["", f"Top {len(rows)} {language} functions by mass (CCN × √NLOC):", "",
+                  "| File | Function | CCN | NLOC | Mass |", "| --- | --- | ---: | ---: | ---: |"]
+        for row in rows:
+            lines.append(f"| {cell(row['file'])} | {cell(row['function'])} | {row['ccn']} | {row['nloc']} | {row['mass']:.2f} |")
     return "\n".join(lines) + "\n"
 
 
 def analyze(root, lizard):
     sources = discover_sources(root)
-    if not sources:
-        return calculate([], sources)
-    # Explicit source files avoid lizard's recursive discovery of tests/build output.
-    completed = subprocess.run([lizard, "--csv", "-V", *sources], cwd=root,
-                               text=True, capture_output=True, check=False)
-    if completed.returncode:
-        raise RuntimeError(f"lizard failed (exit {completed.returncode}): {completed.stderr}")
-    return calculate(parse_csv(completed.stdout, set(sources)), sources)
+    lizard_sources = [path for path in sources if language_for(path) != "Kotlin"]
+    kotlin_sources = [path for path in sources if language_for(path) == "Kotlin"]
+    rows = []
+    if lizard_sources:
+        # Explicit source files avoid lizard's recursive test/build discovery.
+        completed = subprocess.run([lizard, "--csv", "-V", *lizard_sources], cwd=root,
+                                   text=True, capture_output=True, check=False)
+        if completed.returncode:
+            raise RuntimeError(f"lizard failed (exit {completed.returncode}): {completed.stderr}")
+        rows = parse_csv(completed.stdout, set(lizard_sources))
+    if kotlin_sources:
+        # Lazy import keeps routing/policy tests usable without the CI-only wheel.
+        from kotlin_complexity import analyze_files
+        kotlin_rows = analyze_files(root, [pathlib.Path(path) for path in kotlin_sources])
+        for row in kotlin_rows:
+            row["language"] = "Kotlin"
+            row["function"] = ".".join(filter(None, (row["owner"], row["name"])))
+            row["start"], row["end"] = row["start_line"], row["end_line"]
+            row["mass"] = row["ccn"] * math.sqrt(row["nloc"])
+        rows += kotlin_rows
+    return calculate(rows, sources)
 
 
 def main():

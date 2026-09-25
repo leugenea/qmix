@@ -44,6 +44,8 @@ class WorkflowPathsTest(unittest.TestCase):
             ".github/scripts/erosion_test.py": True,
             ".github/scripts/benchmark_metrics.py": True,
             ".github/scripts/benchmark_metrics_test.py": True,
+            ".github/scripts/kotlin_complexity.py": True,
+            ".github/scripts/kotlin_complexity_test.py": True,
             ".github/requirements-lizard.txt": True,
             "cmd/qmix/main_test.go": False,
             "internal/server/server_integration_test.go": False,
@@ -529,10 +531,14 @@ class WorkflowPathsTest(unittest.TestCase):
         ci = (WORKFLOW_DIR / "ci.yml").read_text()
         producer = self._job(ci, "erosion")
         self.assertIn("needs.route.outputs.erosion == 'true'", producer)
+        self.assertIn("uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0", producer)
+        self.assertIn("python-version: '3.13'", producer)
+        self.assertIn('python -m venv "$RUNNER_TEMP/erosion-venv"', producer)
         self.assertIn(".github/requirements-lizard.txt", producer)
         self.assertIn("--require-hashes", producer)
-        self.assertIn("python3 .github/scripts/erosion_test.py -v", producer)
-        self.assertIn("name: lizard-erosion", producer)
+        self.assertIn("$RUNNER_TEMP/erosion-venv/bin/python", producer)
+        self.assertIn(".github/scripts/kotlin_complexity_test.py -v", producer)
+        self.assertIn("name: code-erosion", producer)
         self.assertIn("if-no-files-found: error", producer)
         self.assertIn("$GITHUB_STEP_SUMMARY", producer)
         self.assertNotIn("pull-requests: write", producer)
@@ -545,6 +551,13 @@ class WorkflowPathsTest(unittest.TestCase):
         self.assertIn("<!-- qmix-lizard-erosion -->", publisher)
         self.assertIn("gh api", publisher)
         self.assertIn("EROSION_RESULT", self._result_script("ci.yml"))
+
+    def test_history_starts_new_six_metric_series_without_overall(self):
+        ci = (WORKFLOW_DIR / "ci.yml").read_text()
+        history = self._job(ci, "erosion-history")
+        self.assertIn("name: Code erosion", history)
+        self.assertNotIn("name: Lizard erosion", history)
+        self.assertIn("--input \"$RUNNER_TEMP/erosion/report.json\"", history)
 
     def _job(self, text, name):
         match = re.search(

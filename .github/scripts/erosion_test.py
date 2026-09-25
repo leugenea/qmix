@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPT = pathlib.Path(__file__).with_name("erosion.py")
 SPEC = importlib.util.spec_from_file_location("erosion", SCRIPT)
@@ -22,15 +23,13 @@ class ErosionTest(unittest.TestCase):
             'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
             '4,10,0,0,0,"",cmd/qmix/a.go,low,"",1,4\n'
             '9,11,0,0,0,"",cmd/qmix/a.go,high,"",5,13\n'
-            '16,2,0,0,0,"",android/app/src/main/A.kt,kotlin,"",1,16\n'
             '1,1,0,0,0,"",internal/server/guest/app.js,js,"",1,1\n'
         )
-        allowed = {"cmd/qmix/a.go", "android/app/src/main/A.kt", "internal/server/guest/app.js"}
+        allowed = {"cmd/qmix/a.go", "internal/server/guest/app.js"}
         report = erosion.calculate(erosion.parse_csv(csv_text, allowed))
-        self.assertEqual(report["overall"]["function_count"], 4)
-        self.assertEqual(report["overall"]["high_ccn_count"], 1)
-        self.assertEqual(report["overall"]["mass"], 20 + 33 + 8 + 1)
-        self.assertAlmostEqual(report["overall"]["erosion"], 33 / 62)
+        self.assertNotIn("overall", report)
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["languages"]["Go"]["high_ccn_count"], 1)
         self.assertAlmostEqual(report["languages"]["Go"]["erosion"], 33 / 53)
         self.assertEqual(report["languages"]["Kotlin"]["erosion"], 0)
         self.assertEqual(report["languages"]["JS"]["function_count"], 1)
@@ -46,7 +45,7 @@ class ErosionTest(unittest.TestCase):
         )
         report = erosion.calculate(erosion.parse_csv(csv_text, {"internal/server/guest/app.js"}))
         first, second = report["functions"]
-        self.assertEqual(report["schema_version"], 1)
+        self.assertEqual(report["schema_version"], 2)
         self.assertEqual(first["long_name"], "Widget.render(a, b)")
         self.assertIs(first["anonymous"], False)
         self.assertIs(second["anonymous"], False)
@@ -59,13 +58,13 @@ class ErosionTest(unittest.TestCase):
         csv_text = (
             'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
             '1,1,3,0,1,"",cmd/a.go,,func,1,1\n'
-            '1,1,3,0,1,"",android/app/src/main/A.kt,(anonymous),(anonymous),2,2\n'
+            '1,1,3,0,1,"",internal/server/guest/other.js,(anonymous),(anonymous),2,2\n'
             '1,1,3,0,1,"",internal/server/guest/app.js,(anonymous),(anonymous),3,3\n'
             '1,1,3,0,1,"",cmd/a.go,named,named(x),4,4\n'
         )
-        allowed = {"cmd/a.go", "android/app/src/main/A.kt", "internal/server/guest/app.js"}
+        allowed = {"cmd/a.go", "internal/server/guest/other.js", "internal/server/guest/app.js"}
         report = erosion.calculate(erosion.parse_csv(csv_text, allowed))
-        self.assertEqual(report["schema_version"], 1)
+        self.assertEqual(report["schema_version"], 2)
         self.assertEqual([row["anonymous"] for row in report["functions"]],
                          [True, True, True, False])
         encoded = json.loads(json.dumps(report))
@@ -130,7 +129,7 @@ class ErosionTest(unittest.TestCase):
 
     def test_anonymous_ordinals_are_scoped_to_direct_parent(self):
         header = 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
-        path = 'android/app/src/main/A.kt'
+        path = 'internal/server/guest/other.js'
         before = [
             f'1,1,3,0,1,"",{path},a,a(),1,30\n',
             f'1,1,3,0,1,"",{path},(anonymous),(anonymous),10,11\n',
@@ -160,7 +159,7 @@ class ErosionTest(unittest.TestCase):
         self.assertEqual([row['parent'] for row in after], [None, None])
 
     def test_same_start_uses_containment_to_nest_anonymous_functions(self):
-        path = 'android/app/src/main/A.kt'
+        path = 'internal/server/guest/other.js'
         header = 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
         outer = f'3,1,9,0,3,"",{path},render,render,1,10\n'
         short = f'1,1,3,0,1,"",{path},(anonymous),(anonymous),2,2\n'
@@ -211,6 +210,16 @@ class ErosionTest(unittest.TestCase):
                 f'1,1,3,0,1,"",{path},named,$1,1,1\n' +
                 f'1,1,3,0,1,"",{path},,func,4,4\n', {path})
 
+    def test_unreadable_in_scope_header_reports_file_and_line(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            source = root / "android/app/src/main/java/Unreadable.kt"
+            source.parent.mkdir(parents=True)
+            source.write_text("fun f() = 1\n")
+            with mock.patch.object(pathlib.Path, "open", side_effect=OSError("denied")):
+                with self.assertRaisesRegex(ValueError, r"Unreadable.kt:1: cannot read source header"):
+                    erosion.discover_sources(root)
+
     def test_excludes_tests_generated_build_and_third_party(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
@@ -243,7 +252,7 @@ class ErosionTest(unittest.TestCase):
             "NLOC,CCN,token,PARAM,location,file,function,long_name,start,end\n", set()
         ))
         self.assertEqual(report["functions"], [])
-        self.assertEqual(report["overall"], {"erosion": 0.0, "mass": 0.0, "high_ccn_mass": 0.0, "function_count": 0, "high_ccn_count": 0, "files_selected": 0, "files_with_functions": 0})
+        self.assertNotIn("overall", report)
         self.assertEqual(list(report["languages"]), ["Go", "Kotlin", "JS"])
         self.assertTrue(all(item["erosion"] == 0 for item in report["languages"].values()))
 
@@ -254,16 +263,16 @@ class ErosionTest(unittest.TestCase):
         ]
         report = erosion.calculate(rows)
         body = erosion.render_markdown(report)
-        self.assertEqual([row["function"] for row in report["top_five"]], [f"f{i}" for i in range(7, 2, -1)])
+        self.assertEqual([row["function"] for row in report["top_five"]["Go"]], [f"f{i}" for i in range(7, 2, -1)])
         self.assertEqual(body.count("<!-- qmix-lizard-erosion -->"), 1)
         self.assertIn("Go", body)
         self.assertIn("Kotlin", body)
         self.assertIn("JS", body)
         self.assertIn("Functions with CCN > 10", body)
-        for row in report["top_five"]:
+        for row in report["top_five"]["Go"]:
             self.assertIn(row["function"], body)
             self.assertIn(str(row["ccn"]), body)
-        self.assertEqual(json.loads(json.dumps(report))["overall"], report["overall"])
+        self.assertEqual(json.loads(json.dumps(report))["languages"], report["languages"])
 
     def test_markdown_escapes_untrusted_function_names(self):
         report = erosion.calculate([{"file": "cmd/<x>.go", "function": "<script>|x", "language": "Go", "ccn": 11, "nloc": 1, "mass": 11}])
@@ -281,11 +290,11 @@ class ErosionTest(unittest.TestCase):
             erosion.parse_csv('NLOC,CCN,file,function\n', {"cmd/a.go"})
 
     def test_missing_language_rows_are_a_tool_failure(self):
-        with self.assertRaisesRegex(ValueError, "no Kotlin functions"):
+        with self.assertRaisesRegex(ValueError, "no JS functions"):
             erosion.parse_csv(
                 'NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
                 '1,1,1,0,1,"",cmd/a.go,a,a,1,1\n',
-                {"cmd/a.go", "android/app/src/main/A.kt"},
+                {"cmd/a.go", "internal/server/guest/app.js"},
             )
 
     def test_selected_files_and_analyzed_files_are_visible_when_output_is_partial(self):
@@ -304,8 +313,8 @@ class ErosionTest(unittest.TestCase):
             )
             lizard.chmod(0o755)
             report = erosion.analyze(root, str(lizard))
-            self.assertEqual(report["overall"]["files_selected"], 3)
-            self.assertEqual(report["overall"]["files_with_functions"], 1)
+            self.assertEqual(report["languages"]["Go"]["files_selected"], 3)
+            self.assertEqual(report["languages"]["Go"]["files_with_functions"], 1)
             self.assertEqual(report["languages"]["Go"]["files_selected"], 3)
             self.assertEqual(report["languages"]["Go"]["files_with_functions"], 1)
             self.assertEqual(report["languages"]["JS"]["files_selected"], 0)
@@ -326,6 +335,61 @@ class ErosionTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, r"lizard failed \(exit 2\)"):
                 erosion.analyze(root, str(lizard))
 
+    def test_kotlin_uses_tree_sitter_and_lizard_only_receives_go_js(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            for name, content in {
+                "cmd/a.go": "package a\nfunc A() {}\n",
+                "internal/server/guest/app.js": "function app() {}\n",
+                "android/app/src/main/java/A.kt": "fun KotlinBranch() { if (true) println(1) }\n",
+            }.items():
+                destination = root / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(content)
+            lizard = root / "fake-lizard"
+            lizard.write_text(
+                '#!/bin/sh\n'
+                'for arg in "$@"; do case "$arg" in *.kt) exit 19 ;; esac; done\n'
+                'printf "%s\\n" "NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end" '
+                '"1,1,3,0,1,loc,cmd/a.go,A,A,2,2" '
+                '"1,1,3,0,1,loc,internal/server/guest/app.js,app,app,1,1"\n'
+            )
+            lizard.chmod(0o755)
+            report = erosion.analyze(root, str(lizard))
+            self.assertEqual([row["analyzer"] for row in report["functions"]],
+                             ["lizard", "lizard", "tree-sitter-kotlin"])
+            self.assertEqual(report["languages"]["Kotlin"]["function_count"], 1)
+            self.assertEqual(report["functions"][-1]["ccn"], 2)
+            self.assertNotIn("overall", report)
+            self.assertNotIn("Overall", erosion.render_markdown(report))
+
+    def test_kotlin_declaration_only_scope_has_zero_mass_without_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            source = root / "android/app/src/main/java/Contract.kt"
+            source.parent.mkdir(parents=True)
+            source.write_text("interface Contract {\n fun invoke(): Unit\n}\n")
+            report = erosion.analyze(root, "unused-lizard")
+            self.assertEqual(report["languages"]["Kotlin"]["function_count"], 0)
+            self.assertEqual(report["languages"]["Kotlin"]["files_selected"], 1)
+            self.assertEqual(report["languages"]["Kotlin"]["files_with_functions"], 0)
+            self.assertEqual(report["languages"]["Kotlin"]["erosion"], 0)
+
+    def test_kotlin_parse_error_aborts_report_with_file_and_line(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            source = root / "android/app/src/main/java/Broken.kt"
+            source.parent.mkdir(parents=True)
+            source.write_text("fun broken() {\n    if (\n}\n")
+            with self.assertRaisesRegex(ValueError, r"Broken.kt:[1-3]: Kotlin parse error"):
+                erosion.analyze(root, "unused-lizard")
+
+    def test_lizard_rejects_kotlin_csv_rows(self):
+        csv_text = ('NLOC,CCN,token,PARAM,length,location,file,function,long_name,start,end\n'
+                    '1,1,3,0,1,loc,android/app/src/main/A.kt,f,f,1,1\n')
+        with self.assertRaisesRegex(ValueError, "lizard reported unexpected source"):
+            erosion.parse_csv(csv_text, {"android/app/src/main/A.kt"})
+
     def test_cli_empty_repository_writes_json_and_summary(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
@@ -336,7 +400,7 @@ class ErosionTest(unittest.TestCase):
                 capture_output=True, text=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(json.loads(output.read_text())["overall"]["function_count"], 0)
+            self.assertEqual(json.loads(output.read_text())["languages"]["Go"]["function_count"], 0)
             self.assertIn("0.00%", summary.read_text())
 
 
