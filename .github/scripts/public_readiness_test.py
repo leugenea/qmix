@@ -287,6 +287,27 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertNotRegex(publisher, r"(?m)^\s+run:")
         self.assertEqual(publisher.count("uses: mikepenz/action-junit-report@"), 2)
 
+    def test_erosion_python_wheels_are_hash_pinned_and_installed_for_ci(self):
+        requirements = read(".github/requirements-lizard.txt")
+        workflow = read(".github/workflows/ci.yml")
+        producer = job(workflow, "erosion")
+        policy = job(workflow, "policy")
+        for body, venv in ((policy, "erosion-policy-venv"), (producer, "erosion-venv")):
+            with self.subTest(venv=venv):
+                self.assertIn("uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0", body)
+                self.assertIn("python-version: '3.13'", body)
+                self.assertIn(f'python -m venv "$RUNNER_TEMP/{venv}"', body)
+                self.assertNotIn("python3 -m venv", body)
+                self.assertIn("--require-hashes --no-deps -r .github/requirements-lizard.txt", body)
+        for package in ("lizard==1.24.0", "tree-sitter==0.25.2",
+                        "tree-sitter-kotlin==1.1.0"):
+            self.assertRegex(requirements, re.escape(package) + r" --hash=sha256:[0-9a-f]{64}")
+        self.assertIn("0.26.0", requirements)  # Record why 0.25.2 is pinned.
+        self.assertIn("--require-hashes --no-deps -r .github/requirements-lizard.txt", producer)
+        self.assertIn(".github/scripts/kotlin_complexity_test.py -v", producer)
+        self.assertIn("$RUNNER_TEMP/erosion-venv/bin/python", producer)
+        self.assertIn("--lizard \"$RUNNER_TEMP/erosion-venv/bin/lizard\"", producer)
+
     def test_erosion_history_has_only_main_push_write_permission(self):
         ci = read(".github/workflows/ci.yml")
         history = job(ci, "erosion-history")
@@ -299,7 +320,8 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertIn("persist-credentials: false", history)
         self.assertIn("cancel-in-progress: false", history)
         self.assertIn("queue: max", history)
-        self.assertIn("name: lizard-erosion", history)
+        self.assertIn("name: code-erosion", history)
+        self.assertIn("name: Code erosion", history)
         self.assertIn("--input \"$RUNNER_TEMP/erosion/report.json\"", history)
         self.assertIn("tool: customSmallerIsBetter", history)
         self.assertIn('alert-threshold: "110%"', history)
@@ -371,7 +393,7 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertIn("path: integration.xml\n", integration)
         self.assertEqual(ci.count("if-no-files-found: error"), 3)
         erosion = job(ci, "erosion")
-        self.assertIn("name: lizard-erosion", erosion)
+        self.assertIn("name: code-erosion", erosion)
         self.assertIn("if-no-files-found: error", erosion)
         self.assertIn("pattern: test-report-*", publisher)
         self.assertIn("report_paths: 'test-reports/unit.xml'", publisher)

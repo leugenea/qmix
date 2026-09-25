@@ -50,6 +50,9 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.25"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
       - name: Verify Compose project contract
         run: |
           set -o pipefail
@@ -58,6 +61,12 @@ jobs:
           QMIX_LOG_GID=$(python3 scripts/prepare_compose_logs.py)
           export QMIX_LOG_GID
           docker compose config --format json | jq -e '.name == "agent-apps"'
+      - name: Install hash-pinned erosion test dependencies
+        run: |
+          python -m venv "$RUNNER_TEMP/erosion-policy-venv"
+          "$RUNNER_TEMP/erosion-policy-venv/bin/python" -m pip install \
+            --require-hashes --no-deps -r .github/requirements-lizard.txt
+          echo "$RUNNER_TEMP/erosion-policy-venv/bin" >> "$GITHUB_PATH"
       - name: Repository policy and routing tests
         run: make test-workflow-routing test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic
 
@@ -137,8 +146,8 @@ jobs:
           path: integration.xml
           if-no-files-found: error
 
-  # Informational only: the score never fails this job. A lizard crash or
-  # malformed/empty analysis of nonempty source fails loudly instead.
+  # Informational only: the score never fails this job. A lizard failure or
+  # Kotlin parse/coverage failure fails loudly instead.
   erosion:
     needs: route
     if: needs.route.outputs.erosion == 'true'
@@ -147,27 +156,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install hash-pinned lizard and declared dependencies
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Install hash-pinned lizard, tree-sitter and declared dependencies
         run: |
-          python3 -m venv "$RUNNER_TEMP/lizard-venv"
-          "$RUNNER_TEMP/lizard-venv/bin/python" -m pip install \
+          python -m venv "$RUNNER_TEMP/erosion-venv"
+          "$RUNNER_TEMP/erosion-venv/bin/python" -m pip install \
             --require-hashes --no-deps -r .github/requirements-lizard.txt
-      - name: Test erosion metric and benchmark conversion
+      - name: Test erosion metrics, Kotlin counter and benchmark conversion
         run: |
-          python3 .github/scripts/erosion_test.py -v
-          python3 .github/scripts/benchmark_metrics_test.py -v
+          "$RUNNER_TEMP/erosion-venv/bin/python" .github/scripts/erosion_test.py -v
+          "$RUNNER_TEMP/erosion-venv/bin/python" .github/scripts/kotlin_complexity_test.py -v
+          "$RUNNER_TEMP/erosion-venv/bin/python" .github/scripts/benchmark_metrics_test.py -v
       - name: Analyze production source
         run: |
           mkdir -p "$RUNNER_TEMP/erosion"
-          python3 .github/scripts/erosion.py \
-            --lizard "$RUNNER_TEMP/lizard-venv/bin/lizard" \
+          "$RUNNER_TEMP/erosion-venv/bin/python" .github/scripts/erosion.py \
+            --lizard "$RUNNER_TEMP/erosion-venv/bin/lizard" \
             --output "$RUNNER_TEMP/erosion/report.json" \
             --summary "$RUNNER_TEMP/erosion/report.md"
           cat "$RUNNER_TEMP/erosion/report.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload erosion report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: lizard-erosion
+          name: code-erosion
           path: ${{ runner.temp }}/erosion/
           if-no-files-found: error
 
@@ -182,7 +195,7 @@ jobs:
       - name: Download erosion report
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: lizard-erosion
+          name: code-erosion
           path: erosion
       - name: Create or update one pull-request comment
         env:
@@ -223,7 +236,7 @@ jobs:
       - name: Download erosion report
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: lizard-erosion
+          name: code-erosion
           path: ${{ runner.temp }}/erosion
       - name: Convert report to named benchmark metrics
         run: |
@@ -233,7 +246,7 @@ jobs:
       - name: Publish history and alert on regression
         uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
         with:
-          name: Lizard erosion
+          name: Code erosion
           tool: customSmallerIsBetter
           output-file-path: ${{ runner.temp }}/erosion/benchmark.json
           gh-pages-branch: gh-pages

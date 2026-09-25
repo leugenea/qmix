@@ -1,4 +1,4 @@
-.PHONY: run compose-up build version test test-integration test-workflow-routing test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
+.PHONY: run compose-up build version test test-integration test-workflow-routing test-erosion test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
 
 version:
 	go run ./internal/buildinfo/cmd/version -format=json
@@ -28,9 +28,12 @@ test:
 test-integration:
 	go test -race -tags=integration -run 'Integration' ./internal/server/...
 
-test-workflow-routing:
+test-workflow-routing: test-erosion
 	python3 .github/scripts/workflow_paths_test.py -v
+
+test-erosion:
 	python3 .github/scripts/erosion_test.py -v
+	python3 .github/scripts/kotlin_complexity_test.py -v
 	python3 .github/scripts/benchmark_metrics_test.py -v
 
 test-public-readiness:

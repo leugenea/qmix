@@ -1,6 +1,10 @@
-# PyPI wheel SHA-256 digests; the two packages below are lizard 1.24.0's
-# declared runtime dependencies. No extras and no source distributions.
+# PyPI wheel SHA-256 digests; pathspec and pygments are lizard 1.24.0's
+# declared runtime dependencies. Linux x86_64 wheels for Python 3.11–3.14;
+# no extras or source distributions. tree-sitter 0.26.0 + Kotlin 1.1.0
+# crashed during prototype traversal; 0.25.2 passed repeated full-tree runs.
 --only-binary=:all:
 lizard==1.24.0 --hash=sha256:a688bc607a891ff4a7836826f25742dc9c1bf648da3075dbd495e199e8848602
 pathspec==1.1.1 --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
 pygments==2.21.0 --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
+tree-sitter==0.25.2 --hash=sha256:3e65ae456ad0d210ee71a89ee112ac7e72e6c2e5aac1b95846ecc7afa68a194c --hash=sha256:b43a9e4c89d4d0839de27cd4d6902d33396de700e9ff4c5ab7631f277a85ead9 --hash=sha256:b878e296e63661c8e124177cc3084b041ba3f5936b43076d57c487822426f614 --hash=sha256:260586381b23be33b6191a07cea3d44ecbd6c01aa4c6b027a0439145fcbc3358
+tree-sitter-kotlin==1.1.0 --hash=sha256:9a92afe24b634cf914c5812af0f5c53184b1c18bdf6ee5505c83afac81f6bf6c
