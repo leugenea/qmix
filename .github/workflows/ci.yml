@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ci: ${{ steps.paths.outputs.ci }}
+      erosion: ${{ steps.paths.outputs.erosion }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -28,12 +29,12 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
-            printf 'ci=true\nandroid=true\nlive=true\n' >> "$GITHUB_OUTPUT"
+            printf 'ci=true\nandroid=true\nlive=true\nerosion=true\n' >> "$GITHUB_OUTPUT"
           elif git diff --no-renames --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"; then
             python3 .github/scripts/workflow_paths.py \
               < "$RUNNER_TEMP/changed-paths" >> "$GITHUB_OUTPUT"
           else
-            printf 'ci=true\nandroid=true\nlive=true\n' >> "$GITHUB_OUTPUT"
+            printf 'ci=true\nandroid=true\nlive=true\nerosion=true\n' >> "$GITHUB_OUTPUT"
           fi
 
   policy:
@@ -131,6 +132,70 @@ jobs:
           name: test-report-integration-mandatory
           path: integration.xml
           if-no-files-found: error
+
+  # Informational only: the score never fails this job. A lizard crash or
+  # malformed/empty analysis of nonempty source fails loudly instead.
+  erosion:
+    needs: route
+    if: needs.route.outputs.erosion == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install hash-pinned lizard and declared dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/lizard-venv"
+          "$RUNNER_TEMP/lizard-venv/bin/python" -m pip install \
+            --require-hashes --no-deps -r .github/requirements-lizard.txt
+      - name: Test erosion metric
+        run: python3 .github/scripts/erosion_test.py -v
+      - name: Analyze production source
+        run: |
+          mkdir -p "$RUNNER_TEMP/erosion"
+          python3 .github/scripts/erosion.py \
+            --lizard "$RUNNER_TEMP/lizard-venv/bin/lizard" \
+            --output "$RUNNER_TEMP/erosion/report.json" \
+            --summary "$RUNNER_TEMP/erosion/report.md"
+          cat "$RUNNER_TEMP/erosion/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload erosion report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lizard-erosion
+          path: ${{ runner.temp }}/erosion/
+          if-no-files-found: error
+
+  # Privileged publisher consumes only the artifact, never checks out PR code.
+  publish-erosion:
+    needs: [route, erosion]
+    if: ${{ always() && needs.route.outputs.erosion == 'true' && needs.erosion.result == 'success' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Download erosion report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: lizard-erosion
+          path: erosion
+      - name: Create or update one pull-request comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          test -s erosion/report.json
+          test -s erosion/report.md
+          comment_id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- qmix-lizard-erosion -->"))) | .id')
+          if [[ -n "$comment_id" ]]; then
+            comment_id=${comment_id%%$'\n'*}
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
+              -f body="$(< erosion/report.md)" > /dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              -f body="$(< erosion/report.md)" > /dev/null
+          fi
 
   # Test reports are published from artifacts so this privileged job never
   # checks out or executes pull-request-controlled repository code.
@@ -268,13 +333,16 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [route, policy, ci, integration-mandatory, publish-test-reports, docker]
+    needs: [route, policy, ci, integration-mandatory, publish-test-reports, docker, erosion, publish-erosion]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
         env:
           ROUTE_RESULT: ${{ needs.route.result }}
           ROUTE_OUTPUT: ${{ needs.route.outputs.ci }}
+          EROSION_OUTPUT: ${{ needs.route.outputs.erosion }}
+          EROSION_RESULT: ${{ needs.erosion.result }}
+          EROSION_REPORT_RESULT: ${{ needs.publish-erosion.result }}
           POLICY_RESULT: ${{ needs.policy.result }}
           CI_RESULT: ${{ needs.ci.result }}
           INTEGRATION_RESULT: ${{ needs.integration-mandatory.result }}
@@ -284,6 +352,7 @@ jobs:
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
           ACTOR: ${{ github.actor }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           [[ "$ROUTE_RESULT" == success && "$POLICY_RESULT" == success ]]
           if [[ "$ROUTE_OUTPUT" == true ]]; then
@@ -300,4 +369,16 @@ jobs:
             [[ "$REPORT_RESULT" == success ]]
           else
             [[ "$REPORT_RESULT" == skipped ]]
+          fi
+          if [[ "$EROSION_OUTPUT" == true ]]; then
+            [[ "$EROSION_RESULT" == success ]]
+          elif [[ "$EROSION_OUTPUT" == false ]]; then
+            [[ "$EROSION_RESULT" == skipped ]]
+          else
+            exit 1
+          fi
+          if [[ "$EROSION_OUTPUT" == true && "$EVENT_NAME" == pull_request && "$HEAD_REPOSITORY" == "$REPOSITORY" && "$ACTOR" != 'dependabot[bot]' && "$PR_AUTHOR" != 'dependabot[bot]' ]]; then
+            [[ "$EROSION_REPORT_RESULT" == success ]]
+          else
+            [[ "$EROSION_REPORT_RESULT" == skipped ]]
           fi

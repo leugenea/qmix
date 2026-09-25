@@ -4,12 +4,17 @@
 import pathlib
 import sys
 
+from erosion import is_in_scope
+
 ROUTES = ("ci", "android", "live")
+OUTPUTS = (*ROUTES, "erosion")
 SHARED_GO_FILES = {"go.mod", "go.sum"}
 CI_ROOT_FILES = {".dockerignore", "Dockerfile", "Makefile"}
 
 
-def classify(paths):
+def classify(paths, root=None):
+    if root is None:
+        root = pathlib.Path(__file__).resolve().parents[2]
     routes = set()
     for raw_path in paths:
         path = raw_path.strip()
@@ -17,7 +22,12 @@ def classify(paths):
             continue
 
         if path.startswith(".github/scripts/workflow_paths"):
-            routes.update(ROUTES)
+            routes.update(OUTPUTS)
+        if is_in_scope(path, root) or path == ".github/scripts/erosion.py" or path == ".github/requirements-lizard.txt":
+            routes.add("erosion")
+        # The erosion job executes this test suite, even for a test-only edit.
+        if path == ".github/scripts/erosion_test.py":
+            routes.add("erosion")
         if path in SHARED_GO_FILES:
             routes.update(ROUTES)
         if path.startswith("android/"):
@@ -33,7 +43,7 @@ def classify(paths):
         if path.startswith(".github/scripts/generate_sbom"):
             routes.add("android")
         if path == ".github/workflows/ci.yml":
-            routes.add("ci")
+            routes.update(("ci", "erosion"))
         elif path == ".github/workflows/android.yml":
             routes.add("android")
         elif path == ".github/workflows/live.yml":
@@ -44,7 +54,7 @@ def classify(paths):
 def main():
     paths = (part.decode() for part in sys.stdin.buffer.read().split(b"\0"))
     selected = classify(paths)
-    for route in ROUTES:
+    for route in OUTPUTS:
         print(f"{route}={'true' if route in selected else 'false'}")
 
 

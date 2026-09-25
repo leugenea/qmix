@@ -30,6 +30,7 @@ test-integration:
 
 test-workflow-routing:
 	python3 .github/scripts/workflow_paths_test.py -v
+	python3 .github/scripts/erosion_test.py -v
 
 test-public-readiness:
 	python3 .github/scripts/public_readiness_test.py -v
