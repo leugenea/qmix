@@ -271,7 +271,7 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         ci = read(".github/workflows/ci.yml")
         self.assertRegex(ci, r"(?m)^permissions:\n  contents: read$")
 
-        for name in ("route", "policy", "ci", "integration-mandatory", "docker"):
+        for name in ("route", "policy", "ci", "integration-mandatory", "docker", "erosion"):
             body = job(ci, name)
             with self.subTest(job=name):
                 self.assertNotIn("checks: write", body)
@@ -307,7 +307,10 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertIn("path: unit.xml\n", unit)
         self.assertIn("name: test-report-integration-mandatory\n", integration)
         self.assertIn("path: integration.xml\n", integration)
-        self.assertEqual(ci.count("if-no-files-found: error"), 2)
+        self.assertEqual(ci.count("if-no-files-found: error"), 3)
+        erosion = job(ci, "erosion")
+        self.assertIn("name: lizard-erosion", erosion)
+        self.assertIn("if-no-files-found: error", erosion)
         self.assertIn("pattern: test-report-*", publisher)
         self.assertIn("report_paths: 'test-reports/unit.xml'", publisher)
         self.assertIn("report_paths: 'test-reports/integration.xml'", publisher)
