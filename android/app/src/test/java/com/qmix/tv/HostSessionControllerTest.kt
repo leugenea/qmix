@@ -21,7 +21,10 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -695,6 +698,10 @@ class HostSessionControllerTest {
         assertEquals(listOf("ABCD", "ABCD", "ABCD"), reconciler.calls)
         val replacement = initial.copy(current = CurrentTrack("other", 0, "playing", "Other", "Artist"))
         reconciler.complete(RoomFetchResult.Success(replacement))
+        // awaitCall only observes fetch entry; the IO-launched Unconfined
+        // recovery may not have reduced the callback yet. The next collection
+        // starts after queue/playback handoff and is the readiness boundary.
+        repository.awaitCollection()
 
         repository.publishAt(
             0,
@@ -913,6 +920,7 @@ class HostSessionControllerTest {
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
         controller.enterRoom()
+        repository.awaitSubscription()
         repository.publish(
             RoomSyncState.Active(
                 "ABCD",
@@ -925,6 +933,8 @@ class HostSessionControllerTest {
         assertEquals(1, repository.collections)
         assertEquals(1, repository.activeCollectors)
         controller.endRoom()
+        // endRoom detaches/cancels without joining; Setup follows the entire collector tree.
+        assertTrue(controller.awaitSetupForTest())
         assertEquals(1, repository.cancellations)
         assertEquals(0, repository.activeCollectors)
     }
@@ -1367,6 +1377,7 @@ class HostSessionControllerTest {
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
         controller.enterRoom()
+        repository.awaitSubscription()
 
         repository.publish(
             RoomSyncState.Active(
@@ -1749,6 +1760,11 @@ class HostSessionControllerTest {
         var collections = 0
         var cancellations = 0
         var activeCollectors = 0
+
+        // MutableSharedFlow has no replay: wait for its actual subscriber, not flow entry.
+        fun awaitSubscription() {
+            runBlocking { withTimeout(5_000) { states.subscriptionCount.first { it == 1 } } }
+        }
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
             assertEquals("ABCD", roomCode)
