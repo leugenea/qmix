@@ -125,6 +125,38 @@ file and line diagnostics; the sole grammar exception is the invisible
 `_class_member_semi` immediately before `}` in a valid single-line
 class/interface body (including one nested inside a multiline class).
 
+## Pull-request clone gate (qmix#202)
+
+The routed pull-request check is named **`clone-gate`**. It runs the same
+checksum-verified jscpd v5.3.2, `.jscpd.json` (10-line minimum, default
+50-token minimum, mild matching), and production Go/Kotlin/guest-JS sources
+as the informational `duplication` job. The PR head is scanned once with
+`--baseline-from-ref <PR base SHA> --fail-on-new-clones`; jscpd scans the
+base ref internally. A clone is new when jscpd's baseline mode marks it absent
+from the PR base. Existing clones are tolerated; overall duplication percentage
+does not gate the PR. Base code is not executed.
+
+On failure, the job summary lists each new clone's format, both file and line
+ranges, line count, and token count. The `clone-gate` JSON artifact has
+`new_clones[]` with the same fields and paths relative to the repository root.
+Missing, malformed, or failed analysis is an error, not a passing report.
+Run local report fixtures with `make test-clone-gate`.
+
+**Limitation:** With the pinned jscpd v5.3.2 baseline mode, these changes
+new copying were reported as new clones and failed the PR: moving a file
+containing an existing clone (`internal/roomsubmission/limiter.go`); inserting
+a comment before an existing cloned block; inserting the same comment into
+both copies of a clone; adding a non-ASCII string before a clone; and making
+the same whitespace change in both copies of a clone. Each affects code next
+to or inside an existing clone. The `clone-gate` check is informational and
+not required until [qmix#229](https://github.com/leugenea/qmix/issues/229)
+removes the existing clones from `main`. The owner can then make `clone-gate`
+required in the repository ruleset. If a PR fails only for one of these
+reasons, the owner makes an explicit merge decision; the workflow provides
+no bypass or override. An unrelated PR need not remove existing duplication.
+The workflow does not alter rulesets or branch protection or add the gate to
+`CI result`.
+
 ## History and alerts
 
 On **every push to `main`**, including documentation-only pushes,
@@ -223,8 +255,8 @@ other native fields (including `fragment`, `kind` and `isNew`) are retained.
 The top five clones sort by descending lines, then tokens, then source path.
 The denominator counts jscpd-analyzed lines; duplicated lines count one
 fragment per clone. Use this artifact rather than scraping rounded Markdown.
-The future baseline gate (#202) must reuse the same scope and threshold; this
-informational job does not implement a gate or history.
+The baseline clone gate (#202) reuses the same scope and threshold; this
+informational job does not implement the gate or history.
 
 For a local report, download that release archive, verify the reviewed SHA-256
 with `sha256sum -c -` **before extraction**, then run:
@@ -237,6 +269,5 @@ The target prints the path to `report.md` in a scratch subdirectory and also
 writes normalized `report.json`. No npm or JVM is needed. On the current
 production scope with the adopted 10-line minimum, the baseline is **0.5030%
 overall, four Go clones** (Go 0.8368% / 4, Kotlin 0% / 0, JavaScript 0% / 0).
-This is an informational baseline, not a gate; #201 uses the same
-10-line minimum, default 50-token minimum, `mild` mode, and production scope
-for history, while #202 can reuse it for a future baseline gate.
+The clone gate (#202) reuses this scope and threshold with jscpd baseline
+mode; this informational job remains separate from the gate and history.

@@ -40,6 +40,7 @@ def classify(paths, root=None):
         if in_scope or path in {
             ".jscpd.json", ".github/scripts/jscpd_report.py",
             ".github/scripts/jscpd_report_test.py", ".github/scripts/erosion.py",
+            ".github/scripts/clone_gate.py", ".github/scripts/clone_gate_test.py",
         }:
             routes.add("duplication")
         if path in SHARED_GO_FILES:

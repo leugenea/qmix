@@ -290,6 +290,80 @@ jobs:
             ${{ runner.temp }}/duplication/report.md
           if-no-files-found: error
 
+  # qmix#202: gate jscpd's new clones relative to the PR base, not overall %.
+  clone-gate:
+    name: clone-gate
+    needs: route
+    if: github.event_name == 'pull_request' && needs.route.outputs.duplication == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install checksum-verified jscpd v5.3.2
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jscpd"
+          curl --fail --location --retry 3 \
+            https://github.com/kucherenko/jscpd/releases/download/v5.3.2/jscpd-linux-x64-gnu.tar.gz \
+            --output "$RUNNER_TEMP/jscpd/jscpd-linux-x64-gnu.tar.gz"
+          cd "$RUNNER_TEMP/jscpd"
+          printf '%s  %s\n' \
+            '97259f222ea7f6d51a0f2faa98ed5889430233e0fb8d2c129f23d84aff4b93b2' 'jscpd-linux-x64-gnu.tar.gz' | sha256sum -c -
+          tar -xzf jscpd-linux-x64-gnu.tar.gz
+          test -x ./jscpd
+          ./jscpd --version
+      - name: Test clone gate
+        run: python3 .github/scripts/clone_gate_test.py -v
+      - name: Scan head against the pull-request base
+        id: scan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/clone-gate"
+          python3 .github/scripts/jscpd_report.py sources . > "$RUNNER_TEMP/clone-gate/sources"
+          mapfile -d '' -t sources < "$RUNNER_TEMP/clone-gate/sources"
+          (( ${#sources[@]} > 0 ))
+          set +e
+          "$RUNNER_TEMP/jscpd/jscpd" --config .jscpd.json --absolute \
+            --reporters json --threshold 100 --fail-on-empty \
+            --baseline-from-ref "$BASE_SHA" --fail-on-new-clones \
+            --output "$RUNNER_TEMP/clone-gate" "${sources[@]}"
+          status=$?
+          set -e
+          printf '%s\n' "$status" > "$RUNNER_TEMP/clone-gate/scan-status"
+          exit "$status"
+      - name: Render clone gate report
+        id: gate
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/clone-gate"
+          python3 .github/scripts/clone_gate.py \
+            --report "$RUNNER_TEMP/clone-gate/jscpd-report.json" --repo . \
+            --scan-status "$RUNNER_TEMP/clone-gate/scan-status" \
+            --json "$RUNNER_TEMP/clone-gate/report.json" \
+            --markdown "$RUNNER_TEMP/clone-gate/report.md"
+      - name: Clone gate summary
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/clone-gate/report.md" ]]; then
+            cat "$RUNNER_TEMP/clone-gate/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '### Clone gate\n\nAnalysis did not produce a report; inspect the failed step.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload clone gate report
+        if: always() && steps.gate.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clone-gate
+          path: ${{ runner.temp }}/clone-gate/report.json
+          if-no-files-found: error
+
   # Privileged publisher consumes artifacts only, never checks out PR code.
   publish-erosion:
     needs: [route, erosion, duplication]
