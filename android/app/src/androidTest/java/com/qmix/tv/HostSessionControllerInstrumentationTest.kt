@@ -5,12 +5,15 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.ArrayDeque
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
@@ -512,49 +515,63 @@ class HostSessionControllerInstrumentationTest {
     fun stop_cancels_recovery_queued_on_mutation_dispatcher_before_fetch_or_command_admission() {
         server.enqueue(MockResponse().setResponseCode(201)
             .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
-        val dispatcher = QueuedCoroutineDispatcher()
+        val recoveryDispatcher = QueuedCoroutineDispatcher()
         val repository = RecordingRoomRepository()
         val room = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
-        var fetches = 0
-        var commands = 0
-        val controller = HostSessionController(
-            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example",
-            roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
-            roomCollectionContext = Dispatchers.Unconfined,
-            foregroundReconcilerFactory = { { _: String -> fetches++; RoomFetchResult.Success(room) } },
-            queueMutationContext = QueueMutationContext(dispatcher) { true },
-            primaryActionHandler = { commands++ },
-        )
-        assertTrue(controller.createRoom())
-        controller.awaitCreatedForTest()
-        controller.enterRoom()
-        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
-        awaitConditionForTest {
-            dispatcher.runPending()
-            (controller.state as? HostingState.LiveRoom)?.synchronization ==
-                RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED)
-        }
-        controller.onHostStopped()
-        controller.onHostStarted()
-        controller.onHostStopped()
-        dispatcher.runPending()
-        controller.onStartOrNext()
-        assertEquals(0, fetches)
-        assertEquals(0, commands)
-        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        val fetches = AtomicInteger()
+        val commands = AtomicInteger()
+        // Synchronous lifecycle calls and worker callbacks must share a real mutation lane.
+        Executors.newSingleThreadExecutor().asCoroutineDispatcher().use { mutationDispatcher ->
+            val controller = HostSessionController(
+                OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+                initialGuestOrigin = "https://guest.example",
+                roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
+                roomCollectionContext = Dispatchers.IO,
+                foregroundRecoveryContext = recoveryDispatcher,
+                foregroundReconcilerFactory = { { _: String ->
+                    fetches.incrementAndGet()
+                    RoomFetchResult.Success(room)
+                } },
+                queueMutationContext = QueueMutationContext(mutationDispatcher),
+                primaryActionHandler = { commands.incrementAndGet(); Unit },
+            )
+            try {
+                assertTrue(controller.createRoom())
+                controller.awaitCreatedForTest()
+                controller.enterRoom()
+                repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+                controller.awaitStateForTest { state ->
+                    (state as? HostingState.LiveRoom)?.synchronization ==
+                        RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED)
+                }
+                controller.onHostStopped()
+                controller.onHostStarted()
+                // The first collection may still be joining; wait for an actual queued recovery.
+                val cancelledRecovery = recoveryDispatcher.awaitPending()
+                controller.onHostStopped()
+                cancelledRecovery.run()
+                recoveryDispatcher.runPending()
+                controller.onStartOrNext()
+                assertEquals("cancelled recovery fetched", 0, fetches.get())
+                assertEquals("command admitted while stopped", 0, commands.get())
+                assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
 
-        controller.onHostStarted()
-        awaitConditionForTest {
-            dispatcher.runPending()
-            fetches == 1 && (controller.state as HostingState.LiveRoom).foregroundRecoveryPending == false
+                controller.onHostStarted()
+                recoveryDispatcher.awaitPending().run()
+                recoveryDispatcher.runPending()
+                controller.awaitStateForTest { state ->
+                    state is HostingState.LiveRoom && !state.foregroundRecoveryPending
+                }
+                assertEquals("foreground recovery fetches", 1, fetches.get())
+                assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+                controller.onStartOrNext()
+                assertEquals("command admitted after recovery", 1, commands.get())
+            } finally {
+                controller.endRoom()
+                controller.awaitSetupForTest()
+            }
         }
-        assertEquals(1, fetches)
-        assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
-        controller.onStartOrNext()
-        assertEquals(1, commands)
-        controller.endRoom()
     }
 
     @Test
@@ -829,12 +846,15 @@ class HostSessionControllerInstrumentationTest {
     }
 
     private class QueuedCoroutineDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
-        private val tasks = ArrayDeque<Runnable>()
+        private val tasks = LinkedBlockingQueue<Runnable>()
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
-            tasks.addLast(block)
+            tasks.add(block)
+        }
+        fun awaitPending(): Runnable = checkNotNull(tasks.poll(5, TimeUnit.SECONDS)) {
+            "recovery was not queued"
         }
         fun runPending() {
-            while (tasks.isNotEmpty()) tasks.removeFirst().run()
+            while (true) (tasks.poll() ?: break).run()
         }
     }
 

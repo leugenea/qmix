@@ -4,14 +4,14 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.NonCancellable
@@ -60,44 +60,72 @@ class HostSessionControllerTest {
         server.shutdown()
     }
 
-    /** qmix#181: stop wins over a recovery Job already queued on the mutation dispatcher. */
-    @OptIn(ExperimentalCoroutinesApi::class)
+    /** qmix#181: stop wins over a recovery Job that has reached the worker dispatcher. */
     @Test
-    fun stop_start_stop_cancels_queued_recovery_without_reopening_commands() = runTest {
+    fun stop_start_stop_cancels_queued_recovery_without_reopening_commands() {
         server.enqueue(MockResponse().setResponseCode(201)
             .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
         val repository = RecordingRoomRepository()
-        val dispatcher = StandardTestDispatcher(testScheduler)
+        val recoveryTasks = LinkedBlockingQueue<Runnable>()
+        val recoveryDispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                recoveryTasks.add(block)
+            }
+        }
+        fun awaitRecovery() = checkNotNull(recoveryTasks.poll(5, TimeUnit.SECONDS)) {
+            "recovery was not queued"
+        }
         val initial = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
-        var fetches = 0
-        var commands = 0
-        val controller = HostSessionController(
-            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
-            initialGuestOrigin = "https://guest.example",
-            roomRepositoryFactory = { repository }, roomCollectionScope = backgroundScope,
-            roomCollectionContext = Dispatchers.Unconfined,
-            foregroundRecoveryContext = dispatcher,
-            foregroundReconcilerFactory = { { _: String ->
-                fetches++
-                RoomFetchResult.Success(initial)
-            } },
-            queueMutationContext = QueueMutationContext(dispatcher) { true },
-            primaryActionHandler = { commands++ },
-        )
-        assertTrue(controller.createRoom())
-        controller.awaitCreatedForTest()
-        controller.enterRoom()
-        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.onHostStopped()
-        controller.onHostStarted()
-        controller.onHostStopped()
-        runCurrent()
-        controller.onStartOrNext()
-        assertEquals(0, fetches)
-        assertEquals(0, commands)
-        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
-        controller.endRoom()
+        val fetches = AtomicInteger()
+        val commands = AtomicInteger()
+        Executors.newSingleThreadExecutor().asCoroutineDispatcher().use { mutationDispatcher ->
+            val controller = HostSessionController(
+                OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+                initialGuestOrigin = "https://guest.example",
+                roomRepositoryFactory = { repository }, roomCollectionScope = queueScope,
+                roomCollectionContext = Dispatchers.IO,
+                foregroundRecoveryContext = recoveryDispatcher,
+                foregroundReconcilerFactory = { { _: String ->
+                    fetches.incrementAndGet()
+                    RoomFetchResult.Success(initial)
+                } },
+                queueMutationContext = QueueMutationContext(mutationDispatcher),
+                primaryActionHandler = { commands.incrementAndGet(); Unit },
+            )
+            try {
+                assertTrue(controller.createRoom())
+                controller.awaitCreatedForTest()
+                controller.enterRoom()
+                repository.awaitCollection()
+                repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+                runBlocking { withTimeout(5_000) { controller.states.first { state ->
+                    (state as? HostingState.LiveRoom)?.synchronization ==
+                        RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED)
+                } } }
+                controller.onHostStopped()
+                controller.onHostStarted()
+                val cancelledRecovery = awaitRecovery()
+                controller.onHostStopped()
+                cancelledRecovery.run()
+                controller.onStartOrNext()
+                assertEquals("cancelled recovery fetched", 0, fetches.get())
+                assertEquals("command admitted while stopped", 0, commands.get())
+                assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+
+                controller.onHostStarted()
+                awaitRecovery().run()
+                runBlocking { withTimeout(5_000) { controller.states.first { state ->
+                    state is HostingState.LiveRoom && !state.foregroundRecoveryPending
+                } } }
+                assertEquals("foreground recovery fetches", 1, fetches.get())
+                controller.onStartOrNext()
+                assertEquals("command admitted after recovery", 1, commands.get())
+            } finally {
+                controller.endRoom()
+                controller.awaitSetupForTest()
+            }
+        }
     }
 
     @Test
