@@ -551,15 +551,14 @@ class HostSessionControllerInstrumentationTest {
                 val cancelledRecovery = recoveryDispatcher.awaitPending()
                 controller.onHostStopped()
                 cancelledRecovery.run()
-                recoveryDispatcher.runPending()
+                // Later resumptions must not remain parked after the stopped worker is proved cancelled.
+                recoveryDispatcher.release()
                 controller.onStartOrNext()
                 assertEquals("cancelled recovery fetched", 0, fetches.get())
                 assertEquals("command admitted while stopped", 0, commands.get())
                 assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
 
                 controller.onHostStarted()
-                recoveryDispatcher.awaitPending().run()
-                recoveryDispatcher.runPending()
                 controller.awaitStateForTest { state ->
                     state is HostingState.LiveRoom && !state.foregroundRecoveryPending
                 }
@@ -569,6 +568,7 @@ class HostSessionControllerInstrumentationTest {
                 assertEquals("command admitted after recovery", 1, commands.get())
             } finally {
                 controller.endRoom()
+                recoveryDispatcher.release()
                 controller.awaitSetupForTest()
             }
         }
@@ -847,14 +847,25 @@ class HostSessionControllerInstrumentationTest {
 
     private class QueuedCoroutineDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
         private val tasks = LinkedBlockingQueue<Runnable>()
+        private var released = false
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
-            tasks.add(block)
+            synchronized(tasks) {
+                if (!released) {
+                    tasks.add(block)
+                    return
+                }
+            }
+            Dispatchers.IO.dispatch(context, block)
         }
         fun awaitPending(): Runnable = checkNotNull(tasks.poll(5, TimeUnit.SECONDS)) {
             "recovery was not queued"
         }
-        fun runPending() {
-            while (true) (tasks.poll() ?: break).run()
+        fun release() {
+            val pending = synchronized(tasks) {
+                released = true
+                buildList { while (true) add(tasks.poll() ?: break) }
+            }
+            pending.forEach(Runnable::run)
         }
     }
 

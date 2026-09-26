@@ -68,8 +68,22 @@ class HostSessionControllerTest {
         val repository = RecordingRoomRepository()
         val recoveryTasks = LinkedBlockingQueue<Runnable>()
         val recoveryDispatcher = object : CoroutineDispatcher() {
+            private var released = false
             override fun dispatch(context: CoroutineContext, block: Runnable) {
-                recoveryTasks.add(block)
+                synchronized(recoveryTasks) {
+                    if (!released) {
+                        recoveryTasks.add(block)
+                        return
+                    }
+                }
+                Dispatchers.IO.dispatch(context, block)
+            }
+            fun release() {
+                val pending = synchronized(recoveryTasks) {
+                    released = true
+                    buildList { while (true) add(recoveryTasks.poll() ?: break) }
+                }
+                pending.forEach(Runnable::run)
             }
         }
         fun awaitRecovery() = checkNotNull(recoveryTasks.poll(5, TimeUnit.SECONDS)) {
@@ -108,13 +122,15 @@ class HostSessionControllerTest {
                 val cancelledRecovery = awaitRecovery()
                 controller.onHostStopped()
                 cancelledRecovery.run()
+                // Only the first recovery is deliberately parked. Let all later resumptions
+                // run normally, including the success continuation needed by owner teardown.
+                recoveryDispatcher.release()
                 controller.onStartOrNext()
                 assertEquals("cancelled recovery fetched", 0, fetches.get())
                 assertEquals("command admitted while stopped", 0, commands.get())
                 assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
 
                 controller.onHostStarted()
-                awaitRecovery().run()
                 runBlocking { withTimeout(5_000) { controller.states.first { state ->
                     state is HostingState.LiveRoom && !state.foregroundRecoveryPending
                 } } }
@@ -123,6 +139,7 @@ class HostSessionControllerTest {
                 assertEquals("command admitted after recovery", 1, commands.get())
             } finally {
                 controller.endRoom()
+                recoveryDispatcher.release()
                 controller.awaitSetupForTest()
             }
         }
