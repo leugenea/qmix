@@ -185,6 +185,59 @@ jobs:
           path: ${{ runner.temp }}/erosion/
           if-no-files-found: error
 
+  # qmix#199: compare the PR head against its base without running base code.
+  complexity-gate:
+    name: complexity-gate
+    needs: route
+    if: github.event_name == 'pull_request' && needs.route.outputs.erosion == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Install hash-pinned lizard, tree-sitter and declared dependencies
+        run: |
+          python -m venv "$RUNNER_TEMP/complexity-venv"
+          "$RUNNER_TEMP/complexity-venv/bin/python" -m pip install \
+            --require-hashes --no-deps -r .github/requirements-lizard.txt
+          echo "$RUNNER_TEMP/complexity-venv/bin" >> "$GITHUB_PATH"
+      - name: Test complexity gate
+        run: python3 .github/scripts/complexity_gate_test.py -v
+      - name: Prepare pull-request base snapshot
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+      - name: Compare base and head complexity
+        id: gate
+        run: |
+          mkdir -p "$RUNNER_TEMP/complexity-gate"
+          python3 .github/scripts/complexity_gate.py \
+            --base "$RUNNER_TEMP/base" --head . \
+            --json "$RUNNER_TEMP/complexity-gate/report.json" \
+            --markdown "$RUNNER_TEMP/complexity-gate/report.md"
+      - name: Complexity gate summary
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/complexity-gate/report.md" ]]; then
+            cat "$RUNNER_TEMP/complexity-gate/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '### Complexity gate\n\nAnalysis did not produce a report; inspect the failed step.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload complexity gate report
+        if: always() && steps.gate.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: complexity-gate
+          path: ${{ runner.temp }}/complexity-gate/report.json
+          if-no-files-found: error
+
   # Informational only (qmix#200): the score never fails the job; installation
   # and report errors fail closed. The binary lives in this job's temp directory.
   duplication:

@@ -47,6 +47,8 @@ class WorkflowPathsTest(unittest.TestCase):
             ".github/scripts/benchmark_metrics_test.py": True,
             ".github/scripts/kotlin_complexity.py": True,
             ".github/scripts/kotlin_complexity_test.py": True,
+            ".github/scripts/complexity_gate.py": True,
+            ".github/scripts/complexity_gate_test.py": True,
             ".github/requirements-lizard.txt": True,
             "cmd/qmix/main_test.go": False,
             "internal/server/server_integration_test.go": False,
@@ -95,6 +97,8 @@ class WorkflowPathsTest(unittest.TestCase):
             ".github/scripts/jscpd_report_test.py": True,
             ".github/scripts/erosion.py": True,  # Shared source discovery and scope.
             ".github/scripts/erosion_test.py": False,
+            ".github/scripts/complexity_gate.py": False,
+            ".github/scripts/complexity_gate_test.py": False,
         }
         for path, expected in cases.items():
             with self.subTest(path=path):
@@ -132,6 +136,8 @@ class WorkflowPathsTest(unittest.TestCase):
             ".jscpd.json": {"duplication"},
             ".github/scripts/jscpd_report.py": {"ci", "duplication"},
             ".github/scripts/jscpd_report_test.py": {"ci", "duplication"},
+            ".github/scripts/complexity_gate.py": {"ci", "erosion"},
+            ".github/scripts/complexity_gate_test.py": {"ci", "erosion"},
             "README.md": set(),
             ".github/cyrillic-allowlist.json": set(),
         }
@@ -193,6 +199,53 @@ class WorkflowPathsTest(unittest.TestCase):
                 self.assertIn(expected, completed.stdout.decode().splitlines())
         ci = (WORKFLOW_DIR / "ci.yml").read_text()
         self.assertIn("FORCE_EROSION: ${{ github.event_name == 'push' }}", self._job(ci, "route"))
+
+    def test_complexity_gate_is_pr_only_and_reuses_erosion_route(self):
+        ci = (WORKFLOW_DIR / "ci.yml").read_text()
+        gate = self._job(ci, "complexity-gate")
+        result = self._job(ci, "result")
+        self.assertIn("needs: route", gate)
+        self.assertIn("github.event_name == 'pull_request'", gate)
+        self.assertIn("needs.route.outputs.erosion == 'true'", gate)
+        self.assertIn("name: complexity-gate", gate)
+        self.assertIn("contents: read", gate)
+        self.assertNotIn("complexity-gate", result)  # Owner opts in to required status.
+        self.assertNotIn("secrets.", gate)
+
+    def test_complexity_gate_checkout_base_tests_summary_and_artifact(self):
+        ci = (WORKFLOW_DIR / "ci.yml").read_text()
+        gate = self._job(ci, "complexity-gate")
+        self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1", gate)
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", gate)
+        self.assertIn("fetch-depth: 0", gate)
+        self.assertIn("persist-credentials: false", gate)
+        self.assertIn("actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0", gate)
+        self.assertIn("python-version: '3.13'", gate)
+        self.assertIn("--require-hashes --no-deps -r .github/requirements-lizard.txt", gate)
+        self.assertIn('git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"', gate)
+        self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", gate)
+        self.assertLess(gate.index("complexity_gate_test.py -v"), gate.index("complexity_gate.py "))
+        for token in ('--base "$RUNNER_TEMP/base"', '--head .',
+                      '--json "$RUNNER_TEMP/complexity-gate/report.json"',
+                      '--markdown "$RUNNER_TEMP/complexity-gate/report.md"',
+                      'cat "$RUNNER_TEMP/complexity-gate/report.md" >> "$GITHUB_STEP_SUMMARY"'):
+            self.assertIn(token, gate)
+        self.assertIn("if: always()", gate)
+        self.assertIn("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4", gate)
+        self.assertIn("name: complexity-gate", gate)
+        self.assertIn("if-no-files-found: error", gate)
+
+    def test_complexity_gate_local_target_and_check_documentation(self):
+        makefile = (REPOSITORY_ROOT / "Makefile").read_text()
+        docs = (REPOSITORY_ROOT / "docs/code-quality.md").read_text()
+        self.assertIn("test-complexity-gate:", makefile)
+        self.assertIn("python3 .github/scripts/complexity_gate_test.py -v", makefile)
+        self.assertRegex(makefile, r"test-workflow-routing:.*test-complexity-gate")
+        self.assertIn("`complexity-gate`", docs)
+        self.assertIn("CCN > 10", docs)
+        self.assertIn("renamed", docs)
+        self.assertIn("anonymous", docs)
+        self.assertIn("branch protection", docs)
 
     def test_every_action_is_pinned_to_a_full_commit(self):
         action = re.compile(r"^\s*-?\s*uses:\s+[^@\s]+@([^\s#]+)", re.MULTILINE)
