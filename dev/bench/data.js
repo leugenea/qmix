@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790450118531,
+  "lastUpdate": 1790450121072,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -521,6 +521,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/e11ab8e8d543db98fadddd5571ff49e2b4f61069"
         },
         "date": 1790444514480,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0.5030081862116579,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 4,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0.8367514356029532,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 4,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a543a77aeff68ecf35142c066d0b2c97fdb9a6e8",
+          "message": "tools: rank complexity and duplication hotspots by churn (#243)\n\n* tools: rank complexity and duplication hotspots by churn (#242)\n\n* test: rename the fixture complexity parameter to avoid a CodeQL false positive (#242)",
+          "timestamp": "2026-09-26T22:14:43+03:00",
+          "tree_id": "2caba10ab2e06bd8f9ab721b9d7d80f9f8938474",
+          "url": "https://github.com/leugenea/qmix/commit/a543a77aeff68ecf35142c066d0b2c97fdb9a6e8"
+        },
+        "date": 1790450120225,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
