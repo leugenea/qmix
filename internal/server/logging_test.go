@@ -51,9 +51,9 @@ func TestSubsystemWarningsIdentifyComponentsWithoutSecrets(t *testing.T) {
 	doReq(t, mux, http.MethodGet, "/rooms/"+code+"/current/stream", "", "")
 
 	// A transport that cannot flush is an attributable SSE failure.
-	NewHubWithLogger(logger).ServeHTTP(context.Background(), &noFlushWriter{header: http.Header{}}, code, func() (int64, interface{}) {
-		return 0, map[string]string{}
-	})
+	logHub := NewHubWithLogger(logger)
+	logSub, cancelLog := logHub.subscribeRef(roomRef{code: code, generation: 1})
+	logHub.serveSubscriptionHTTP(context.Background(), &noFlushWriter{header: http.Header{}}, logSub, cancelLog, eventSnapshot{Data: map[string]interface{}{}})
 
 	logs := output.String()
 	for _, component := range []string{"server/http", "store/rooms", "resolver", "stream", "sse"} {

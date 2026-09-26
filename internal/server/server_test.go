@@ -177,7 +177,7 @@ func TestAddTrack(t *testing.T) {
 func TestAppendTrackDoesNotExposeMutationBeforePublication(t *testing.T) {
 	s, store := newTestServer()
 	room := mustCreateRoom(t, store)
-	ch, cancel := s.hub.Subscribe(room.Code)
+	ch, cancel := subscribeTestEvents(t, s.store, s.hub, room.Code)
 	defer cancel()
 
 	// Stall publication. The room mutation must remain protected by store.mu
@@ -442,7 +442,7 @@ func TestSkipPublishesUpdatedQueue(t *testing.T) {
 	mux := newTestMux(s)
 	code, token := createRoom(t, mux)
 	addTrack(t, mux, code, "https://a.example/song")
-	ch, cancel := s.hub.Subscribe(code)
+	ch, cancel := subscribeTestEvents(t, s.store, s.hub, code)
 	defer cancel()
 
 	rec := doReq(t, mux, http.MethodPost, "/rooms/"+code+"/skip", "", token)
@@ -460,10 +460,7 @@ func TestSkipPublishesUpdatedQueue(t *testing.T) {
 	if queueEvent == nil {
 		t.Fatal("skip did not publish queue_updated")
 	}
-	data, err := json.Marshal(queueEvent.Data)
-	if err != nil {
-		t.Fatalf("marshal queue event: %v", err)
-	}
+	data := []byte(queueEvent.Data.(eventJSON))
 	var payload struct {
 		Queue []Track `json:"queue"`
 	}
@@ -561,6 +558,8 @@ func TestReorderRejectsReplacementRoomAfterAuthorization(t *testing.T) {
 	code, token := createRoom(t, mux)
 	store.mu.Lock()
 	store.rooms[code].Queue = []Track{{ID: "old-a"}, {ID: "old-b"}}
+	store.nextGen++
+	replacementGeneration := store.nextGen
 	store.mu.Unlock()
 
 	replacement := &Room{
@@ -568,9 +567,12 @@ func TestReorderRejectsReplacementRoomAfterAuthorization(t *testing.T) {
 		HostToken:    newToken(),
 		Queue:        []Track{{ID: "new"}},
 		LastActivity: time.Now(),
+		generation:   replacementGeneration,
 	}
-	events, cancel := s.hub.Subscribe(code)
-	defer cancel()
+	oldEvents, cancelOld := subscribeTestEvents(t, s.store, s.hub, code)
+	defer cancelOld()
+	replacementSub, cancelReplacement := s.hub.subscribeRef(roomRef{code: code, generation: replacement.generation})
+	defer cancelReplacement()
 	body := &onReadReader{
 		onRead: func() {
 			store.mu.Lock()
@@ -593,8 +595,13 @@ func TestReorderRejectsReplacementRoomAfterAuthorization(t *testing.T) {
 		t.Fatalf("replacement queue[0] = %q, want new", got)
 	}
 	select {
-	case event := <-events:
-		t.Fatalf("unexpected stale event: %+v", event)
+	case event := <-oldEvents:
+		t.Fatalf("unexpected stale event on old room: %+v", event)
+	default:
+	}
+	select {
+	case event := <-replacementSub.ch:
+		t.Fatalf("unexpected stale event on replacement room: %+v", event)
 	default:
 	}
 }
@@ -799,15 +806,15 @@ func TestSweepDisconnectsActiveSSEBeforeCodeReuse(t *testing.T) {
 
 func TestServeHTTPSkipsEventsCoveredBySnapshot(t *testing.T) {
 	hub := NewHub()
+	ref := roomRef{code: "room", generation: 1}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
-		hub.ServeHTTP(r.Context(), w, "room", func() (int64, interface{}) {
-			hub.Publish("room", "queue_updated", map[string]int{"version": 1})
-			hub.Publish("room", "queue_updated", map[string]int{"version": 2})
-			return hub.currentID("room"), map[string]int{"version": 2}
-		})
+		sub, cancel := hub.subscribeRef(ref)
+		hub.publishRef(ref, "queue_updated", map[string]int{"version": 1})
+		hub.publishRef(ref, "queue_updated", map[string]int{"version": 2})
+		snapshot := eventSnapshot{ID: hub.currentIDRef(ref), Data: map[string]interface{}{"version": 2}}
+		hub.serveSubscriptionHTTP(r.Context(), w, sub, cancel, snapshot)
 	})
-
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 	resp, err := ts.Client().Get(ts.URL + "/events")
@@ -816,13 +823,11 @@ func TestServeHTTPSkipsEventsCoveredBySnapshot(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	br := bufio.NewReader(resp.Body)
-
 	id, name, data := readSSE(t, br)
 	if id != "2" || name != "queue_snapshot" || data != `{"version":2}` {
 		t.Fatalf("snapshot = id %q, event %q, data %s", id, name, data)
 	}
-
-	hub.Publish("room", "queue_updated", map[string]int{"version": 3})
+	hub.publishRef(ref, "queue_updated", map[string]int{"version": 3})
 	id, name, data = readSSE(t, br)
 	if id != "3" || name != "queue_updated" || data != `{"version":3}` {
 		t.Fatalf("first live event = id %q, event %q, data %s; want id 3", id, name, data)
@@ -831,47 +836,33 @@ func TestServeHTTPSkipsEventsCoveredBySnapshot(t *testing.T) {
 
 func TestPublishOverflowTerminatesOnlySlowSubscriber(t *testing.T) {
 	hub := NewHub()
-	slow, cancelSlow := hub.Subscribe("room")
+	ref := roomRef{code: "room", generation: 1}
+	slow, cancelSlow := hub.subscribeRef(ref)
 	defer cancelSlow()
-
-	hub.mu.Lock()
-	var slowDone <-chan struct{}
-	for sub := range hub.rooms["room"].subs {
-		if sub.ch == slow {
-			slowDone = sub.done
-			break
-		}
-	}
-	hub.mu.Unlock()
-	if slowDone == nil {
-		t.Fatal("slow subscriber not registered")
-	}
-
-	healthy, cancelHealthy := hub.Subscribe("room")
+	healthy, cancelHealthy := hub.subscribeRef(ref)
 	defer cancelHealthy()
 	for wantID := int64(1); wantID <= 17; wantID++ {
-		hub.Publish("room", "queue_updated", wantID)
-		if event := <-healthy; event.ID != wantID {
+		hub.publishRef(ref, "queue_updated", wantID)
+		if event := <-healthy.ch; event.ID != wantID {
 			t.Fatalf("healthy subscriber event ID = %d, want %d", event.ID, wantID)
 		}
 	}
-
 	select {
-	case <-slowDone:
+	case <-slow.done:
 	default:
 		t.Fatal("overflow did not terminate slow subscriber")
 	}
-
-	hub.Publish("room", "queue_updated", int64(18))
-	if event := <-healthy; event.ID != 18 {
+	hub.publishRef(ref, "queue_updated", int64(18))
+	if event := <-healthy.ch; event.ID != 18 {
 		t.Fatalf("healthy subscriber stopped after peer overflow: ID = %d", event.ID)
 	}
 }
 
 func TestConcurrentPublishPreservesEventIDOrder(t *testing.T) {
+	ref := roomRef{code: "room", generation: 1}
 	for attempt := 0; attempt < 10000; attempt++ {
 		hub := NewHub()
-		events, cancel := hub.Subscribe("room")
+		sub, cancel := hub.subscribeRef(ref)
 		start := make(chan struct{})
 		var publishers sync.WaitGroup
 		publishers.Add(2)
@@ -879,12 +870,12 @@ func TestConcurrentPublishPreservesEventIDOrder(t *testing.T) {
 			go func() {
 				defer publishers.Done()
 				<-start
-				hub.Publish("room", "queue_updated", value)
+				hub.publishRef(ref, "queue_updated", value)
 			}()
 		}
 		close(start)
 		publishers.Wait()
-		first, second := <-events, <-events
+		first, second := <-sub.ch, <-sub.ch
 		cancel()
 		if first.ID >= second.ID {
 			t.Fatalf("events delivered out of order on attempt %d: %d then %d", attempt, first.ID, second.ID)
@@ -950,18 +941,18 @@ func TestServeHTTPReturnsAfterSubscriberOverflow(t *testing.T) {
 	handlerDone := make(chan struct{})
 	go func() {
 		defer close(handlerDone)
-		hub.ServeHTTP(ctx, w, "room", func() (int64, interface{}) {
-			snapshotID := hub.currentID("room")
-			close(subscribed)
-			return snapshotID, map[string]int{"version": 0}
-		})
+		ref := roomRef{code: "room", generation: 1}
+		sub, cancelSub := hub.subscribeRef(ref)
+		snapshotID := hub.currentIDRef(ref)
+		close(subscribed)
+		hub.serveSubscriptionHTTP(ctx, w, sub, cancelSub, eventSnapshot{ID: snapshotID, Data: map[string]interface{}{"version": 0}})
 	}()
 	<-subscribed
 
-	hub.Publish("room", "queue_updated", 1)
+	hub.publishRef(roomRef{code: "room", generation: 1}, "queue_updated", 1)
 	<-w.blocked
 	for version := 2; version <= 18; version++ {
-		hub.Publish("room", "queue_updated", version)
+		hub.publishRef(roomRef{code: "room", generation: 1}, "queue_updated", version)
 	}
 
 	select {
@@ -998,13 +989,12 @@ func TestServeHTTPReturnsAfterWriteFailureWithoutOverflow(t *testing.T) {
 	handlerDone := make(chan struct{})
 	go func() {
 		defer close(handlerDone)
-		hub.ServeHTTP(ctx, w, "room", func() (int64, interface{}) {
-			close(subscribed)
-			return 0, map[string]int{"version": 0}
-		})
+		sub, cancelSub := hub.subscribeRef(roomRef{code: "room", generation: 1})
+		close(subscribed)
+		hub.serveSubscriptionHTTP(ctx, w, sub, cancelSub, eventSnapshot{Data: map[string]interface{}{"version": 0}})
 	}()
 	<-subscribed
-	hub.Publish("room", "queue_updated", 1)
+	hub.publishRef(roomRef{code: "room", generation: 1}, "queue_updated", 1)
 	<-w.failed
 
 	select {
@@ -1060,9 +1050,9 @@ func TestServeHTTPReturnsOnInitialOutputFailure(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			NewHub().ServeHTTP(context.Background(), tc.writer, "room", func() (int64, interface{}) {
-				return 0, map[string]int{"version": 0}
-			})
+			hub := NewHub()
+			sub, cancel := hub.subscribeRef(roomRef{code: "room", generation: 1})
+			hub.serveSubscriptionHTTP(context.Background(), tc.writer, sub, cancel, eventSnapshot{Data: map[string]interface{}{"version": 0}})
 		})
 	}
 }
@@ -1400,7 +1390,8 @@ func (w *noFlushWriter) Write(b []byte) (int, error) { return w.body.Write(b) }
 func TestServeHTTPNoFlusher(t *testing.T) {
 	hub := NewHub()
 	w := &noFlushWriter{header: http.Header{}}
-	hub.ServeHTTP(context.Background(), w, "somecode", func() (int64, interface{}) { return 0, map[string]string{} })
+	sub, cancel := hub.subscribeRef(roomRef{code: "somecode", generation: 1})
+	hub.serveSubscriptionHTTP(context.Background(), w, sub, cancel, eventSnapshot{Data: map[string]interface{}{}})
 	if w.code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", w.code, http.StatusInternalServerError)
 	}
@@ -1415,7 +1406,7 @@ func TestServeHTTPNoFlusher(t *testing.T) {
 
 func TestCurrentIDUnknownRoom(t *testing.T) {
 	hub := NewHub()
-	if got := hub.currentID("nope"); got != 0 {
+	if got := hub.currentIDRef(roomRef{code: "nope", generation: 1}); got != 0 {
 		t.Fatalf("currentID = %d, want 0", got)
 	}
 }

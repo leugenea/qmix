@@ -80,7 +80,7 @@ func TestGuestAddTrackRejectsRoomExpiredDuringResolution(t *testing.T) {
 	s, store := newResolverTestServer(r)
 	mux := newTestMux(s)
 	code, _ := createRoom(t, mux)
-	ch, cancel := s.hub.Subscribe(code)
+	ch, cancel := subscribeTestEvents(t, s.store, s.hub, code)
 	defer cancel()
 
 	responses := make(chan *httptest.ResponseRecorder, 1)
@@ -249,7 +249,7 @@ func TestGuestAddTrackPublishesQueueUpdated(t *testing.T) {
 	mux := newTestMux(s)
 	code, _ := createRoom(t, mux)
 
-	ch, cancel := s.hub.Subscribe(code)
+	ch, cancel := subscribeTestEvents(t, s.store, s.hub, code)
 	defer cancel()
 
 	rec := guestAdd(t, mux, code, "https://example.com/song", "")
@@ -261,10 +261,7 @@ func TestGuestAddTrackPublishesQueueUpdated(t *testing.T) {
 	if ev.Name != "queue_updated" {
 		t.Fatalf("event = %q, want queue_updated", ev.Name)
 	}
-	data, err := json.Marshal(ev.Data)
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
+	data := []byte(ev.Data.(eventJSON))
 	var payload struct {
 		Queue []Track `json:"queue"`
 	}
