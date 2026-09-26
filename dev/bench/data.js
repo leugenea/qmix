@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790429742885,
+  "lastUpdate": 1790429745511,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -324,6 +324,72 @@ window.BENCHMARK_DATA = {
             "name": "JS CCN > 10",
             "value": 0,
             "unit": "functions"
+          }
+        ]
+      }
+    ],
+    "Code duplication": [
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "391c16ccf66c67dc74cb820885ddd17d33045e5e",
+          "message": "ci: record jscpd duplication history on main next to erosion (#201) (#239)",
+          "timestamp": "2026-09-26T16:35:05+03:00",
+          "tree_id": "aa19fb480c2c1b62e26e991b47b3675c9b9ad13d",
+          "url": "https://github.com/leugenea/qmix/commit/391c16ccf66c67dc74cb820885ddd17d33045e5e"
+        },
+        "date": 1790429745034,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0.5030081862116579,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 4,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0.8367514356029532,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 4,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
           }
         ]
       }
