@@ -43,9 +43,16 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class HostSessionControllerTest {
     private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    private var serializedMutation: SerializedTestMutationContext? = null
+    private fun mutationForTest(): QueueMutationContext =
+        (serializedMutation ?: SerializedTestMutationContext("host-session-test-mutation")
+            .also { serializedMutation = it }).mutationContext
 
     @org.junit.After
-    fun cancelQueueScope() { queueScope.cancel() }
+    fun cancelQueueScope() {
+        queueScope.cancel()
+        serializedMutation?.close()
+    }
 
     private lateinit var server: MockWebServer
 
@@ -597,7 +604,7 @@ class HostSessionControllerTest {
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueMutationContext = mutationForTest(),
             queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
                 testQueueCoordinator(
                     sessionScope,
@@ -606,6 +613,7 @@ class HostSessionControllerTest {
                     command,
                     reconciler,
                     observer,
+                    mutationForTest(),
                 )
             },
         )
@@ -617,14 +625,18 @@ class HostSessionControllerTest {
             null,
             listOf(QueuedTrack("track-1", "https://example/1", "Title", "Artist", 60, "fixture")),
         )
+        repository.awaitCollection()
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitRoomStateForTest { it.isPrimaryActionEnabled }
 
         controller.onStartOrNext()
 
         assertEquals(1, command.callbacks.size)
         assertTrue((controller.state as HostingState.LiveRoom).commandPending)
         command.complete(QueueAdvanceCommandResult.Indeterminate)
+        reconciler.awaitCall()
         reconciler.complete(RoomFetchResult.Success(room))
+        controller.awaitRoomStateForTest { !it.commandPending }
         assertFalse((controller.state as HostingState.LiveRoom).commandPending)
     }
 
@@ -640,12 +652,12 @@ class HostSessionControllerTest {
             initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = { repository }, roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueMutationContext = mutationForTest(),
             playbackCoordinatorFactory = { backendUrl, credentials, observer, advance, sessionScope ->
                 AuthoritativePlaybackCoordinator(
                     credentials.code, "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                     engine, { RoomFetchResult.Failure }, sessionScope,
-                    QueueMutationContext(Dispatchers.Unconfined) { true }, advance, observer,
+                    mutationForTest(), advance, observer,
                 )
             },
         )
@@ -656,8 +668,11 @@ class HostSessionControllerTest {
             repository.awaitCollection()
             val room = RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList())
             repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+            controller.awaitRoomStateForTest { it.synchronization == RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED) }
+            mutationForTest().run { Unit } // The synchronization reducer has finished the playback handoff.
             assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
             engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+            controller.awaitRoomStateForTest { it.playback.status == LocalPlaybackStatus.PLAYING }
             assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
 
             controller.onHostStopped()
@@ -691,9 +706,9 @@ class HostSessionControllerTest {
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
             foregroundReconcilerFactory = { reconciler::fetchRoom },
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueMutationContext = mutationForTest(),
             queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
-                testQueueCoordinator(sessionScope, credentials.code, credentials.hostToken, command, reconciler, observer)
+                testQueueCoordinator(sessionScope, credentials.code, credentials.hostToken, command, reconciler, observer, mutationForTest())
             },
             playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded, sessionScope ->
                 AuthoritativePlaybackCoordinator(
@@ -702,7 +717,7 @@ class HostSessionControllerTest {
                     engine,
                     reconciler::fetchRoom,
                     sessionScope,
-                    QueueMutationContext(Dispatchers.Unconfined) { true },
+                    mutationForTest(),
                     advanceAfterEnded,
                     observer,
                 )
@@ -718,6 +733,8 @@ class HostSessionControllerTest {
             listOf(QueuedTrack("two", "url", "Two", "Artist", 60, "fixture")),
         )
         repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitRoomStateForTest { it.synchronization == RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED) }
+        mutationForTest().run { Unit }
 
         controller.onHostStopped()
         controller.onStartOrNext()
@@ -778,9 +795,9 @@ class HostSessionControllerTest {
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueMutationContext = mutationForTest(),
             queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
-                testQueueCoordinator(sessionScope, credentials.code, credentials.hostToken, command, reconciler, observer)
+                testQueueCoordinator(sessionScope, credentials.code, credentials.hostToken, command, reconciler, observer, mutationForTest())
             },
             playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded, sessionScope ->
                 AuthoritativePlaybackCoordinator(
@@ -789,7 +806,7 @@ class HostSessionControllerTest {
                     playbackEngine = engine,
                     reconciler = reconciler::fetchRoom,
                     parentScope = sessionScope,
-                    mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+                    mutationContext = mutationForTest(),
                     advanceAfterEnded = advanceAfterEnded,
                     observer = observer,
                 )
@@ -798,6 +815,7 @@ class HostSessionControllerTest {
         controller.createRoom()
         controller.awaitCreatedForTest()
         controller.enterRoom()
+        repository.awaitCollection()
         repository.publish(
             RoomSyncState.Active(
                 "ABCD",
@@ -806,9 +824,12 @@ class HostSessionControllerTest {
                 LiveConnection.CONNECTED,
             ),
         )
+        controller.awaitRoomStateForTest { it.isPrimaryActionEnabled }
+        mutationForTest().run { Unit }
 
         controller.onStartOrNext()
         command.complete(QueueAdvanceCommandResult.Success)
+        reconciler.awaitCall()
         val selected = RoomState(
             "ABCD",
             CurrentTrack("one", 0, "playing", "One", "Artist"),
@@ -817,6 +838,8 @@ class HostSessionControllerTest {
         reconciler.complete(RoomFetchResult.Success(selected))
         repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
         repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitRoomStateForTest { it.playback.trackId == "one" }
+        mutationForTest().run { Unit }
 
         assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
         assertEquals(1, engine.playCount)
@@ -913,7 +936,7 @@ class HostSessionControllerTest {
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueMutationContext = mutationForTest(),
         )
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val invited = CountDownLatch(1)
@@ -929,7 +952,9 @@ class HostSessionControllerTest {
             Freshness.FRESH,
             LiveConnection.CONNECTED,
         )
+        repository.awaitCollection()
         repository.publish(synchronized)
+        controller.awaitRoomStateForTest { it.synchronization == synchronized }
 
         assertEquals("ABCD", repository.observedCode)
         assertEquals(synchronized, controller.roomSyncState)
@@ -1038,15 +1063,17 @@ class HostSessionControllerTest {
             Thread(task, "host-mutation").apply { isDaemon = true }
         }.asCoroutineDispatcher()
         val sawPending = AtomicBoolean(false)
+        val mutation = QueueMutationContext(dispatcher) {
+            Thread.currentThread().name.startsWith("host-mutation")
+        }
         val endedFromCollector = AtomicBoolean(false)
+        val teardownCallback = CountDownLatch(1)
         lateinit var controller: HostSessionController
         controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.Unconfined,
-            queueMutationContext = QueueMutationContext(dispatcher) {
-                Thread.currentThread().name.startsWith("host-mutation")
-            },
+            queueMutationContext = mutation,
             queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
                 QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
                     QueueAdvanceCommand { _, _ ->
@@ -1059,9 +1086,10 @@ class HostSessionControllerTest {
                         else if (sawPending.get()) {
                             endedFromCollector.set(true)
                             assertEquals(LiveRoomBackResult.EXIT_ACTIVITY, controller.onBack())
+                            teardownCallback.countDown()
                         }
                     },
-                    sessionScope, QueueMutationContext(Dispatchers.Unconfined) { true })
+                    sessionScope, mutation)
             },
         )
         try {
@@ -1070,7 +1098,9 @@ class HostSessionControllerTest {
             controller.enterRoom()
             val room = RoomState("ABCD", null,
                 listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+            repository.awaitCollection()
             repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+            controller.awaitRoomStateForTest { it.isPrimaryActionEnabled }
             controller.onStartOrNext()
             assertTrue("pending state was not observed", sawPending.get())
             // Resume on a daemon so the RED self-join cannot wedge the test JVM.
@@ -1078,7 +1108,8 @@ class HostSessionControllerTest {
             Thread({ finishCommand.complete(Unit); returned.countDown() }, "reentrant-queue-probe")
                 .apply { isDaemon = true }.start()
             assertTrue("queue callback joined its own owner", returned.await(3, TimeUnit.SECONDS))
-            assertTrue("teardown callback was not reached", endedFromCollector.get())
+            assertTrue("teardown callback was not reached", teardownCallback.await(5, TimeUnit.SECONDS))
+            assertTrue(endedFromCollector.get())
             assertTrue(controller.awaitSetupForTest())
         } finally {
             dispatcher.close()
@@ -1192,9 +1223,9 @@ class HostSessionControllerTest {
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.Unconfined,
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueMutationContext = mutationForTest(),
             playbackCoordinatorFactory = { _, credentials, observer, advance, sessionScope ->
-                val mutation = QueueMutationContext(Dispatchers.Unconfined) { true }
+                val mutation = mutationForTest()
                 AuthoritativePlaybackCoordinator(credentials.code, "https://example/stream", engine,
                     { RoomFetchResult.Failure }, sessionScope, mutation, advance, { playback ->
                         observer(playback)
@@ -1212,16 +1243,19 @@ class HostSessionControllerTest {
         controller.createRoom()
         controller.awaitCreatedForTest()
         controller.enterRoom()
+        repository.awaitCollection()
         repository.publish(RoomSyncState.Active("ABCD",
             RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList()),
             Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitRoomStateForTest { it.playback.trackId == "one" }
+        mutationForTest().run { Unit }
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
         val returned = CountDownLatch(1)
         Thread({ finishReport.complete(Unit); returned.countDown() }, "reentrant-report-probe")
             .apply { isDaemon = true }.start()
         assertTrue("player report callback joined its own owner", returned.await(3, TimeUnit.SECONDS))
-        assertTrue("teardown callback was not reached", endedFromCallback.get())
         assertTrue(controller.awaitSetupForTest())
+        assertTrue("teardown callback was not reached", endedFromCallback.get())
     }
 
     /** qmix#182: a queued host command is part of the session, not only cancelled on close. */
@@ -1238,6 +1272,7 @@ class HostSessionControllerTest {
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = mutationForTest(),
             queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
                 QueueAdvancementCoordinator(credentials.code, credentials.hostToken,
                     QueueAdvanceCommand { _, _ ->
@@ -1251,7 +1286,7 @@ class HostSessionControllerTest {
                             }
                         }
                     }, QueueRoomReconciler { RoomFetchResult.Failure }, observer,
-                    sessionScope, QueueMutationContext(Dispatchers.Unconfined) { true })
+                    sessionScope, mutationForTest())
             },
         )
         controller.createRoom()
@@ -1259,7 +1294,9 @@ class HostSessionControllerTest {
         controller.enterRoom()
         val room = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+        repository.awaitCollection()
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitRoomStateForTest { it.isPrimaryActionEnabled }
         controller.onStartOrNext()
         assertTrue(started.await(5, TimeUnit.SECONDS))
         val returned = CountDownLatch(1)
@@ -1295,9 +1332,9 @@ class HostSessionControllerTest {
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope, roomCollectionContext = Dispatchers.Unconfined,
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueMutationContext = mutationForTest(),
             playbackCoordinatorFactory = { _, credentials, observer, advance, sessionScope ->
-                val mutation = QueueMutationContext(Dispatchers.Unconfined) { true }
+                val mutation = mutationForTest()
                 AuthoritativePlaybackCoordinator(credentials.code, "https://example/stream", engine,
                     { RoomFetchResult.Failure }, sessionScope, mutation, advance, observer,
                     statePublisherFactory = { listener ->
@@ -1319,9 +1356,12 @@ class HostSessionControllerTest {
         controller.createRoom()
         controller.awaitCreatedForTest()
         controller.enterRoom()
+        repository.awaitCollection()
         repository.publish(RoomSyncState.Active("ABCD",
             RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList()),
             Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitRoomStateForTest { it.playback.trackId == "one" }
+        mutationForTest().run { Unit }
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
         assertTrue(reportStarted.await(5, TimeUnit.SECONDS))
         val returned = CountDownLatch(1)
@@ -1408,36 +1448,42 @@ class HostSessionControllerTest {
 
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
-            roomCollectionContext = Dispatchers.Unconfined,
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            roomCollectionContext = Dispatchers.IO,
+            queueMutationContext = mutationForTest(),
         )
         val ended = CountDownLatch(1)
-        controller.collectStatesForTest { state ->
+        val observation = controller.collectStatesForTest { state ->
             val sync = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
             if (sync?.freshness == Freshness.FRESH) {
                 controller.endRoom()
                 ended.countDown()
             }
         }
-        assertTrue(controller.createRoom())
-        controller.awaitCreatedForTest()
-        controller.enterRoom()
-        repository.awaitSubscription()
+        try {
+            assertTrue(controller.createRoom())
+            controller.awaitCreatedForTest()
+            controller.enterRoom()
+            repository.awaitSubscription()
 
-        repository.publish(
-            RoomSyncState.Active(
-                "ABCD",
-                RoomState("ABCD", null, emptyList()),
-                Freshness.FRESH,
-                LiveConnection.CONNECTED,
-            ),
-        )
+            repository.publish(
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", null, emptyList()),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+            )
 
-        assertTrue(ended.await(5, TimeUnit.SECONDS))
-        // endRoom returns at Ending; Setup is published only after the collection Job joins.
-        assertTrue(controller.awaitSetupForTest())
-        assertEquals(1, repository.cancellations)
-        assertEquals(0, repository.activeCollectors)
+            assertTrue(ended.await(5, TimeUnit.SECONDS))
+            // endRoom returns at Ending; Setup is published only after the collection Job joins.
+            assertTrue(controller.awaitSetupForTest())
+            assertEquals(1, repository.cancellations)
+            assertEquals(0, repository.activeCollectors)
+        } finally {
+            observation.close()
+            if (controller.state !is HostingState.Setup) controller.endRoom()
+            controller.awaitSetupForTest()
+        }
     }
 
     /** qmix#182: a nested playback callback cannot join the collecting Job. */

@@ -35,6 +35,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class HostSessionControllerInstrumentationTest {
     private val roomScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    private val mutationLane = TestMutationLane()
     private lateinit var server: MockWebServer
 
     @Before
@@ -45,8 +46,11 @@ class HostSessionControllerInstrumentationTest {
 
     @After
     fun tearDown() {
-        roomScope.cancel()
-        server.shutdown()
+        try {
+            roomScope.cancel()
+        } finally {
+            try { mutationLane.close() } finally { server.shutdown() }
+        }
     }
 
     @Test
@@ -383,15 +387,15 @@ class HostSessionControllerInstrumentationTest {
         server.enqueue(MockResponse().setResponseCode(201)
             .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
         val repository = RecordingRoomRepository()
-        var fetches = 0
+        val fetches = AtomicInteger()
         var commands = 0
         val controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
-            foregroundReconcilerFactory = { { _: String -> fetches++; RoomFetchResult.Missing } },
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            foregroundReconcilerFactory = { { _: String -> fetches.incrementAndGet(); RoomFetchResult.Missing } },
+            queueMutationContext = mutationLane.context,
             primaryActionHandler = { commands++ },
         )
         assertTrue(controller.createRoom())
@@ -407,7 +411,7 @@ class HostSessionControllerInstrumentationTest {
         awaitConditionForTest { repository.closed }
         controller.onHostStarted()
         controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization is RoomSyncState.Missing }
-        assertEquals(1, fetches)
+        assertEquals(1, fetches.get())
         assertEquals(RoomSyncState.Missing("ABCD"), controller.roomSyncState)
         assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         controller.onStartOrNext()
@@ -425,7 +429,7 @@ class HostSessionControllerInstrumentationTest {
         val repository = RecordingRoomRepository()
         val room = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
-        var fetches = 0
+        val fetches = AtomicInteger()
         var commands = 0
         val controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
@@ -433,12 +437,12 @@ class HostSessionControllerInstrumentationTest {
             roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
             foregroundReconcilerFactory = { { _: String ->
-                fetches++
-                if (fetches == 1) throw IllegalStateException("temporary fetch failure")
-                if (fetches == 2) RoomFetchResult.Success(room.copy(code = "OTHER"))
+                val attempt = fetches.incrementAndGet()
+                if (attempt == 1) throw IllegalStateException("temporary fetch failure")
+                if (attempt == 2) RoomFetchResult.Success(room.copy(code = "OTHER"))
                 else RoomFetchResult.Success(room)
             } },
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueMutationContext = mutationLane.context,
             primaryActionHandler = { commands++ },
         )
         assertTrue(controller.createRoom())
@@ -449,26 +453,27 @@ class HostSessionControllerInstrumentationTest {
             RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED) }
         controller.onHostStopped()
         controller.onHostStarted()
-        awaitConditionForTest { fetches == 1 && repository.observations >= 2 }
-        assertEquals(1, fetches)
+        awaitConditionForTest { fetches.get() == 1 && repository.observations >= 2 }
+        assertEquals(1, fetches.get())
         assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         controller.onStartOrNext()
         assertEquals(0, commands)
 
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
-        awaitConditionForTest { fetches == 2 && repository.observations >= 3 }
-        assertEquals(2, fetches)
+        awaitConditionForTest { fetches.get() == 2 && repository.observations >= 3 }
+        assertEquals(2, fetches.get())
         assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         controller.onStartOrNext()
         assertEquals(0, commands)
 
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.foregroundRecoveryPending == false }
-        assertEquals(3, fetches)
+        assertEquals(3, fetches.get())
         assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         controller.onStartOrNext()
         assertEquals(1, commands)
         controller.endRoom()
+        controller.awaitSetupForTest()
         assertTrue(repository.closed)
     }
 
@@ -486,7 +491,7 @@ class HostSessionControllerInstrumentationTest {
             roomRepositoryFactory = { repository }, roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
             foregroundReconcilerFactory = { { _: String -> RoomFetchResult.Success(room) } },
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            queueMutationContext = mutationLane.context,
             primaryActionHandler = { commands++ },
         )
         assertTrue(controller.createRoom())
@@ -749,34 +754,38 @@ class HostSessionControllerInstrumentationTest {
         val room = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
         lateinit var controller: HostSessionController
-        var creations = 0
-        var fetches = 0
+        val creations = AtomicInteger()
+        val fetches = AtomicInteger()
         controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
             roomRepositoryFactory = {
-                if (++creations == 1) controller.onHostStopped()
+                if (creations.incrementAndGet() == 1) controller.onHostStopped()
                 repository
             },
             roomCollectionScope = roomScope, roomCollectionContext = Dispatchers.Unconfined,
-            foregroundReconcilerFactory = { { _: String -> fetches++; RoomFetchResult.Success(room) } },
-            queueMutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+            foregroundReconcilerFactory = { { _: String -> fetches.incrementAndGet(); RoomFetchResult.Success(room) } },
+            queueMutationContext = mutationLane.context,
         )
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
         controller.enterRoom()
-        assertEquals(1, creations)
+        assertEquals(1, creations.get())
         assertNull(repository.roomCode)
         assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
 
         controller.onHostStarted()
-        assertEquals(1, fetches)
-        assertEquals(2, creations)
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.foregroundRecoveryPending == false }
+        repository.awaitObservationForTest()
+        assertEquals(1, fetches.get())
+        assertEquals(2, creations.get())
         assertEquals("ABCD", repository.roomCode)
         assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.isPrimaryActionEnabled == true }
         assertTrue((controller.state as HostingState.LiveRoom).isPrimaryActionEnabled)
         controller.endRoom()
+        controller.awaitSetupForTest()
         assertTrue(repository.closed)
     }
 
@@ -811,6 +820,7 @@ class HostSessionControllerInstrumentationTest {
                     sessionScope, credentials.code, credentials.hostToken,
                     TestQueueCommand { _, _, _ -> },
                     TestRoomFetcher { _, _ -> Cancelable { } }, observer,
+                    mutationContext = mutationLane.context,
                 )
                 if (++queueConstructions == 1) controller.endRoom()
                 queue
@@ -870,14 +880,16 @@ class HostSessionControllerInstrumentationTest {
     }
 
     private class RecordingRoomRepository : RoomRepository {
-        var roomCode: String? = null
+        @Volatile var roomCode: String? = null
         @Volatile var closed = false
         @Volatile var observations = 0
+        private val firstObservation = CountDownLatch(1)
         private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
             this@RecordingRoomRepository.roomCode = roomCode
             observations++
+            firstObservation.countDown()
             try {
                 for (state in states) emit(state)
             } finally {
@@ -887,6 +899,10 @@ class HostSessionControllerInstrumentationTest {
 
         fun publish(state: RoomSyncState) {
             states.trySend(state)
+        }
+
+        fun awaitObservationForTest() {
+            assertTrue("room collection did not start", firstObservation.await(5, TimeUnit.SECONDS))
         }
     }
 

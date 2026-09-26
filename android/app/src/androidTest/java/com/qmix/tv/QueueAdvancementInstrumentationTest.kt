@@ -3,6 +3,7 @@ package com.qmix.tv
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,9 +27,12 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class QueueAdvancementInstrumentationTest {
     private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    private val mutationLane = TestMutationLane()
 
     @org.junit.After
-    fun cancelQueueScope() { queueScope.cancel() }
+    fun cancelQueueScope() {
+        try { queueScope.cancel() } finally { mutationLane.close() }
+    }
 
     private lateinit var server: MockWebServer
 
@@ -117,33 +121,39 @@ class QueueAdvancementInstrumentationTest {
             queue = listOf(QueuedTrack("next", "https://example/next", "Next", "Artist", 60, "fixture")),
         )
         var fetchCallback: ((RoomFetchResult) -> Unit)? = null
+        val fetchReady = CountDownLatch(1)
         val dispatchFailure = testQueueCoordinator(
-        queueScope,
+            queueScope,
             roomCode = "ABCD",
             hostToken = "host-secret",
             command = testQueueCommand { _, _, _ -> throw IllegalStateException("dispatch") },
             reconciler = TestRoomFetcher { _, callback ->
                 fetchCallback = callback
+                fetchReady.countDown()
                 Cancelable { }
             },
+            mutationContext = mutationLane.context,
         )
         dispatchFailure.onAuthoritativeRoom(room)
 
         assertTrue(dispatchFailure.requestExplicitAdvance())
         assertTrue(dispatchFailure.state.pending)
-        fetchCallback?.invoke(RoomFetchResult.Missing)
+        assertTrue("reconciler was not entered", fetchReady.await(5, TimeUnit.SECONDS))
+        checkNotNull(fetchCallback)(RoomFetchResult.Missing)
+        mutationLane.context.run { Unit } // Observe the queued settlement after the callback.
         assertFalse(dispatchFailure.state.pending)
         assertEquals(QueueAdvanceOutcome.REJECTED, dispatchFailure.state.lastOutcome)
 
         var dispatched = false
         lateinit var closing: QueueAdvancementCoordinator
         closing = testQueueCoordinator(
-        queueScope,
+            queueScope,
             roomCode = "ABCD",
             hostToken = "host-secret",
             command = testQueueCommand { _, _, _ -> dispatched = true },
             reconciler = TestRoomFetcher { _, _ -> Cancelable { } },
             observer = { if (it.pending) closing.close() },
+            mutationContext = mutationLane.context,
         )
         closing.onAuthoritativeRoom(room)
 
@@ -159,7 +169,7 @@ class QueueAdvancementInstrumentationTest {
             ),
         )
         val repository = RecordingRepository()
-        val commands = mutableListOf<(QueueAdvanceCommandResult) -> Unit>()
+        val commands = CopyOnWriteArrayList<(QueueAdvanceCommandResult) -> Unit>()
         val controller = HostSessionController(
             httpClient = OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
@@ -167,6 +177,7 @@ class QueueAdvancementInstrumentationTest {
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = mutationLane.context,
             queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
                 testQueueCoordinator(
                     sessionScope,
@@ -175,6 +186,7 @@ class QueueAdvancementInstrumentationTest {
                     testQueueCommand { _, _, callback -> commands += callback },
                     TestRoomFetcher { _, _ -> Cancelable { } },
                     observer,
+                    mutationContext = mutationLane.context,
                 )
             },
         )
@@ -194,6 +206,10 @@ class QueueAdvancementInstrumentationTest {
             ),
         )
 
+        controller.awaitStateForTest {
+            ((it as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active)
+                ?.room?.current?.trackId == "current"
+        }
         controller.onStartOrNext()
         assertFalse(controller.onPlaybackEnded("current"))
         assertEquals(1, commands.size)
@@ -201,6 +217,7 @@ class QueueAdvancementInstrumentationTest {
         commands.single()(QueueAdvanceCommandResult.Indeterminate)
         controller.onStartOrNext()
         assertEquals(1, commands.size)
+        controller.awaitSetupForTest()
     }
 
     @Test
@@ -211,10 +228,10 @@ class QueueAdvancementInstrumentationTest {
             ),
         )
         val repository = RecordingRepository()
-        val commands = mutableListOf<(QueueAdvanceCommandResult) -> Unit>()
+        val commands = CopyOnWriteArrayList<(QueueAdvanceCommandResult) -> Unit>()
         val playback = RecordingPlaybackEngine()
         var retry: ((RoomFetchResult) -> Unit)? = null
-        val retryRequests = mutableListOf<String>()
+        val retryRequests = CopyOnWriteArrayList<String>()
         val selected = RoomState(
             "ABCD",
             CurrentTrack("current", 0, "playing", "Current", "Artist"),
@@ -227,6 +244,7 @@ class QueueAdvancementInstrumentationTest {
             roomRepositoryFactory = { repository },
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.Unconfined,
+            queueMutationContext = mutationLane.context,
             queueCoordinatorFactory = { _, credentials, observer, sessionScope ->
                 testQueueCoordinator(
                     sessionScope,
@@ -235,6 +253,7 @@ class QueueAdvancementInstrumentationTest {
                     testQueueCommand { _, _, callback -> commands += callback },
                     TestRoomFetcher { _, _ -> Cancelable { } },
                     observer,
+                    mutationContext = mutationLane.context,
                 )
             },
             playbackCoordinatorFactory = { backendUrl, credentials, observer, advanceAfterEnded, sessionScope ->
@@ -243,12 +262,12 @@ class QueueAdvancementInstrumentationTest {
                     streamUrl = "${backendUrl.trimEnd('/')}/rooms/${credentials.code}/current/stream",
                     playbackEngine = playback,
                     reconciler = TestRoomFetcher { roomCode, callback ->
-                        retryRequests += roomCode
                         retry = callback
+                        retryRequests += roomCode
                         Cancelable { retry = null }
                     }::fetchRoom,
                     parentScope = sessionScope,
-                    mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+                    mutationContext = mutationLane.context,
                     advanceAfterEnded = advanceAfterEnded,
                     observer = observer,
                 )
@@ -331,6 +350,7 @@ class QueueAdvancementInstrumentationTest {
         assertEquals(1, commands.size)
         controller.endRoom()
         assertEquals(2, playback.pauseCount)
+        controller.awaitSetupForTest()
     }
 
     /** qmix#178: the same application factory used by the host owns HTTP command and GET Jobs. */
@@ -381,10 +401,10 @@ class QueueAdvancementInstrumentationTest {
     private class RecordingPlaybackEngine : PlaybackEngine {
         override var state = PlaybackState()
             private set
-        val prepared = mutableListOf<PlaybackMedia>()
-        val seeks = mutableListOf<Long>()
-        var playCount = 0
-        var pauseCount = 0
+        val prepared = CopyOnWriteArrayList<PlaybackMedia>()
+        val seeks = CopyOnWriteArrayList<Long>()
+        @Volatile var playCount = 0
+        @Volatile var pauseCount = 0
         private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
 
         override fun prepare(media: PlaybackMedia) {
