@@ -271,7 +271,7 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         ci = read(".github/workflows/ci.yml")
         self.assertRegex(ci, r"(?m)^permissions:\n  contents: read$")
 
-        for name in ("route", "policy", "ci", "integration-mandatory", "docker", "erosion", "duplication"):
+        for name in ("route", "policy", "ci", "integration-mandatory", "docker", "erosion", "complexity-gate", "duplication"):
             body = job(ci, name)
             with self.subTest(job=name):
                 self.assertNotIn("checks: write", body)
@@ -440,7 +440,8 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertIn("path: unit.xml\n", unit)
         self.assertIn("name: test-report-integration-mandatory\n", integration)
         self.assertIn("path: integration.xml\n", integration)
-        self.assertEqual(ci.count("if-no-files-found: error"), 4)
+        for producer in (unit, integration):
+            self.assertEqual(producer.count("if-no-files-found: error"), 1)
         erosion = job(ci, "erosion")
         self.assertIn("name: code-erosion", erosion)
         self.assertIn("if-no-files-found: error", erosion)
@@ -449,6 +450,10 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertIn("duplication/report.json", duplication)
         self.assertIn("duplication/report.md", duplication)
         self.assertIn("if-no-files-found: error", duplication)
+        gate = job(ci, "complexity-gate")
+        self.assertIn("name: complexity-gate", gate)
+        self.assertIn("complexity-gate/report.json", gate)
+        self.assertIn("if-no-files-found: error", gate)
         self.assertIn("pattern: test-report-*", publisher)
         self.assertIn("report_paths: 'test-reports/unit.xml'", publisher)
         self.assertIn("report_paths: 'test-reports/integration.xml'", publisher)

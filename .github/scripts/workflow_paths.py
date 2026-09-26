@@ -29,6 +29,7 @@ def classify(paths, root=None):
             ".github/scripts/erosion.py", ".github/scripts/benchmark_metrics.py",
             ".github/scripts/benchmark_metrics_test.py", ".github/requirements-lizard.txt",
             ".github/scripts/kotlin_complexity.py", ".github/scripts/kotlin_complexity_test.py",
+            ".github/scripts/complexity_gate.py", ".github/scripts/complexity_gate_test.py",
         }:
             routes.add("erosion")
         # The erosion job executes this test suite, even for a test-only edit.

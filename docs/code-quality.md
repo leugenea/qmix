@@ -33,6 +33,41 @@ separate summary and top five mass contributors for each language. There is
 **no overall/cross-language erosion or overall high-CCN count**: combining
 incompatible CCN/NLOC measurements into one percentage would be misleading.
 
+## Pull-request complexity gate (qmix#199)
+
+The routed, pull-request-only check is named **`complexity-gate`** in the PR
+checks list. It uses the same production scope and exclusions as `erosion`,
+analyzing the base and head commits with the head checkout's hash-pinned lizard
+and tree-sitter Kotlin counter. The fixed limit is **CCN > 10**: a newly added
+function above 10 fails, as does an existing function whose CCN rises to a
+value above 10. Existing high-CCN functions that stay the same or improve pass;
+there is no aggregate or per-language erosion threshold. The Go/JS and Kotlin
+CCN definitions differ, so comparisons are within each language only.
+
+Named functions first match by stable analyzer ID (file and qualified signature,
+including Kotlin owner, receiver and parameter types). For unmatched high-CCN
+functions, including renamed or moved functions and anonymous lizard rows with
+unstable `$n` IDs, the gate pairs one-to-one with an unmatched base function of
+the same language when their source bodies are sufficiently similar (at least
+0.8 similarity after collapsing whitespace and omitting the declaration/name
+line; for one-line functions, compare only the text after the body opener).
+A matching renamed or moved function passes if its CCN does not rise; if it
+rises above 10, the match remains visible as `renamed+worsened` and fails.
+An unmatched high-CCN function fails as added. Anonymous functions at or below
+10 do not require matching. Matching depends on source-body similarity, so a
+substantial rewrite together with a rename or move may be classified as added;
+review the finding rather than ignoring it. A split that lowers the original
+function's CCN and adds only functions at or below 10 passes.
+
+On failure the job summary lists each offending file, function, **CCN before →
+after**, and reason (`added`, `worsened`, or `renamed+worsened`). The
+`complexity-gate` artifact contains the JSON report. Analyzer failures fail
+closed rather than reporting a pass. To run its fixtures locally, install the
+hash-pinned dependencies described above and run `make test-complexity-gate`.
+The repository owner must make the **`complexity-gate`** check required in
+branch protection; this workflow does not change branch protection or the
+existing `CI result` aggregate. No bypass label is provided.
+
 ## Kotlin counting contract
 
 The counter reports every `function_declaration` with a block or expression
