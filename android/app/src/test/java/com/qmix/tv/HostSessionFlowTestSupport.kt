@@ -21,6 +21,14 @@ internal fun HostSessionController.collectStatesForTest(observer: (HostingState)
     return AutoCloseable { scope.cancel() }
 }
 
+internal fun HostSessionController.awaitRoomStateForTest(
+    predicate: (HostingState.LiveRoom) -> Boolean,
+): HostingState.LiveRoom = runBlocking {
+    withTimeout(5_000) {
+        states.first { state -> state is HostingState.LiveRoom && predicate(state) } as HostingState.LiveRoom
+    }
+}
+
 internal fun HostSessionController.awaitCreatedForTest() {
     runBlocking { withTimeout(5_000) { states.first { it is HostingState.Invitation || it is HostingState.Error } } }
 }

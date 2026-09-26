@@ -371,7 +371,7 @@ class MainActivityInstrumentationTest {
                 playbackEngine = playback,
                 reconciler = { RoomFetchResult.Failure },
                 parentScope = sessionScope,
-                mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
+                mutationContext = mainTestMutationContext(),
                 advanceAfterEnded = advanceAfterEnded,
                 observer = observer,
             )

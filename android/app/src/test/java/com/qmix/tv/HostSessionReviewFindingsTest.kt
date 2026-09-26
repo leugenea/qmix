@@ -258,6 +258,11 @@ class HostSessionReviewFindingsTest {
     @Test fun delayed_settle_for_a_cannot_clear_pending_gate_for_b() {
         val server = MockWebServer().apply { start(); enqueue(roomResponse()) }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val mutationThread = AtomicReference<Thread>()
+        val dispatcher = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "review-delayed-settle-mutation").also(mutationThread::set)
+        }.asCoroutineDispatcher()
+        val mutation = QueueMutationContext(dispatcher) { Thread.currentThread() === mutationThread.get() }
         val first = CompletableDeferred<Unit>()
         val aObserverEntered = CountDownLatch(1)
         val bCommandEntered = CountDownLatch(1)
@@ -267,7 +272,7 @@ class HostSessionReviewFindingsTest {
         val coordinator = AtomicReference<QueueAdvancementCoordinator>()
         val controller = HostSessionController(OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", roomCollectionScope = scope,
-            roomCollectionContext = Dispatchers.IO,
+            roomCollectionContext = Dispatchers.IO, queueMutationContext = mutation,
             roomRepositoryFactory = { object : RoomRepository {
                 override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
                     emit(RoomSyncState.Active(roomCode, room, Freshness.FRESH, LiveConnection.CONNECTED))
@@ -290,7 +295,7 @@ class HostSessionReviewFindingsTest {
                             delayedObserver.set(observer)
                             aObserverEntered.countDown()
                         } else observer(update)
-                    }, sessionScope, QueueMutationContext(Dispatchers.Unconfined) { true })
+                    }, sessionScope, mutation)
                     .also(coordinator::set)
             })
         try {
@@ -311,14 +316,19 @@ class HostSessionReviewFindingsTest {
                 assertTrue("B was not admitted", coordinator.get().requestExplicitAdvance())
                 assertTrue("B command did not start", bCommandEntered.await(5, TimeUnit.SECONDS))
                 assertTrue(coordinator.get().state.pending)
-                delayedObserver.get().invoke(delayedState.get())
+                mutation.run { delayedObserver.get().invoke(delayedState.get()) }
                 assertTrue("A cleared B host command gate", (controller.state as HostingState.LiveRoom).commandPending)
             } finally { observation.close() }
         } finally {
             first.complete(Unit)
-            controller.endRoom()
-            scope.cancel()
-            server.shutdown()
+            try {
+                controller.endRoom()
+                controller.awaitSetupForTest()
+            } finally {
+                scope.cancel()
+                dispatcher.close()
+                server.shutdown()
+            }
         }
     }
 
@@ -577,6 +587,11 @@ class HostSessionReviewFindingsTest {
     @Test fun detached_playback_callback_cannot_modify_replacement_session() {
         val server = MockWebServer().apply { start(); enqueue(roomResponse()); enqueue(roomResponse()) }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val mutationThread = AtomicReference<Thread>()
+        val dispatcher = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "review-detached-playback-mutation").also(mutationThread::set)
+        }.asCoroutineDispatcher()
+        val mutation = QueueMutationContext(dispatcher) { Thread.currentThread() === mutationThread.get() }
         val observers = mutableListOf<(LocalPlaybackState) -> Unit>()
         val engine = object : PlaybackEngine {
             override val state = PlaybackState()
@@ -590,11 +605,12 @@ class HostSessionReviewFindingsTest {
         }
         val controller = HostSessionController(OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", roomCollectionScope = scope,
+            queueMutationContext = mutation,
             playbackCoordinatorFactory = { _, credentials, observer, advance, sessionScope ->
                 observers.add(observer)
                 AuthoritativePlaybackCoordinator(credentials.code, "https://example/stream", engine,
                     { RoomFetchResult.Failure }, sessionScope,
-                    QueueMutationContext(Dispatchers.Unconfined) { true }, advance, observer)
+                    mutation, advance, observer)
             })
         try {
             assertTrue(controller.createRoom())
@@ -608,12 +624,17 @@ class HostSessionReviewFindingsTest {
             controller.enterRoom()
             assertEquals(2, observers.size)
             val replacement = controller.state
-            observers.first()(LocalPlaybackState(status = LocalPlaybackStatus.BUFFERING))
+            mutation.run { observers.first()(LocalPlaybackState(status = LocalPlaybackStatus.BUFFERING)) }
             assertEquals("detached callback mutated replacement", replacement, controller.state)
         } finally {
-            controller.endRoom()
-            scope.cancel()
-            server.shutdown()
+            try {
+                controller.endRoom()
+                controller.awaitSetupForTest()
+            } finally {
+                scope.cancel()
+                dispatcher.close()
+                server.shutdown()
+            }
         }
     }
 
