@@ -1,4 +1,4 @@
-# Code quality: per-language complexity erosion
+# Code quality: complexity erosion and duplication
 
 The routed `erosion` CI job analyzes production Go (`cmd/`, `internal/`), Kotlin
 (`android/app/src/main/`), and guest-app JS (`internal/server/guest/`). It
@@ -120,3 +120,65 @@ An alert is a **commit comment** when any one metric rises strictly more than
 baseline followed by a positive value alerts, and one additional high-CCN
 function may exceed the threshold for a small count. Values are not rounded
 before comparison. Investigate the per-function report before acting.
+
+## Duplication (qmix#200)
+
+The routed, unprivileged `duplication` job runs on pull requests touching
+production Go, Kotlin, or guest JS. `.jscpd.json` selects those formats and
+excludes tests, generated/build/vendor/third-party paths. The reporter enumerates
+the same production files as erosion, additionally excluding generated source
+headers. A checksum-verified **jscpd v5.3.2** Linux x64 binary is downloaded
+from `https://github.com/kucherenko/jscpd/releases/download/v5.3.2/jscpd-linux-x64-gnu.tar.gz`;
+its reviewed SHA-256 is
+`97259f222ea7f6d51a0f2faa98ed5889430233e0fb8d2c129f23d84aff4b93b2`
+(the v5.3.2 release `checksums.txt` agrees). The owner-approved minimum is
+**10 lines**, with jscpd's default **50 tokens** and `mild` matching mode.
+At the five-line default, all three Kotlin matches were noise: two
+import-only lists and a seven-line UI scaffold. In v5.3.2 an import
+`--ignore-pattern` trial did not remove those matches. Raising the token
+minimum to 80 would also lose the substantive 17-line Go limiter clone
+(59 tokens), so the 10-line minimum removes the Kotlin noise while retaining
+four meaningful Go clones. `--threshold 100` means the score cannot fail the
+job; install, empty scans, malformed output, and report errors do fail it.
+
+The `code-duplication` artifact holds `report.json` and `report.md`; the same
+Markdown is appended to the job summary and the single PR comment shared with
+erosion. The comment is updated in place only for same-repository,
+non-Dependabot PRs by the artifact-only publisher. Forks still get a summary
+and artifact without a privileged comment. The comment contains distinct
+`<!-- qmix-lizard-erosion -->` and `<!-- qmix-jscpd-duplication -->` markers
+when both analyzers have reported. Partial runs replace only the produced
+section and retain the other section from the existing comment; no empty
+placeholder marker is posted. Config-only changes can update just duplication,
+while erosion inputs can update just erosion. Source changes run both reports.
+The summary table labels percentages as `Duplication, %`, not line counts.
+
+**JSON consumer contract for #201/#202:** `report.json` is the validated native
+jscpd v5.3.2 JSON (`statistics`, `duplicates`), with clone file
+`name` values changed from absolute runner paths to repository-relative POSIX
+paths. Absent source formats are filled with zero metrics. `statistics.total`
+and `statistics.formats.{go,kotlin,javascript}` contain unrounded `percentage`
+values in **percent units** (e.g. 1.5 means 1.5%, not 150%), `clones`,
+`lines`, `duplicatedLines`, and `sources`. Each `duplicates[]` row has
+`format`, `lines`, `tokens`, and `firstFile` / `secondFile` objects with `name`,
+one-based `start` and `end` line ranges;
+other native fields (including `fragment`, `kind` and `isNew`) are retained.
+The top five clones sort by descending lines, then tokens, then source path.
+The denominator counts jscpd-analyzed lines; duplicated lines count one
+fragment per clone. Use this artifact rather than scraping rounded Markdown.
+The future baseline gate (#202) must reuse the same scope and threshold; this
+informational job does not implement a gate or history.
+
+For a local report, download that release archive, verify the reviewed SHA-256
+with `sha256sum -c -` **before extraction**, then run:
+
+```sh
+TMPDIR=/path/to/scratch JSCPD_BIN=/path/to/verified/jscpd make duplication
+```
+
+The target prints the path to `report.md` in a scratch subdirectory and also
+writes normalized `report.json`. No npm or JVM is needed. On the current
+production scope with the adopted 10-line minimum, the baseline is **0.5030%
+overall, four Go clones** (Go 0.8368% / 4, Kotlin 0% / 0, JavaScript 0% / 0).
+This is an informational baseline, not a gate; #201/#202 should use the same
+10-line minimum, default 50-token minimum, `mild` mode, and production scope.

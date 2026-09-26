@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import json
 import os
 import pathlib
 import re
@@ -24,10 +25,10 @@ EROSION_SPEC.loader.exec_module(erosion)
 
 
 class WorkflowPathsTest(unittest.TestCase):
-    def test_android_source_routes_android_and_erosion(self):
+    def test_android_source_routes_android_erosion_and_duplication(self):
         self.assertEqual(
             workflow_paths.classify(["android/app/src/main/MainActivity.kt"]),
-            {"android", "erosion"},
+            {"android", "erosion", "duplication"},
         )
 
     def test_erosion_route_selects_only_production_sources_and_its_inputs(self):
@@ -75,6 +76,30 @@ class WorkflowPathsTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual("erosion" in workflow_paths.classify([path]), erosion.is_in_scope(path))
 
+    def test_duplication_routing_uses_production_scope_and_own_inputs(self):
+        cases = {
+            "cmd/qmix/main.go": True,
+            "internal/server/server.go": True,
+            "android/app/src/main/java/App.kt": True,
+            "internal/server/guest/app.js": True,
+            "internal/server/guest/app.test.js": False,
+            "internal/server/guest/generated/app.js": False,
+            "internal/server/guest/third_party/lib.js": False,
+            "android/app/src/test/java/AppTest.kt": False,
+            "android/app/src/main/build/App.kt": False,
+            "cmd/qmix/main_test.go": False,
+            "README.md": False,
+            "go.mod": False,
+            ".jscpd.json": True,
+            ".github/scripts/jscpd_report.py": True,
+            ".github/scripts/jscpd_report_test.py": True,
+            ".github/scripts/erosion.py": True,  # Shared source discovery and scope.
+            ".github/scripts/erosion_test.py": False,
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual("duplication" in workflow_paths.classify([path]), expected)
+
     def test_generated_header_does_not_route_but_deleted_source_does(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
@@ -84,13 +109,15 @@ class WorkflowPathsTest(unittest.TestCase):
             self.assertNotIn("cmd/generated.go", erosion.discover_sources(root))
             self.assertNotIn("erosion", workflow_paths.classify(["cmd/generated.go"], root))
             self.assertIn("erosion", workflow_paths.classify(["cmd/deleted.go"], root))
+            self.assertNotIn("duplication", workflow_paths.classify(["cmd/generated.go"], root))
+            self.assertIn("duplication", workflow_paths.classify(["cmd/deleted.go"], root))
 
     def test_path_matrix(self):
         cases = {
-            "cmd/qmix/main.go": {"ci", "erosion"},
-            "internal/server/server.go": {"ci", "erosion"},
-            "internal/stream/ytdlp.go": {"ci", "live", "erosion"},
-            "internal/buildinfo/buildinfo.go": {"ci", "android", "erosion"},
+            "cmd/qmix/main.go": {"ci", "erosion", "duplication"},
+            "internal/server/server.go": {"ci", "erosion", "duplication"},
+            "internal/stream/ytdlp.go": {"ci", "live", "erosion", "duplication"},
+            "internal/buildinfo/buildinfo.go": {"ci", "android", "erosion", "duplication"},
             "go.mod": {"ci", "android", "live"},
             "go.sum": {"ci", "android", "live"},
             "Makefile": {"ci"},
@@ -98,10 +125,13 @@ class WorkflowPathsTest(unittest.TestCase):
             ".dockerignore": {"ci"},
             ".github/scripts/test_summary.py": {"ci"},
             ".github/scripts/generate_sbom.py": {"ci", "android"},
-            ".github/workflows/ci.yml": {"ci", "erosion"},
+            ".github/workflows/ci.yml": {"ci", "erosion", "duplication"},
             ".github/workflows/android.yml": {"android"},
             ".github/workflows/live.yml": {"live"},
-            ".github/scripts/workflow_paths.py": {"ci", "android", "live", "erosion"},
+            ".github/scripts/workflow_paths.py": {"ci", "android", "live", "erosion", "duplication"},
+            ".jscpd.json": {"duplication"},
+            ".github/scripts/jscpd_report.py": {"ci", "duplication"},
+            ".github/scripts/jscpd_report_test.py": {"ci", "duplication"},
             "README.md": set(),
             ".github/cyrillic-allowlist.json": set(),
         }
@@ -114,7 +144,7 @@ class WorkflowPathsTest(unittest.TestCase):
             workflow_paths.classify(
                 ["android/app/build.gradle.kts", "internal/server/server.go"]
             ),
-            {"android", "ci", "erosion"},
+            {"android", "ci", "erosion", "duplication"},
         )
 
     def test_cli_reads_nul_delimited_paths_and_emits_every_output(self):
@@ -126,7 +156,7 @@ class WorkflowPathsTest(unittest.TestCase):
         )
         self.assertEqual(
             result.stdout.decode().splitlines(),
-            ["ci=true", "android=false", "live=true", "erosion=true"],
+            ["ci=true", "android=false", "live=true", "erosion=true", "duplication=true"],
         )
 
     def test_workflows_share_isolated_concurrency_contract(self):
@@ -268,7 +298,7 @@ class WorkflowPathsTest(unittest.TestCase):
             ).stdout
             paths = [part.decode() for part in changed.split(b"\0") if part]
             self.assertIn("internal/removed.go", paths)
-            self.assertEqual(workflow_paths.classify(paths), {"ci", "erosion"})
+            self.assertEqual(workflow_paths.classify(paths), {"ci", "erosion", "duplication"})
 
     def test_unavailable_nonzero_base_forces_every_route(self):
         expected = ["ci=true", "android=true", "live=true"]
@@ -292,7 +322,7 @@ class WorkflowPathsTest(unittest.TestCase):
                 )
                 with self.subTest(path=filename):
                     self.assertEqual(completed.returncode, 0, completed.stderr)
-                    self.assertEqual(output.read_text().splitlines(), expected + (["erosion=true"] if filename == "ci.yml" else []))
+                    self.assertEqual(output.read_text().splitlines(), expected + (["erosion=true", "duplication=true"] if filename == "ci.yml" else []))
 
     def test_live_manual_and_scheduled_runs_bypass_path_routing(self):
         text = (WORKFLOW_DIR / "live.yml").read_text()
@@ -307,7 +337,7 @@ class WorkflowPathsTest(unittest.TestCase):
                 self.assertNotIn("git diff-tree", text)
                 fallback = "printf 'ci=true\\nandroid=true\\nlive=true\\n"
                 if filename == "ci.yml":
-                    fallback += "erosion=true\\n"
+                    fallback += "erosion=true\\nduplication=true\\n"
                 self.assertIn(fallback + "'", text)
 
     def test_result_jobs_enforce_route_truth_table(self):
@@ -328,6 +358,8 @@ class WorkflowPathsTest(unittest.TestCase):
                 "POLICY_RESULT": "success",
                 "EROSION_OUTPUT": "false",
                 "EROSION_RESULT": "skipped",
+                "DUPLICATION_OUTPUT": "false",
+                "DUPLICATION_RESULT": "skipped",
                 "EROSION_REPORT_RESULT": "skipped",
                 "HISTORY_RESULT": "skipped",
                 "PAGES_RESULT": "skipped",
@@ -370,6 +402,8 @@ class WorkflowPathsTest(unittest.TestCase):
             "REPORT_RESULT": "skipped",
             "EROSION_OUTPUT": "false",
             "EROSION_RESULT": "skipped",
+            "DUPLICATION_OUTPUT": "false",
+            "DUPLICATION_RESULT": "skipped",
             "EROSION_REPORT_RESULT": "skipped",
             "HISTORY_RESULT": "skipped",
             "PAGES_RESULT": "skipped",
@@ -404,6 +438,7 @@ class WorkflowPathsTest(unittest.TestCase):
             "POLICY_RESULT": "success", "CI_RESULT": "skipped",
             "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
             "REPORT_RESULT": "skipped", "EVENT_NAME": "pull_request",
+            "DUPLICATION_OUTPUT": "false", "DUPLICATION_RESULT": "skipped",
             "HISTORY_RESULT": "skipped",
             "PAGES_RESULT": "skipped",
             "REPOSITORY": "leugenea/qmix", "HEAD_REPOSITORY": "leugenea/qmix",
@@ -432,6 +467,36 @@ class WorkflowPathsTest(unittest.TestCase):
                       "EROSION_REPORT_RESULT": "skipped", "PR_AUTHOR": "dependabot[bot]"}
         self.assertEqual(subprocess.run(["bash", "-e", "-c", script], env=env).returncode, 0)
 
+    def test_ci_result_enforces_duplication_for_prs_and_skips_main_pushes(self):
+        script = self._result_script("ci.yml")
+        base = {
+            "ROUTE_RESULT": "success", "POLICY_RESULT": "success",
+            "ROUTE_OUTPUT": "false", "CI_RESULT": "skipped",
+            "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
+            "REPORT_RESULT": "skipped", "EROSION_OUTPUT": "false",
+            "EROSION_RESULT": "skipped", "HISTORY_RESULT": "skipped",
+            "PAGES_RESULT": "skipped", "REPOSITORY": "leugenea/qmix",
+            "ACTOR": "leugenea", "PR_AUTHOR": "leugenea",
+        }
+        for event, route, producer, publisher, head, succeeds in (
+            ("pull_request", "true", "success", "success", "leugenea/qmix", True),
+            ("pull_request", "true", "failure", "skipped", "leugenea/qmix", False),
+            ("pull_request", "true", "skipped", "skipped", "leugenea/qmix", False),
+            ("pull_request", "false", "skipped", "skipped", "leugenea/qmix", True),
+            ("pull_request", "true", "success", "skipped", "contributor/qmix", True),
+            ("pull_request", "true", "success", "success", "contributor/qmix", False),
+            ("push", "true", "skipped", "skipped", "", True),
+            ("push", "true", "success", "skipped", "", False),
+            ("push", "false", "skipped", "skipped", "", True),
+            ("pull_request", "invalid", "skipped", "skipped", "leugenea/qmix", False),
+        ):
+            env = base | {"EVENT_NAME": event, "DUPLICATION_OUTPUT": route,
+                          "DUPLICATION_RESULT": producer, "EROSION_REPORT_RESULT": publisher,
+                          "HEAD_REPOSITORY": head}
+            completed = subprocess.run(["bash", "-e", "-c", script], env=env)
+            with self.subTest(event=event, route=route, producer=producer, head=head):
+                self.assertEqual(completed.returncode == 0, succeeds)
+
     def test_live_manual_non_main_ref_never_requires_nas(self):
         script = self._result_script("live.yml")
         base = {
@@ -456,6 +521,7 @@ class WorkflowPathsTest(unittest.TestCase):
             "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
             "REPORT_RESULT": "skipped", "EROSION_OUTPUT": "true",
             "EROSION_RESULT": "success", "EROSION_REPORT_RESULT": "skipped",
+            "DUPLICATION_OUTPUT": "false", "DUPLICATION_RESULT": "skipped",
             "PAGES_RESULT": "skipped",
             "REPOSITORY": "leugenea/qmix", "HEAD_REPOSITORY": "",
             "ACTOR": "leugenea", "PR_AUTHOR": "",
@@ -496,36 +562,93 @@ class WorkflowPathsTest(unittest.TestCase):
             with self.subTest(ref=ref, result=result):
                 self.assertEqual(completed.returncode == 0, succeeds)
 
-    def test_comment_script_creates_then_updates_with_no_duplicate(self):
+    def test_comment_script_preserves_sections_across_partial_runs(self):
         ci = (WORKFLOW_DIR / "ci.yml").read_text()
         publisher = self._job(ci, "publish-erosion")
-        run = re.search(r"(?ms)^        run: \|\n(?P<script>(?:^          .*\n?)*)", publisher)
+        run = re.search(r"(?m)^        run: \|\n(?P<script>(?:^          [^\n]*\n?)*)", publisher)
         self.assertIsNotNone(run)
         script = textwrap.dedent(run.group("script"))
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
-            (root / "erosion").mkdir()
-            (root / "erosion/report.json").write_text('{"overall": {}}\n')
-            (root / "erosion/report.md").write_text("<!-- qmix-lizard-erosion -->\nreport\n")
+            for name in ("erosion", "duplication"):
+                (root / name).mkdir()
+                (root / name / "report.json").write_text("{}\n")
             stub = root / "gh"
-            stub.write_text(
-                "#!/bin/sh\n"
-                "case \"$*\" in\n"
-                "  *--paginate*) if [ -f \"$STATE\" ]; then printf '42\\n'; fi ;;\n"
-                "  *--method\\ PATCH*) printf 'patch\\n' >> \"$CALLS\" ;;\n"
-                "  *--method\\ POST*) touch \"$STATE\"; printf 'post\\n' >> \"$CALLS\" ;;\n"
-                "  *) exit 1 ;;\n"
-                "esac\n"
-            )
+            stub.write_text(textwrap.dedent('''\
+                #!/usr/bin/env python3
+                import json
+                import os
+                import pathlib
+                import sys
+                state = pathlib.Path(os.environ["STATE"])
+                calls = pathlib.Path(os.environ["CALLS"])
+                args = sys.argv[1:]
+                if "--paginate" in args:
+                    if state.exists():
+                        print("42")
+                elif "--method" in args:
+                    method = args[args.index("--method") + 1]
+                    body = args[args.index("-f") + 1].removeprefix("body=")
+                    state.write_text(json.dumps({"id": 42, "body": body}))
+                    with calls.open("a") as stream:
+                        stream.write(method + "\\n")
+                elif args[-1].endswith("/42") and state.exists():
+                    print(state.read_text())
+                else:
+                    sys.exit(1)
+            '''))
             stub.chmod(0o755)
-            env = os.environ | {"PATH": f"{root}:{os.environ['PATH']}", "STATE": str(root / "comment"),
-                                "CALLS": str(root / "calls"), "GITHUB_REPOSITORY": "leugenea/qmix",
-                                "PR_NUMBER": "197", "GH_TOKEN": "local-fixture"}
-            for _ in range(2):
-                completed = subprocess.run(["bash", "-e", "-c", script], cwd=root, env=env,
-                                           capture_output=True, text=True)
-                self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual((root / "calls").read_text().splitlines(), ["post", "patch"])
+            env = os.environ | {"PATH": f"{root}:{os.environ['PATH']}",
+                                "STATE": str(root / "state.json"), "CALLS": str(root / "calls"),
+                                "GITHUB_REPOSITORY": "leugenea/qmix", "PR_NUMBER": "200",
+                                "GH_TOKEN": "local-fixture", "RUNNER_TEMP": str(root)}
+
+            def publish(erosion, duplication):
+                if erosion is not None:
+                    (root / "erosion/report.md").write_text(
+                        "<!-- qmix-lizard-erosion -->\n" + erosion + "\n")
+                if duplication is not None:
+                    (root / "duplication/report.md").write_text(
+                        "<!-- qmix-jscpd-duplication -->\n" + duplication + "\n")
+                result = subprocess.run(["bash", "-e", "-c", script], cwd=root,
+                                        env=env | {"EROSION_READY": str(erosion is not None).lower(),
+                                                   "DUPLICATION_READY": str(duplication is not None).lower()},
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads((root / "state.json").read_text())["body"]
+
+            body = publish("erosion v1", None)
+            self.assertIn("erosion v1", body)
+            self.assertNotIn("qmix-jscpd-duplication", body)
+            body = publish(None, "duplication v1")
+            self.assertIn("erosion v1", body)
+            self.assertIn("duplication v1", body)
+            body = publish("erosion v2", "duplication v2")
+            self.assertIn("erosion v2", body)
+            self.assertIn("duplication v2", body)
+            self.assertNotIn("erosion v1", body)
+            self.assertNotIn("duplication v1", body)
+            self.assertEqual(body.count("<!-- qmix-lizard-erosion -->"), 1)
+            self.assertEqual(body.count("<!-- qmix-jscpd-duplication -->"), 1)
+            self.assertEqual((root / "calls").read_text().splitlines(), ["POST", "PATCH", "PATCH"])
+            (root / "state.json").unlink()
+            body = publish(None, "duplication first")
+            self.assertNotIn("qmix-lizard-erosion", body)
+            self.assertIn("duplication first", body)
+            body = publish("erosion later", None)
+            self.assertIn("duplication first", body)
+            self.assertIn("erosion later", body)
+            (root / "state.json").write_text(json.dumps({"id": 42, "body": "<!-- qmix-lizard-erosion -->\n"}))
+            body = publish(None, "duplication after legacy placeholder")
+            self.assertNotIn("qmix-lizard-erosion", body)
+            self.assertIn("duplication after legacy placeholder", body)
+            (root / "erosion/report.json").unlink()
+            before = (root / "state.json").read_text()
+            result = subprocess.run(["bash", "-e", "-c", script], cwd=root,
+                                    env=env | {"EROSION_READY": "true", "DUPLICATION_READY": "false"},
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual((root / "state.json").read_text(), before)
 
     def test_erosion_job_is_routed_unprivileged_and_publishes_artifact(self):
         ci = (WORKFLOW_DIR / "ci.yml").read_text()
@@ -551,6 +674,41 @@ class WorkflowPathsTest(unittest.TestCase):
         self.assertIn("<!-- qmix-lizard-erosion -->", publisher)
         self.assertIn("gh api", publisher)
         self.assertIn("EROSION_RESULT", self._result_script("ci.yml"))
+
+    def test_duplication_job_is_routed_verified_and_shares_safe_comment(self):
+        ci = (WORKFLOW_DIR / "ci.yml").read_text()
+        route = self._job(ci, "route")
+        self.assertIn("duplication: ${{ steps.paths.outputs.duplication }}", route)
+        producer = self._job(ci, "duplication")
+        self.assertIn("github.event_name == 'pull_request'", producer)
+        self.assertIn("needs.route.outputs.duplication == 'true'", producer)
+        self.assertIn("persist-credentials: false", producer)
+        self.assertNotIn("pull-requests: write", producer)
+        self.assertIn("v5.3.2/jscpd-linux-x64-gnu.tar.gz", producer)
+        self.assertIn("'97259f222ea7f6d51a0f2faa98ed5889430233e0fb8d2c129f23d84aff4b93b2' 'jscpd-linux-x64-gnu.tar.gz'", producer)
+        self.assertLess(producer.index("sha256sum -c -"), producer.index("tar -xzf"))
+        self.assertLess(producer.index("sha256sum -c -"), producer.index("./jscpd --version"))
+        self.assertIn('"$RUNNER_TEMP/jscpd/jscpd"', producer)
+        self.assertIn("--config .jscpd.json", producer)
+        self.assertIn("--reporters json", producer)
+        self.assertIn("--threshold 100 --fail-on-empty", producer)
+        self.assertIn(".github/scripts/jscpd_report_test.py -v", producer)
+        self.assertIn(".github/scripts/jscpd_report.py report ", producer)
+        self.assertIn("name: code-duplication", producer)
+        self.assertIn("duplication/report.json", producer)
+        self.assertIn("duplication/report.md", producer)
+        self.assertIn("if-no-files-found: error", producer)
+        self.assertIn("$GITHUB_STEP_SUMMARY", producer)
+        publisher = self._job(ci, "publish-erosion")
+        self.assertIn("needs: [route, erosion, duplication]", publisher)
+        self.assertIn("needs.duplication.result == 'success'", publisher)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", publisher)
+        self.assertIn("github.actor != 'dependabot[bot]'", publisher)
+        self.assertIn("github.event.pull_request.user.login != 'dependabot[bot]'", publisher)
+        self.assertIn("name: code-duplication", publisher)
+        self.assertNotIn("actions/checkout@", publisher)
+        self.assertEqual(publisher.count("gh api --method POST"), 1)
+        self.assertEqual(publisher.count("gh api --method PATCH"), 1)
 
     def test_history_starts_new_six_metric_series_without_overall(self):
         ci = (WORKFLOW_DIR / "ci.yml").read_text()

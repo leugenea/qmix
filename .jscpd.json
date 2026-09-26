@@ -1,0 +1,25 @@
+{
+  "formats": ["go", "kotlin", "javascript"],
+  "ignore": [
+    "**/*_test.go",
+    "**/*.test.js",
+    "**/*.spec.js",
+    "**/*.min.js",
+    "**/*Test.kt",
+    "**/*.generated.go",
+    "**/*.generated.kt",
+    "**/*.generated.js",
+    "**/*_generated.go",
+    "**/*.gen.go",
+    "**/build/**",
+    "**/generated/**",
+    "**/third_party/**",
+    "**/vendor/**",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/__tests__/**"
+  ],
+  "reporters": ["json"],
+  "minLines": 10,
+  "threshold": 100
+}

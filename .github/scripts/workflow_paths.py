@@ -8,7 +8,7 @@ import sys
 from erosion import is_in_scope
 
 ROUTES = ("ci", "android", "live")
-OUTPUTS = (*ROUTES, "erosion")
+OUTPUTS = (*ROUTES, "erosion", "duplication")
 SHARED_GO_FILES = {"go.mod", "go.sum"}
 CI_ROOT_FILES = {".dockerignore", "Dockerfile", "Makefile"}
 
@@ -24,7 +24,8 @@ def classify(paths, root=None):
 
         if path.startswith(".github/scripts/workflow_paths"):
             routes.update(OUTPUTS)
-        if is_in_scope(path, root) or path in {
+        in_scope = is_in_scope(path, root)
+        if in_scope or path in {
             ".github/scripts/erosion.py", ".github/scripts/benchmark_metrics.py",
             ".github/scripts/benchmark_metrics_test.py", ".github/requirements-lizard.txt",
             ".github/scripts/kotlin_complexity.py", ".github/scripts/kotlin_complexity_test.py",
@@ -33,6 +34,13 @@ def classify(paths, root=None):
         # The erosion job executes this test suite, even for a test-only edit.
         if path == ".github/scripts/erosion_test.py":
             routes.add("erosion")
+        # qmix#200 imports erosion's source discovery and scope; route changes
+        # to that shared input even when no production file changed.
+        if in_scope or path in {
+            ".jscpd.json", ".github/scripts/jscpd_report.py",
+            ".github/scripts/jscpd_report_test.py", ".github/scripts/erosion.py",
+        }:
+            routes.add("duplication")
         if path in SHARED_GO_FILES:
             routes.update(ROUTES)
         if path.startswith("android/"):
@@ -48,7 +56,7 @@ def classify(paths, root=None):
         if path.startswith(".github/scripts/generate_sbom"):
             routes.add("android")
         if path == ".github/workflows/ci.yml":
-            routes.update(("ci", "erosion"))
+            routes.update(("ci", "erosion", "duplication"))
         elif path == ".github/workflows/android.yml":
             routes.add("android")
         elif path == ".github/workflows/live.yml":

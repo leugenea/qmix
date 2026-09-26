@@ -19,6 +19,7 @@ jobs:
     outputs:
       ci: ${{ steps.paths.outputs.ci }}
       erosion: ${{ steps.paths.outputs.erosion }}
+      duplication: ${{ steps.paths.outputs.duplication }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,12 +34,12 @@ jobs:
           FORCE_EROSION: ${{ github.event_name == 'push' }}
         run: |
           if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
-            printf 'ci=true\nandroid=true\nlive=true\nerosion=true\n' >> "$GITHUB_OUTPUT"
+            printf 'ci=true\nandroid=true\nlive=true\nerosion=true\nduplication=true\n' >> "$GITHUB_OUTPUT"
           elif git diff --no-renames --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"; then
             python3 .github/scripts/workflow_paths.py \
               < "$RUNNER_TEMP/changed-paths" >> "$GITHUB_OUTPUT"
           else
-            printf 'ci=true\nandroid=true\nlive=true\nerosion=true\n' >> "$GITHUB_OUTPUT"
+            printf 'ci=true\nandroid=true\nlive=true\nerosion=true\nduplication=true\n' >> "$GITHUB_OUTPUT"
           fi
 
   policy:
@@ -184,36 +185,148 @@ jobs:
           path: ${{ runner.temp }}/erosion/
           if-no-files-found: error
 
-  # Privileged publisher consumes only the artifact, never checks out PR code.
+  # Informational only (qmix#200): the score never fails the job; installation
+  # and report errors fail closed. The binary lives in this job's temp directory.
+  duplication:
+    needs: route
+    if: github.event_name == 'pull_request' && needs.route.outputs.duplication == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install checksum-verified jscpd v5.3.2
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jscpd"
+          curl --fail --location --retry 3 \
+            https://github.com/kucherenko/jscpd/releases/download/v5.3.2/jscpd-linux-x64-gnu.tar.gz \
+            --output "$RUNNER_TEMP/jscpd/jscpd-linux-x64-gnu.tar.gz"
+          cd "$RUNNER_TEMP/jscpd"
+          printf '%s  %s\n' \
+            '97259f222ea7f6d51a0f2faa98ed5889430233e0fb8d2c129f23d84aff4b93b2' 'jscpd-linux-x64-gnu.tar.gz' | sha256sum -c -
+          tar -xzf jscpd-linux-x64-gnu.tar.gz
+          test -x ./jscpd
+          ./jscpd --version
+      - name: Test duplication report normalization
+        run: python3 .github/scripts/jscpd_report_test.py -v
+      - name: Analyze production duplication
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/duplication/raw"
+          python3 .github/scripts/jscpd_report.py sources . > "$RUNNER_TEMP/duplication/sources"
+          mapfile -d '' -t sources < "$RUNNER_TEMP/duplication/sources"
+          (( ${#sources[@]} > 0 ))
+          "$RUNNER_TEMP/jscpd/jscpd" --config .jscpd.json --absolute \
+            --reporters json --threshold 100 --fail-on-empty \
+            --output "$RUNNER_TEMP/duplication/raw" \
+            "${sources[@]}"
+          python3 .github/scripts/jscpd_report.py report \
+            "$RUNNER_TEMP/duplication/raw/jscpd-report.json" \
+            "$RUNNER_TEMP/duplication/report.json" \
+            "$RUNNER_TEMP/duplication/report.md"
+          cat "$RUNNER_TEMP/duplication/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload duplication report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: code-duplication
+          path: |
+            ${{ runner.temp }}/duplication/report.json
+            ${{ runner.temp }}/duplication/report.md
+          if-no-files-found: error
+
+  # Privileged publisher consumes artifacts only, never checks out PR code.
   publish-erosion:
-    needs: [route, erosion]
-    if: ${{ always() && needs.route.outputs.erosion == 'true' && needs.erosion.result == 'success' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: [route, erosion, duplication]
+    if: ${{ always() && (needs.erosion.result == 'success' || needs.duplication.result == 'success') && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
     steps:
       - name: Download erosion report
+        if: needs.erosion.result == 'success'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: code-erosion
           path: erosion
+      - name: Download duplication report
+        if: needs.duplication.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: code-duplication
+          path: duplication
       - name: Create or update one pull-request comment
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          EROSION_READY: ${{ needs.erosion.result == 'success' }}
+          DUPLICATION_READY: ${{ needs.duplication.result == 'success' }}
         run: |
           set -euo pipefail
-          test -s erosion/report.json
-          test -s erosion/report.md
+          report=$(mktemp "$RUNNER_TEMP/qmix-comment.XXXXXX")
+          existing=$(mktemp "$RUNNER_TEMP/qmix-existing.XXXXXX")
+          trap 'rm -f "$report" "$existing"' EXIT
+          if [[ "$EROSION_READY" == true ]]; then
+            test -s erosion/report.json
+            test -s erosion/report.md
+          fi
+          if [[ "$DUPLICATION_READY" == true ]]; then
+            test -s duplication/report.json
+            test -s duplication/report.md
+          fi
+          [[ "$EROSION_READY" == true || "$DUPLICATION_READY" == true ]]
           comment_id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- qmix-lizard-erosion -->"))) | .id')
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- qmix-lizard-erosion -->") or contains("<!-- qmix-jscpd-duplication -->"))) | .id')
           if [[ -n "$comment_id" ]]; then
             comment_id=${comment_id%%$'\n'*}
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" > "$existing"
+          else
+            printf '{"body":""}\n' > "$existing"
+          fi
+          # The publisher has no checkout: keep PR-controlled source out of its
+          # write-token process. This Python function is exercised by routing tests.
+          python3 - "$report" "$existing" <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+          MARKERS = ("<!-- qmix-lizard-erosion -->", "<!-- qmix-jscpd-duplication -->")
+          def sections(body):
+              matches = list(re.finditer(r"(?m)^<!-- qmix-(?:lizard-erosion|jscpd-duplication) -->$", body))
+              if body and (not matches or body[:matches[0].start()].strip()):
+                  raise ValueError("existing comment has no recognized first section")
+              result = {}
+              for index, match in enumerate(matches):
+                  marker = match.group()
+                  if marker in result:
+                      raise ValueError("duplicate report section")
+                  end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+                  section = body[match.start():end].rstrip("\n")
+                  if section != marker:
+                      result[marker] = section
+              return result
+          previous = json.loads(pathlib.Path(sys.argv[2]).read_text())["body"]
+          if not isinstance(previous, str):
+              raise ValueError("invalid existing comment")
+          merged = sections(previous)
+          for ready, path, marker in (
+              ("EROSION_READY", "erosion/report.md", MARKERS[0]),
+              ("DUPLICATION_READY", "duplication/report.md", MARKERS[1]),
+          ):
+              if os.environ[ready] == "true":
+                  text = pathlib.Path(path).read_text()
+                  if not text.startswith(marker + "\n") or set(sections(text)) != {marker}:
+                      raise ValueError("invalid report section")
+                  merged[marker] = text.rstrip("\n")
+          pathlib.Path(sys.argv[1]).write_text("\n\n".join(merged[marker] for marker in MARKERS if marker in merged) + "\n")
+          PY
+          if [[ -n "$comment_id" ]]; then
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
-              -f body="$(< erosion/report.md)" > /dev/null
+              -f body="$(< "$report")" > /dev/null
           else
             gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-              -f body="$(< erosion/report.md)" > /dev/null
+              -f body="$(< "$report")" > /dev/null
           fi
 
   # History writes are trusted main pushes only; PR source has no write token.
@@ -427,7 +540,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [route, policy, ci, integration-mandatory, publish-test-reports, docker, erosion, publish-erosion, erosion-history, erosion-pages]
+    needs: [route, policy, ci, integration-mandatory, publish-test-reports, docker, erosion, duplication, publish-erosion, erosion-history, erosion-pages]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
@@ -436,6 +549,8 @@ jobs:
           ROUTE_OUTPUT: ${{ needs.route.outputs.ci }}
           EROSION_OUTPUT: ${{ needs.route.outputs.erosion }}
           EROSION_RESULT: ${{ needs.erosion.result }}
+          DUPLICATION_OUTPUT: ${{ needs.route.outputs.duplication }}
+          DUPLICATION_RESULT: ${{ needs.duplication.result }}
           EROSION_REPORT_RESULT: ${{ needs.publish-erosion.result }}
           HISTORY_RESULT: ${{ needs.erosion-history.result }}
           PAGES_RESULT: ${{ needs.erosion-pages.result }}
@@ -473,7 +588,14 @@ jobs:
           else
             exit 1
           fi
-          if [[ "$EROSION_OUTPUT" == true && "$EVENT_NAME" == pull_request && "$HEAD_REPOSITORY" == "$REPOSITORY" && "$ACTOR" != 'dependabot[bot]' && "$PR_AUTHOR" != 'dependabot[bot]' ]]; then
+          if [[ "$DUPLICATION_OUTPUT" == true && "$EVENT_NAME" == pull_request ]]; then
+            [[ "$DUPLICATION_RESULT" == success ]]
+          elif [[ "$DUPLICATION_OUTPUT" == false || ("$DUPLICATION_OUTPUT" == true && "$EVENT_NAME" == push) ]]; then
+            [[ "$DUPLICATION_RESULT" == skipped ]]
+          else
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == pull_request && "$HEAD_REPOSITORY" == "$REPOSITORY" && "$ACTOR" != 'dependabot[bot]' && "$PR_AUTHOR" != 'dependabot[bot]' && ("$EROSION_RESULT" == success || "$DUPLICATION_RESULT" == success) ]]; then
             [[ "$EROSION_REPORT_RESULT" == success ]]
           else
             [[ "$EROSION_REPORT_RESULT" == skipped ]]
