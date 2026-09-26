@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/leugenea/qmix/internal/logging"
+	"github.com/leugenea/qmix/internal/ratelimit"
 	"github.com/leugenea/qmix/internal/resolver"
 	"github.com/leugenea/qmix/internal/roomcreate"
-	"github.com/leugenea/qmix/internal/roomsubmission"
 	"github.com/leugenea/qmix/internal/stream"
 	"github.com/leugenea/qmix/internal/ytdlpcap"
 )
@@ -259,19 +259,19 @@ func Parse(lookup LookupEnv) (Config, error) {
 	if cfg.YTDLP.QueueLimit, err = queueLimit(lookup, "QMIX_YTDLP_QUEUE_LIMIT", defaultYTDLPQueueLimit); err != nil {
 		return Config{}, err
 	}
-	if cfg.RoomCreation.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_RATE_PER_MINUTE", defaultRoomCreateRate, roomcreate.MaxRatePerMinute); err != nil {
+	if cfg.RoomCreation.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_RATE_PER_MINUTE", defaultRoomCreateRate, ratelimit.MaxRatePerMinute); err != nil {
 		return Config{}, err
 	}
-	if cfg.RoomCreation.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_BURST", defaultRoomCreateBurst, roomcreate.MaxBurst); err != nil {
+	if cfg.RoomCreation.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_BURST", defaultRoomCreateBurst, ratelimit.MaxBurst); err != nil {
 		return Config{}, err
 	}
 	if cfg.RoomCreation.IdentityLimit, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_IDENTITY_LIMIT", defaultRoomIdentityLimit, roomcreate.MaxIdentityLimit); err != nil {
 		return Config{}, err
 	}
-	if cfg.RoomSubmission.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE", defaultRoomSubmissionRate, roomsubmission.MaxRatePerMinute); err != nil {
+	if cfg.RoomSubmission.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE", defaultRoomSubmissionRate, ratelimit.MaxRatePerMinute); err != nil {
 		return Config{}, err
 	}
-	if cfg.RoomSubmission.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_BURST", defaultRoomSubmissionBurst, roomsubmission.MaxBurst); err != nil {
+	if cfg.RoomSubmission.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_BURST", defaultRoomSubmissionBurst, ratelimit.MaxBurst); err != nil {
 		return Config{}, err
 	}
 	if cfg.Rooms.MaxLiveRooms, err = positiveInt(lookup, "QMIX_MAX_LIVE_ROOMS", defaultMaxLiveRooms); err != nil {

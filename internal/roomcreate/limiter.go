@@ -2,36 +2,32 @@
 package roomcreate
 
 import (
-	"math"
 	"sync"
 	"time"
 
 	"github.com/leugenea/qmix/internal/admission"
+	"github.com/leugenea/qmix/internal/ratelimit"
 )
 
-// Safe configuration maxima keep token arithmetic exact and bound registry
-// memory. Startup validation and direct construction enforce this same domain.
+// Keep the identity bound here; token-bucket bounds are shared by ratelimit.
 const (
-	MaxRatePerMinute = 60_000
-	MaxBurst         = 10_000
+	MaxRatePerMinute = ratelimit.MaxRatePerMinute
+	MaxBurst         = ratelimit.MaxBurst
 	MaxIdentityLimit = 65_536
 )
 
-type clockFunc func() time.Time
-
 type bucket struct {
-	tokens   float64
-	updated  time.Time
+	limit    *ratelimit.Bucket
 	lastSeen time.Time
 }
 
 // Limiter is a non-blocking token-bucket registry keyed by client identity.
 type Limiter struct {
 	mu            sync.Mutex
-	ratePerSecond float64
-	burst         float64
+	ratePerMinute int
+	burst         int
 	identityLimit int
-	now           clockFunc
+	now           func() time.Time
 	buckets       map[string]*bucket
 }
 
@@ -42,26 +38,12 @@ func NewLimiter(ratePerMinute, burst, identityLimit int, now func() time.Time) *
 		now = time.Now
 	}
 	return &Limiter{
-		ratePerSecond: validRate(ratePerMinute),
-		burst:         validBurst(burst),
+		ratePerMinute: ratePerMinute,
+		burst:         burst,
 		identityLimit: validIdentityLimit(identityLimit),
 		now:           now,
 		buckets:       make(map[string]*bucket),
 	}
-}
-
-func validRate(value int) float64 {
-	if value < 1 || value > MaxRatePerMinute {
-		return 0
-	}
-	return float64(value) / 60
-}
-
-func validBurst(value int) float64 {
-	if value < 1 || value > MaxBurst {
-		return 0
-	}
-	return float64(value)
 }
 
 func validIdentityLimit(value int) int {
@@ -79,22 +61,20 @@ func (l *Limiter) Allow(identity string) *admission.Error {
 	now := l.now()
 	b := l.buckets[identity]
 	if b == nil {
-		if l.ratePerSecond <= 0 || l.burst < 1 || l.identityLimit <= 0 {
+		if !ratelimit.Valid(l.ratePerMinute, l.burst) || l.identityLimit <= 0 {
 			return roomCreationDenied(1)
 		}
 		if len(l.buckets) >= l.identityLimit && !l.reclaimOne(now) {
-			return roomCreationDenied(int(math.Ceil(1 / l.ratePerSecond)))
+			return roomCreationDenied(ratelimit.RetryAfterNew(l.ratePerMinute))
 		}
-		b = &bucket{tokens: l.burst, updated: now, lastSeen: now}
+		b = &bucket{limit: ratelimit.NewBucketAt(l.ratePerMinute, l.burst, now, nil), lastSeen: now}
 		l.buckets[identity] = b
 	}
-	l.replenish(b, now)
+	allowed, retry := b.limit.AllowAt(now)
 	b.lastSeen = now
-	if b.tokens >= 1 {
-		b.tokens--
+	if allowed {
 		return nil
 	}
-	retry := int(math.Ceil((1 - b.tokens) / l.ratePerSecond))
 	return roomCreationDenied(retry)
 }
 
@@ -102,21 +82,12 @@ func roomCreationDenied(retryAfterSeconds int) *admission.Error {
 	return admission.NewRoomCreationRateLimit(retryAfterSeconds)
 }
 
-func (l *Limiter) replenish(b *bucket, now time.Time) {
-	elapsed := now.Sub(b.updated).Seconds()
-	if elapsed > 0 {
-		b.tokens = min(l.burst, b.tokens+elapsed*l.ratePerSecond)
-		b.updated = now
-	}
-}
-
 func (l *Limiter) reclaimOne(now time.Time) bool {
 	candidate := ""
 	candidateFound := false
 	var oldest time.Time
 	for identity, b := range l.buckets {
-		l.replenish(b, now)
-		if b.tokens < l.burst {
+		if !b.limit.FullAt(now) {
 			continue
 		}
 		if preferReclaimCandidate(identity, b.lastSeen, candidate, oldest, candidateFound) {
