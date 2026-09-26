@@ -314,7 +314,7 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         publisher = job(workflow, "publish-erosion")
         self.assertIn("needs: route", producer)
         self.assertIn("needs.route.outputs.duplication == 'true'", producer)
-        self.assertIn("github.event_name == 'pull_request'", producer)
+        self.assertNotIn("github.event_name == 'pull_request'", producer)
         self.assertNotIn("permissions:", producer)
         self.assertNotIn("secrets.", producer)
         self.assertIn("persist-credentials: false", producer)
@@ -338,6 +338,46 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertNotIn("actions/checkout@", publisher)
         self.assertIn("pull-requests: write", publisher)
         self.assertEqual(workflow.count("pull-requests: write"), 1)
+
+    def test_duplication_history_shares_main_only_erosion_publisher(self):
+        ci = read(".github/workflows/ci.yml")
+        route = job(ci, "route")
+        duplication = job(ci, "duplication")
+        history = job(ci, "erosion-history")
+        pages = job(ci, "erosion-pages")
+        self.assertIn("FORCE_DUPLICATION: ${{ github.event_name == 'push' }}", route)
+        self.assertIn("needs.route.outputs.duplication == 'true'", duplication)
+        self.assertNotIn("github.event_name == 'pull_request'", duplication)
+        self.assertIn("needs: [erosion, duplication]", history)
+        self.assertIn("always()", history)
+        for condition in ("github.event_name == 'push'", "github.ref == 'refs/heads/main'",
+                          "needs.erosion.result == 'success' || needs.duplication.result == 'success'"):
+            self.assertIn(condition, history)
+        self.assertIn("needs: erosion-history", pages)
+        self.assertIn("needs.erosion-history.result == 'success'", pages)
+        self.assertIn("group: erosion-history-main", history)
+        steps = re.findall(r"(?ms)^      - name: ([^\n]+)\n(?P<body>.*?)(?=^      - name:|\Z)", history)
+        self.assertEqual([name for name, _ in steps if name.startswith("Publish ")],
+                         ["Publish erosion history and alert", "Publish duplication history and alert"])
+        for label, artifact, directory in (("erosion", "code-erosion", "erosion"),
+                                           ("duplication", "code-duplication", "duplication")):
+            download = next(body for name, body in steps if name == f"Download {label} report")
+            convert = next(body for name, body in steps if name == f"Convert {label} report to benchmark metrics")
+            publish = next(body for name, body in steps if name == f"Publish {label} history and alert")
+            self.assertIn(f"if: needs.{label}.result == 'success'", download)
+            self.assertIn(f"if: needs.{label}.result == 'success'", convert)
+            self.assertIn(f"if: needs.{label}.result == 'success'", publish)
+            self.assertIn(f"name: {artifact}", download)
+            self.assertIn(f'--input "$RUNNER_TEMP/{directory}/report.json"', convert)
+            self.assertIn(f"name: Code {label}", publish)
+            self.assertIn("benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2", publish)
+            for setting in ("tool: customSmallerIsBetter", "gh-pages-branch: gh-pages",
+                            "benchmark-data-dir-path: dev/bench", "auto-push: true",
+                            'alert-threshold: "110%"', "comment-on-alert: true", "fail-on-alert: false"):
+                self.assertIn(setting, publish)
+            self.assertIn(f"output-file-path: ${{{{ runner.temp }}}}/{directory}/benchmark.json", publish)
+        self.assertIn("--kind duplication", next(body for name, body in steps
+                                                     if name == "Convert duplication report to benchmark metrics"))
 
     def test_erosion_history_has_only_main_push_write_permission(self):
         ci = read(".github/workflows/ci.yml")

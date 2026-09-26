@@ -128,16 +128,31 @@ class/interface body (including one nested inside a multiline class).
 ## History and alerts
 
 On **every push to `main`**, including documentation-only pushes,
-`erosion-history` converts the report into six `customSmallerIsBetter` metrics:
-Go, Kotlin, and JS erosion percentages, and the three corresponding counts of
-functions with CCN > 10. Each row has `name`, `unit`, and unrounded `value`.
-The benchmark name is **`Code erosion`**, deliberately different from the old
-`Lizard erosion` series: the Kotlin analyzer and no-aggregate methodology are
-a baseline break. After merge, the owner should delete the obsolete
+`erosion-history` publishes two `customSmallerIsBetter` benchmark series into
+one `gh-pages:dev/bench/data.js` history. **`Code erosion`** keeps its six
+existing metric names: Go, Kotlin, and JS erosion percentages (`%`), and the
+three corresponding counts of functions with CCN > 10 (`functions`). Each row
+has `name`, `unit`, and unrounded `value`. The benchmark name is deliberately
+different from the old `Lizard erosion` series: the Kotlin analyzer and
+no-aggregate methodology are a baseline break. **`Code duplication`** adds
+eight unrounded jscpd metrics from the normalized `code-duplication` artifact:
+
+| Scope | Percentage metric (`%`) | Count metric (`clones`) |
+| --- | --- | --- |
+| Overall | `Duplication` | `Duplication clones` |
+| Go | `Go duplication` | `Go clones` |
+| Kotlin | `Kotlin duplication` | `Kotlin clones` |
+| JavaScript | `JS duplication` | `JS clones` |
+
+The normalized duplication JSON has `schema_version: 1` and supplies zeros for
+formats absent from a scan. History publishing keeps the `erosion-history` job
+and serializes both series in that job; if only one analyzer succeeds, its
+series can still be recorded. After merge, the owner should delete the obsolete
 `Lizard erosion` entry from `gh-pages:dev/bench/data.js` once; this workflow
 does not mutate old chart history. PR workflows never write history. See
 [qmix#197](https://github.com/leugenea/qmix/issues/197),
-[qmix#198](https://github.com/leugenea/qmix/issues/198), and
+[qmix#198](https://github.com/leugenea/qmix/issues/198),
+[qmix#201](https://github.com/leugenea/qmix/issues/201), and
 [qmix#228](https://github.com/leugenea/qmix/issues/228).
 
 **Chart:** once Pages is configured and the first deployment completes, visit
@@ -154,16 +169,19 @@ artifact deletion is needed. A failed history or Pages job stays red without
 blocking the stable `CI result`. GitHub queues at most 100 pending history
 jobs; inspect and repair missing points after a larger burst.
 
-An alert is a **commit comment** when any one metric rises strictly more than
-10% relative to its previous point (`110%` ratio), not a merge gate. A zero
-baseline followed by a positive value alerts, and one additional high-CCN
-function may exceed the threshold for a small count. Values are not rounded
-before comparison. Investigate the per-function report before acting.
+An alert is a **commit comment** when any erosion or duplication metric rises
+strictly more than 10% relative to its previous point (`110%` ratio), not a
+merge gate: `fail-on-alert: false` keeps the workflow green. A zero baseline
+followed by zero does not alert; zero followed by a positive value alerts.
+One additional clone or high-CCN function may exceed the threshold for a small
+count. Values are not rounded before comparison. Investigate the source
+report before acting.
 
 ## Duplication (qmix#200)
 
-The routed, unprivileged `duplication` job runs on pull requests touching
-production Go, Kotlin, or guest JS. `.jscpd.json` selects those formats and
+The unprivileged `duplication` job runs on pull requests touching production
+Go, Kotlin, or guest JS, and on every push to `main` (including documentation-only
+pushes) for the history described above. `.jscpd.json` selects those formats and
 excludes tests, generated/build/vendor/third-party paths. The reporter enumerates
 the same production files as erosion, additionally excluding generated source
 headers. A checksum-verified **jscpd v5.3.2** Linux x64 binary is downloaded
@@ -193,7 +211,7 @@ while erosion inputs can update just erosion. Source changes run both reports.
 The summary table labels percentages as `Duplication, %`, not line counts.
 
 **JSON consumer contract for #201/#202:** `report.json` is the validated native
-jscpd v5.3.2 JSON (`statistics`, `duplicates`), with clone file
+jscpd v5.3.2 JSON (`statistics`, `duplicates`) plus `schema_version: 1`, with clone file
 `name` values changed from absolute runner paths to repository-relative POSIX
 paths. Absent source formats are filled with zero metrics. `statistics.total`
 and `statistics.formats.{go,kotlin,javascript}` contain unrounded `percentage`
@@ -219,5 +237,6 @@ The target prints the path to `report.md` in a scratch subdirectory and also
 writes normalized `report.json`. No npm or JVM is needed. On the current
 production scope with the adopted 10-line minimum, the baseline is **0.5030%
 overall, four Go clones** (Go 0.8368% / 4, Kotlin 0% / 0, JavaScript 0% / 0).
-This is an informational baseline, not a gate; #201/#202 should use the same
-10-line minimum, default 50-token minimum, `mild` mode, and production scope.
+This is an informational baseline, not a gate; #201 uses the same
+10-line minimum, default 50-token minimum, `mild` mode, and production scope
+for history, while #202 can reuse it for a future baseline gate.

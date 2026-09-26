@@ -30,8 +30,9 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          # Every main push records a point, including documentation-only pushes.
+          # Every main push records both reports, including documentation-only pushes.
           FORCE_EROSION: ${{ github.event_name == 'push' }}
+          FORCE_DUPLICATION: ${{ github.event_name == 'push' }}
         run: |
           if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
             printf 'ci=true\nandroid=true\nlive=true\nerosion=true\nduplication=true\n' >> "$GITHUB_OUTPUT"
@@ -239,10 +240,11 @@ jobs:
           if-no-files-found: error
 
   # Informational only (qmix#200): the score never fails the job; installation
-  # and report errors fail closed. The binary lives in this job's temp directory.
+  # and report errors fail closed. Run on routed PRs and every main push for #201.
+  # The binary lives in this job's temp directory.
   duplication:
     needs: route
-    if: github.event_name == 'pull_request' && needs.route.outputs.duplication == 'true'
+    if: needs.route.outputs.duplication == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -383,9 +385,10 @@ jobs:
           fi
 
   # History writes are trusted main pushes only; PR source has no write token.
+  # Publish both series in one serialized job and retain the erosion check name.
   erosion-history:
-    needs: erosion
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.erosion.result == 'success' }}
+    needs: [erosion, duplication]
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.erosion.result == 'success' || needs.duplication.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -400,21 +403,50 @@ jobs:
         with:
           persist-credentials: false
       - name: Download erosion report
+        if: needs.erosion.result == 'success'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: code-erosion
           path: ${{ runner.temp }}/erosion
-      - name: Convert report to named benchmark metrics
+      - name: Convert erosion report to benchmark metrics
+        if: needs.erosion.result == 'success'
         run: |
           python3 .github/scripts/benchmark_metrics.py \
             --input "$RUNNER_TEMP/erosion/report.json" \
             --output "$RUNNER_TEMP/erosion/benchmark.json"
-      - name: Publish history and alert on regression
+      - name: Publish erosion history and alert
+        if: needs.erosion.result == 'success'
         uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
         with:
           name: Code erosion
           tool: customSmallerIsBetter
           output-file-path: ${{ runner.temp }}/erosion/benchmark.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          github-token: ${{ github.token }}
+          auto-push: true
+          alert-threshold: "110%"
+          comment-on-alert: true
+          fail-on-alert: false
+      - name: Download duplication report
+        if: needs.duplication.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: code-duplication
+          path: ${{ runner.temp }}/duplication
+      - name: Convert duplication report to benchmark metrics
+        if: needs.duplication.result == 'success'
+        run: |
+          python3 .github/scripts/benchmark_metrics.py --kind duplication \
+            --input "$RUNNER_TEMP/duplication/report.json" \
+            --output "$RUNNER_TEMP/duplication/benchmark.json"
+      - name: Publish duplication history and alert
+        if: needs.duplication.result == 'success'
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
+        with:
+          name: Code duplication
+          tool: customSmallerIsBetter
+          output-file-path: ${{ runner.temp }}/duplication/benchmark.json
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
           github-token: ${{ github.token }}
@@ -644,9 +676,9 @@ jobs:
           else
             exit 1
           fi
-          if [[ "$DUPLICATION_OUTPUT" == true && "$EVENT_NAME" == pull_request ]]; then
+          if [[ "$DUPLICATION_OUTPUT" == true ]]; then
             [[ "$DUPLICATION_RESULT" == success ]]
-          elif [[ "$DUPLICATION_OUTPUT" == false || ("$DUPLICATION_OUTPUT" == true && "$EVENT_NAME" == push) ]]; then
+          elif [[ "$DUPLICATION_OUTPUT" == false ]]; then
             [[ "$DUPLICATION_RESULT" == skipped ]]
           else
             exit 1
@@ -659,7 +691,7 @@ jobs:
           # Publisher failures stay red on their own jobs, without making the
           # stable required check a merge gate. Skipped is valid only when the
           # upstream condition cannot run; cancellation loses a point and fails.
-          if [[ "$EVENT_NAME" == push && "$EROSION_RESULT" == success ]]; then
+          if [[ "$EVENT_NAME" == push && ("$EROSION_RESULT" == success || "$DUPLICATION_RESULT" == success) ]]; then
             [[ "$HISTORY_RESULT" == success || "$HISTORY_RESULT" == failure ]]
           else
             [[ "$HISTORY_RESULT" == skipped ]]

@@ -61,6 +61,7 @@ def normalize(raw, root):
                 fragment["name"] = relative
     except (KeyError, TypeError, AttributeError, ValueError) as exc:
         raise ValueError(f"invalid jscpd report: {exc}") from exc
+    data["schema_version"] = 1  # Version the normalized artifact for downstream consumers.
     return data
 
 
