@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790444515144,
+  "lastUpdate": 1790450118531,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -347,6 +347,60 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/e11ab8e8d543db98fadddd5571ff49e2b4f61069"
         },
         "date": 1790444511009,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 35.66333549473505,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 14,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 58.44101471485502,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 19,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a543a77aeff68ecf35142c066d0b2c97fdb9a6e8",
+          "message": "tools: rank complexity and duplication hotspots by churn (#243)\n\n* tools: rank complexity and duplication hotspots by churn (#242)\n\n* test: rename the fixture complexity parameter to avoid a CodeQL false positive (#242)",
+          "timestamp": "2026-09-26T22:14:43+03:00",
+          "tree_id": "2caba10ab2e06bd8f9ab721b9d7d80f9f8938474",
+          "url": "https://github.com/leugenea/qmix/commit/a543a77aeff68ecf35142c066d0b2c97fdb9a6e8"
+        },
+        "date": 1790450117231,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
