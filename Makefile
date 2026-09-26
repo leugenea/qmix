@@ -1,4 +1,4 @@
-.PHONY: run compose-up build version test test-integration test-workflow-routing test-erosion test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
+.PHONY: run compose-up build version test test-integration test-workflow-routing test-erosion test-duplication duplication test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
 
 version:
 	go run ./internal/buildinfo/cmd/version -format=json
@@ -28,8 +28,26 @@ test:
 test-integration:
 	go test -race -tags=integration -run 'Integration' ./internal/server/...
 
-test-workflow-routing: test-erosion
+test-workflow-routing: test-erosion test-duplication
 	python3 .github/scripts/workflow_paths_test.py -v
+
+test-duplication:
+	python3 .github/scripts/jscpd_report_test.py -v
+
+# JSCPD_BIN must point to a separately SHA-256-verified jscpd v5.3.2 binary.
+# Keep local output outside the working tree; set TMPDIR to a scratch directory.
+duplication: SHELL := /bin/bash
+duplication: test-duplication
+	@set -euo pipefail; : "$${JSCPD_BIN:?Set JSCPD_BIN to the checksum-verified jscpd v5.3.2 binary}"; \
+		: "$${TMPDIR:?Set TMPDIR to a scratch directory}"; \
+		out=$$(mktemp -d "$$TMPDIR/qmix-jscpd.XXXXXX"); \
+		python3 .github/scripts/jscpd_report.py sources . > "$$out/sources"; \
+		mapfile -d '' -t sources < "$$out/sources"; \
+		"$$JSCPD_BIN" --config .jscpd.json --absolute --reporters json \
+			--threshold 100 --fail-on-empty --output "$$out" "$${sources[@]}"; \
+		python3 .github/scripts/jscpd_report.py report "$$out/jscpd-report.json" \
+			"$$out/report.json" "$$out/report.md"; \
+		printf 'Duplication report: %s\n' "$$out/report.md"
 
 test-erosion:
 	python3 .github/scripts/erosion_test.py -v
