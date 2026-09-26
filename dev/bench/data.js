@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790455085776,
+  "lastUpdate": 1790455088252,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -777,6 +777,70 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go clones",
             "value": 3,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "958d0c27aca564f3fb21a5d268222109de717a1d",
+          "message": "refactor: remove the Hub legacy routing path (#218) (#245)",
+          "timestamp": "2026-09-26T23:37:30+03:00",
+          "tree_id": "1d30acceabe8e0573b3ac5eb19c33e4873906b67",
+          "url": "https://github.com/leugenea/qmix/commit/958d0c27aca564f3fb21a5d268222109de717a1d"
+        },
+        "date": 1790455087454,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0.22967845016976232,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 2,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0.38525963149078724,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 2,
             "unit": "clones"
           },
           {
