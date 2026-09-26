@@ -1,7 +1,11 @@
 package com.qmix.tv
 
+import android.os.Handler
 import android.os.Looper
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +25,28 @@ internal class TestMutationLane : AutoCloseable {
 /** The Android main looper is an existing dedicated mutation lane (not test-owned). */
 internal fun mainTestMutationContext() = QueueMutationContext(Dispatchers.Main.immediate) {
     Looper.myLooper() === Looper.getMainLooper()
+}
+
+/** Wait for every earlier lane task, without joining a blocked lane forever. */
+internal fun QueueMutationContext.awaitLaneIdleForTest(timeoutMs: Long = 5_000) {
+    val mainLane = dispatcher == Dispatchers.Main || dispatcher == Dispatchers.Main.immediate
+    if (mainLane) {
+        if (Looper.myLooper() === Looper.getMainLooper()) return
+    } else if (isOnContext()) {
+        return
+    }
+    val reached = CountDownLatch(1)
+    if (mainLane) {
+        if (!Handler(Looper.getMainLooper()).post { reached.countDown() }) {
+            throw AssertionError("main mutation lane rejected test barrier")
+        }
+    } else {
+        dispatcher.dispatch(EmptyCoroutineContext, Runnable { reached.countDown() })
+    }
+    if (!reached.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+        val lane = if (mainLane) "main mutation lane" else "queue mutation lane"
+        throw AssertionError("$lane did not become idle within ${timeoutMs}ms")
+    }
 }
 
 /** Callback-controlled fixtures for existing host/playback contracts, not production adapters. */

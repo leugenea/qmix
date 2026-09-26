@@ -121,6 +121,8 @@ class Media3PlaybackInstrumentationTest {
             "host-secret",
             testQueueCommand { _, _, callback -> commandCallbacks.addLast(callback) },
             fetcher,
+            // Keep this media-decoding scenario's original inline queue fixture semantics.
+            mutationContext = QueueMutationContext(Dispatchers.Unconfined) { true },
         )
         val coordinatorRef = AtomicReference<AuthoritativePlaybackCoordinator>()
         onMain {

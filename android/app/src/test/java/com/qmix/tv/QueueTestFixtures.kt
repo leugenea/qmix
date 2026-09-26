@@ -1,6 +1,7 @@
 package com.qmix.tv
 
 import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.resume
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -40,6 +41,16 @@ internal fun testQueueCoordinator(
         if (!continuation.isActive) request.cancel()
     } }, observer, parentScope, mutationContext,
 )
+
+/** FIFO test barrier: never block the lane on itself, and never wait indefinitely for a stalled lane. */
+internal fun QueueMutationContext.awaitLaneIdleForTest(timeoutMs: Long = 5_000) {
+    if (isOnContext()) return
+    val reached = CountDownLatch(1)
+    dispatcher.dispatch(EmptyCoroutineContext, Runnable { reached.countDown() })
+    if (!reached.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+        throw AssertionError("queue mutation lane did not become idle within ${timeoutMs}ms")
+    }
+}
 
 /** Owns a real mutation thread for tests with IO/collection/callback-thread entry points.
  * Construct before the coordinator; close the coordinator before this context in finally.

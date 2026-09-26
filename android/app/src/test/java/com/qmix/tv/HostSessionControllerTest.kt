@@ -905,14 +905,23 @@ class HostSessionControllerTest {
         repository.publish(
             RoomSyncState.Active("ABCD", staleReplacement, Freshness.STALE, LiveConnection.RECONNECTING),
         )
+        controller.awaitRoomStateForTest { live ->
+            (live.synchronization as? RoomSyncState.Active)?.let { sync ->
+                sync.freshness == Freshness.STALE && sync.room?.current?.trackId == "two"
+            } == true
+        }
         val presentation = controller.state as HostingState.LiveRoom
         assertEquals(Freshness.STALE, (presentation.synchronization as RoomSyncState.Active).freshness)
         assertEquals("two", presentation.synchronization.room?.current?.trackId)
         assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
 
         controller.onRetryCurrent()
+        reconciler.awaitCall()
         assertEquals(listOf("ABCD", "ABCD"), reconciler.calls)
         reconciler.complete(RoomFetchResult.Success(selected))
+        // Callback completion posts the retry continuation to the mutation lane.
+        // Its prepare/play pair must finish before inspecting the engine or emitting ENDED.
+        mutationForTest().awaitLaneIdleForTest()
         assertEquals(listOf("one", "one"), engine.prepared.map(PlaybackMedia::trackId))
         assertEquals(4, engine.playCount)
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED))
@@ -920,8 +929,8 @@ class HostSessionControllerTest {
 
         controller.endRoom()
         assertEquals(3, engine.pauseCount)
-        assertTrue(repository.closed)
         assertTrue(controller.awaitSetupForTest())
+        assertTrue(repository.closed)
     }
 
     @Test

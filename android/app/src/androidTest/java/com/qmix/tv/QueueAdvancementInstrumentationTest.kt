@@ -281,6 +281,7 @@ class QueueAdvancementInstrumentationTest {
         controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
             LocalPlaybackStatus.BUFFERING }
         awaitConditionForTest { playback.prepared.map(PlaybackMedia::trackId) == listOf("current") }
+        mutationLane.context.awaitLaneIdleForTest() // prepare() has returned; the listener and play() have settled.
         assertEquals(listOf("current"), playback.prepared.map(PlaybackMedia::trackId))
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
 
@@ -343,6 +344,7 @@ class QueueAdvancementInstrumentationTest {
         assertEquals(listOf("ABCD"), retryRequests)
         checkNotNull(retry)(RoomFetchResult.Success(selected))
         awaitConditionForTest { playback.prepared.size == 2 }
+        mutationLane.context.awaitLaneIdleForTest() // The retry's prepare/play pair has settled before ENDED.
         assertEquals(listOf("current", "current"), playback.prepared.map(PlaybackMedia::trackId))
 
         playback.emit(PlaybackState("current", PlaybackStatus.ENDED))
