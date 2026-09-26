@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790455088252,
+  "lastUpdate": 1790456614420,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -514,6 +514,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go erosion",
             "value": 34.11421430245574,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 58.44101471485502,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 19,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a4b489360cf963d5e342c9b7e7a785c1d0dd7d46",
+          "message": "refactor: deduplicate Store host-authorized lookup (#246) (#247)",
+          "timestamp": "2026-09-27T00:02:58+03:00",
+          "tree_id": "b5eb8c089fa214dcc1ea57f683c3d5743d6bbac5",
+          "url": "https://github.com/leugenea/qmix/commit/a4b489360cf963d5e342c9b7e7a785c1d0dd7d46"
+        },
+        "date": 1790456612927,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 34.21258994404647,
             "unit": "%"
           },
           {
