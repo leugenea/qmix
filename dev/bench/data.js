@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790450121072,
+  "lastUpdate": 1790452034932,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -406,6 +406,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go erosion",
             "value": 35.66333549473505,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 14,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 58.44101471485502,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 19,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d4f102f70ea70e3bee2e1cdf17d557196d62eef",
+          "message": "refactor: merge the duplicated token-bucket limiters into internal/ratelimit (#219) (#244)",
+          "timestamp": "2026-09-26T22:46:39+03:00",
+          "tree_id": "37b8b87eaf028a3b45ca5ddc35807fe63f2b0d64",
+          "url": "https://github.com/leugenea/qmix/commit/1d4f102f70ea70e3bee2e1cdf17d557196d62eef"
+        },
+        "date": 1790452034106,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 35.67649250764563,
             "unit": "%"
           },
           {
