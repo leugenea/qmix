@@ -20,10 +20,10 @@ JS = "internal/server/guest/a.js"
 NOW = "2026-09-26T12:00:00+00:00"
 
 
-def function(path, language, name, ccn=11, nloc=4):
+def function(path, language, name, complexity=11, nloc=4):
     return {"id": f"{path}::{name}", "file": path, "language": language,
-            "function": name, "ccn": ccn, "nloc": nloc,
-            "mass": ccn * math.sqrt(nloc), "start": 1, "end": 4}
+            "function": name, "ccn": complexity, "nloc": nloc,
+            "mass": complexity * math.sqrt(nloc), "start": 1, "end": 4}
 
 
 def clone(first, second, lines, start=1):
@@ -81,9 +81,9 @@ class HotspotsTest(unittest.TestCase):
         self.commit("2026-06-01T00:00:00+00:00", GO)
         self.commit("2026-09-01T00:00:00+00:00", OTHER)
         self.commit("2026-09-10T00:00:00+00:00", OTHER)
-        self.rows = [function(GO, "Go", "cold", ccn=40),
+        self.rows = [function(GO, "Go", "cold", complexity=40),
                      function(OTHER, "Go", "hot"),
-                     function(OTHER, "Go", "boundary", ccn=10)]
+                     function(OTHER, "Go", "boundary", complexity=10)]
         self.reports()
         result, data, text = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -109,10 +109,10 @@ class HotspotsTest(unittest.TestCase):
         self.commit("2026-09-01T00:00:00+00:00", GO, KT, JS)
         self.commit("2026-09-23T00:00:00+00:00", GO, KT, JS)
         self.commit("2026-09-24T00:00:00+00:00", GO)
-        self.rows = [function(GO, "Go", "lower", ccn=11),
-                     function(KT, "Kotlin", "kt", ccn=30),
-                     function(JS, "JS", "js", ccn=12),
-                     function(GO, "Go", "higher", ccn=20)]
+        self.rows = [function(GO, "Go", "lower", complexity=11),
+                     function(KT, "Kotlin", "kt", complexity=30),
+                     function(JS, "JS", "js", complexity=12),
+                     function(GO, "Go", "higher", complexity=20)]
         self.reports()
         result, data, text = self.run_script("--ref", "HEAD", "--days", "7")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -137,7 +137,7 @@ class HotspotsTest(unittest.TestCase):
         self.commit("2026-09-01T00:00:00+00:00", GO)
         for field, value in (("function", None), ("start", 0), ("end", 0)):
             with self.subTest(field=field):
-                row = function(GO, "Go", "below-threshold", ccn=10)
+                row = function(GO, "Go", "below-threshold", complexity=10)
                 if value is None:
                     del row[field]
                 else:
