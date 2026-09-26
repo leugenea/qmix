@@ -518,8 +518,9 @@ func (s *Store) roomLocked(ref roomRef) (*Room, error) {
 
 func (s *Store) publishLocked(room *Room, name string, data interface{}) {
 	ref := roomRef{code: room.Code, generation: room.generation}
+	payload := marshalEventData(data)
 	for hub := range s.hubs {
-		hub.publishRef(ref, name, data)
+		hub.publishRef(ref, name, payload)
 	}
 }
 

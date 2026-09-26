@@ -64,7 +64,7 @@ func TestRoomSubmissionAliasesShareExactRateLimitContract(t *testing.T) {
 		}
 	}
 
-	events, cancel := server.hub.Subscribe(code)
+	events, cancel := subscribeTestEvents(t, server.store, server.hub, code)
 	defer cancel()
 	before, err := store.View(code)
 	if err != nil {

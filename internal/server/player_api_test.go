@@ -45,7 +45,7 @@ func TestPlayerReportUpdatesCurrentAndPublishesExactState(t *testing.T) {
 	mux := newTestMux(server)
 	code, token := createRoom(t, mux)
 	track := startPlayerCurrentTrack(t, server, code, token)
-	events, cancel := server.hub.Subscribe(code)
+	events, cancel := subscribeTestEvents(t, server.store, server.hub, code)
 	defer cancel()
 
 	response := reportPlayer(t, mux, code, token, track.ID, "paused", 17)
@@ -56,8 +56,8 @@ func TestPlayerReportUpdatesCurrentAndPublishesExactState(t *testing.T) {
 	if event.Name != "player_state" {
 		t.Fatalf("event name = %q, want player_state", event.Name)
 	}
-	payload, ok := event.Data.(map[string]interface{})
-	if !ok || len(payload) != 3 || payload["track_id"] != track.ID || payload["state"] != "paused" || payload["pos_sec"] != 17 {
+	payload := decodeEventPayload[map[string]interface{}](t, event)
+	if len(payload) != 3 || payload["track_id"] != track.ID || payload["state"] != "paused" || payload["pos_sec"] != float64(17) {
 		t.Fatalf("event payload = %#v", event.Data)
 	}
 
@@ -112,7 +112,7 @@ func TestPlayerReportEndedClearsOnlyCurrentAndPreservesQueue(t *testing.T) {
 	secondResponse := addTrack(t, mux, code, "https://example.test/next")
 	var second Track
 	decodeBody(t, secondResponse, &second)
-	events, cancel := server.hub.Subscribe(code)
+	events, cancel := subscribeTestEvents(t, server.store, server.hub, code)
 	defer cancel()
 
 	response := reportPlayer(t, mux, code, token, first.ID, "ended", 21)
@@ -120,8 +120,8 @@ func TestPlayerReportEndedClearsOnlyCurrentAndPreservesQueue(t *testing.T) {
 		t.Fatalf("ended response current = %+v, want nil", response.Current)
 	}
 	event := receiveWithin(t, events)
-	payload := event.Data.(map[string]interface{})
-	if event.Name != "player_state" || len(payload) != 3 || payload["track_id"] != first.ID || payload["state"] != "ended" || payload["pos_sec"] != 21 {
+	payload := decodeEventPayload[map[string]interface{}](t, event)
+	if event.Name != "player_state" || len(payload) != 3 || payload["track_id"] != first.ID || payload["state"] != "ended" || payload["pos_sec"] != float64(21) {
 		t.Fatalf("ended event = %+v", event)
 	}
 	view, err := server.store.View(code)
@@ -247,7 +247,7 @@ func TestPlayerReportConflictDoesNotMutateOrPublish(t *testing.T) {
 	mux := newTestMux(server)
 	code, token := createRoom(t, mux)
 	track := startPlayerCurrentTrack(t, server, code, token)
-	events, cancel := server.hub.Subscribe(code)
+	events, cancel := subscribeTestEvents(t, server.store, server.hub, code)
 	defer cancel()
 
 	for _, trackID := range []string{"old-track", track.ID} {
@@ -386,7 +386,7 @@ func TestPlayerReportConcurrentConsumersRemainIsolated(t *testing.T) {
 	channels := make([]<-chan Event, 2)
 	cancels := make([]func(), 2)
 	for i, hub := range hubs {
-		channels[i], cancels[i] = hub.Subscribe(credentials.Code)
+		channels[i], cancels[i] = subscribeTestEvents(t, store, hub, credentials.Code)
 		defer cancels[i]()
 	}
 	ref, err := store.PlayerPreflight(credentials.Code, credentials.HostToken)
@@ -397,8 +397,9 @@ func TestPlayerReportConcurrentConsumersRemainIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, second := receiveWithin(t, channels[0]), receiveWithin(t, channels[1])
-	first.Data.(map[string]interface{})["state"] = "mutated"
-	if second.Data.(map[string]interface{})["state"] != "paused" {
+	firstPayload := decodeEventPayload[map[string]interface{}](t, first)
+	firstPayload["state"] = "mutated"
+	if decodeEventPayload[map[string]interface{}](t, second)["state"] != "paused" {
 		t.Fatal("player event payload shared across hubs")
 	}
 }

@@ -55,7 +55,7 @@ func TestStoreSnapshotsAreSafeOutsideLock(t *testing.T) {
 	room.Current = &Current{TrackID: "current", URL: "https://example.com/current", Title: "current title", Artist: "artist", ResolvedBy: "test"}
 	store.mu.Unlock()
 
-	events, cancel := server.hub.Subscribe(room.Code)
+	events, cancel := subscribeTestEvents(t, store, server.hub, room.Code)
 	defer cancel()
 	snapshot, err := store.EventSnapshot(room.Code)
 	if err != nil {
@@ -95,7 +95,7 @@ func TestStoreSnapshotsAreSafeOutsideLock(t *testing.T) {
 func TestConcurrentAppendEventsMatchCommittedOrder(t *testing.T) {
 	server, store := newTestServer()
 	room := mustCreateRoom(t, store)
-	events, cancel := server.hub.Subscribe(room.Code)
+	events, cancel := subscribeTestEvents(t, store, server.hub, room.Code)
 	defer cancel()
 	firstRef, err := store.AppendPreflight(room.Code)
 	if err != nil {
@@ -129,8 +129,12 @@ func TestConcurrentAppendEventsMatchCommittedOrder(t *testing.T) {
 	if firstEvent.ID >= secondEvent.ID || firstEvent.Name != "queue_updated" || secondEvent.Name != "queue_updated" {
 		t.Fatalf("events out of order: %+v then %+v", firstEvent, secondEvent)
 	}
-	firstQueue := firstEvent.Data.(map[string]interface{})["queue"].([]Track)
-	secondQueue := secondEvent.Data.(map[string]interface{})["queue"].([]Track)
+	firstQueue := decodeEventPayload[struct {
+		Queue []Track `json:"queue"`
+	}](t, firstEvent).Queue
+	secondQueue := decodeEventPayload[struct {
+		Queue []Track `json:"queue"`
+	}](t, secondEvent).Queue
 	view, err := store.View(room.Code)
 	if err != nil {
 		t.Fatalf("View: %v", err)
@@ -163,10 +167,8 @@ func TestEventDeliveriesDoNotShareMutableData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRoom: %v", err)
 	}
-
 	var subscriptions []*subscriber
 	var cancellations []func()
-	var compatibilityChannels []<-chan Event
 	for _, hub := range hubs {
 		for subscriberIndex := 0; subscriberIndex < 2; subscriberIndex++ {
 			sub, _, cancel, subscribeErr := store.subscribeEvents(credentials.Code, hub)
@@ -175,10 +177,6 @@ func TestEventDeliveriesDoNotShareMutableData(t *testing.T) {
 			}
 			subscriptions = append(subscriptions, sub)
 			cancellations = append(cancellations, cancel)
-
-			compatibility, cancelCompatibility := hub.Subscribe(credentials.Code)
-			compatibilityChannels = append(compatibilityChannels, compatibility)
-			cancellations = append(cancellations, cancelCompatibility)
 		}
 	}
 	defer func() {
@@ -186,7 +184,6 @@ func TestEventDeliveriesDoNotShareMutableData(t *testing.T) {
 			cancel()
 		}
 	}()
-
 	ref, err := store.AppendPreflight(credentials.Code)
 	if err != nil {
 		t.Fatalf("AppendPreflight: %v", err)
@@ -194,25 +191,23 @@ func TestEventDeliveriesDoNotShareMutableData(t *testing.T) {
 	if _, err := store.Append(ref, Track{ID: "one", Title: "original"}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-
 	var events []Event
 	for _, sub := range subscriptions {
 		events = append(events, receiveWithin(t, sub.ch))
 	}
-	for _, channel := range compatibilityChannels {
-		events = append(events, receiveWithin(t, channel))
-	}
-	firstData := events[0].Data.(map[string]interface{})
-	firstData["subscriber"] = "mutated"
-	firstData["queue"].([]Track)[0].Title = "mutated"
-
+	first := decodeEventPayload[struct {
+		Queue []Track `json:"queue"`
+	}](t, events[0])
+	first.Queue[0].Title = "mutated"
 	for index, event := range events[1:] {
-		data := event.Data.(map[string]interface{})
-		if _, exists := data["subscriber"]; exists {
-			t.Fatalf("delivery %d shares its map with the first subscriber", index+1)
-		}
-		if got := data["queue"].([]Track)[0].Title; got != "original" {
+		payload := decodeEventPayload[struct {
+			Queue []Track `json:"queue"`
+		}](t, event)
+		if got := payload.Queue[0].Title; got != "original" {
 			t.Fatalf("delivery %d queue title = %q, want original", index+1, got)
+		}
+		if event.Data != events[0].Data {
+			t.Fatalf("delivery %d differs from one immutable serialized payload", index+1)
 		}
 	}
 	view, err := store.View(credentials.Code)
@@ -224,57 +219,18 @@ func TestEventDeliveriesDoNotShareMutableData(t *testing.T) {
 	}
 }
 
-func TestEventClonePreservesConcreteTypes(t *testing.T) {
-	type nested struct {
-		Tracks []Track
-		Lookup map[string]int
-	}
-	pointer := &nested{
-		Tracks: []Track{{ID: "one", Title: "original"}},
-		Lookup: map[string]int{"one": 1},
-	}
-	original := map[string]interface{}{
-		"strings": map[string]string{"key": "value"},
-		"ints":    map[string]int{"key": 1},
-		"tracks":  []Track{{ID: "one", Title: "original"}},
-		"nested":  pointer,
-		"array":   [1][]string{{"value"}},
-	}
-
-	cloned := cloneEventData(original).(map[string]interface{})
-	cloned["strings"].(map[string]string)["key"] = "changed"
-	cloned["ints"].(map[string]int)["key"] = 2
-	cloned["tracks"].([]Track)[0].Title = "changed"
-	clonedNested := cloned["nested"].(*nested)
-	clonedNested.Tracks[0].Title = "changed"
-	clonedNested.Lookup["one"] = 2
-	clonedArray := cloned["array"].([1][]string)
-	clonedArray[0][0] = "changed"
-
-	if original["strings"].(map[string]string)["key"] != "value" ||
-		original["ints"].(map[string]int)["key"] != 1 ||
-		original["tracks"].([]Track)[0].Title != "original" ||
-		pointer.Tracks[0].Title != "original" || pointer.Lookup["one"] != 1 ||
-		original["array"].([1][]string)[0][0] != "value" {
-		t.Fatalf("clone aliases original data: original=%+v cloned=%+v", original, cloned)
-	}
-	if cloneEventData(nil) != nil {
-		t.Fatal("nil clone is non-nil")
-	}
-}
-
 func TestConcurrentEventConsumersAreIsolated(t *testing.T) {
 	hub := NewHub()
-	first, cancelFirst := hub.Subscribe("room")
+	ref := roomRef{code: "room", generation: 1}
+	first, cancelFirst := hub.subscribeRef(ref)
 	defer cancelFirst()
-	second, cancelSecond := hub.Subscribe("room")
+	second, cancelSecond := hub.subscribeRef(ref)
 	defer cancelSecond()
-	hub.Publish("room", "queue_updated", map[string]interface{}{
-		"queue": []Track{{ID: "one", Title: "original"}},
-	})
-	firstEvent, secondEvent := receiveWithin(t, first), receiveWithin(t, second)
-	firstQueue := firstEvent.Data.(map[string]interface{})["queue"].([]Track)
-
+	hub.publishRef(ref, "queue_updated", map[string]interface{}{"queue": []Track{{ID: "one", Title: "original"}}})
+	firstEvent, secondEvent := receiveWithin(t, first.ch), receiveWithin(t, second.ch)
+	firstQueue := decodeEventPayload[struct {
+		Queue []Track `json:"queue"`
+	}](t, firstEvent).Queue
 	start := make(chan struct{})
 	var consumers sync.WaitGroup
 	consumers.Add(2)
@@ -289,15 +245,24 @@ func TestConcurrentEventConsumersAreIsolated(t *testing.T) {
 		defer consumers.Done()
 		<-start
 		for index := 0; index < 10000; index++ {
-			if _, err := json.Marshal(secondEvent.Data); err != nil {
-				t.Errorf("marshal event: %v", err)
+			var payload struct {
+				Queue []Track `json:"queue"`
+			}
+			if err := json.Unmarshal([]byte(secondEvent.Data.(eventJSON)), &payload); err != nil {
+				t.Errorf("decode event: %v", err)
+				return
+			}
+			if payload.Queue[0].Title != "original" {
+				t.Errorf("second consumer saw mutation")
 				return
 			}
 		}
 	}()
 	close(start)
 	consumers.Wait()
-	if got := secondEvent.Data.(map[string]interface{})["queue"].([]Track)[0].Title; got != "original" {
+	if got := decodeEventPayload[struct {
+		Queue []Track `json:"queue"`
+	}](t, secondEvent).Queue[0].Title; got != "original" {
 		t.Fatalf("second consumer queue title = %q, want original", got)
 	}
 }
@@ -527,30 +492,60 @@ type reusedCodeGenerator struct{ code string }
 
 func (g reusedCodeGenerator) Generate() string { return g.code }
 
-func TestSweepDisconnectsCodeOnlySubscriberBeforeCodeReuse(t *testing.T) {
-	const code = "reusec"
+func TestRefInvalidationAndCancelAreIdempotent(t *testing.T) {
+	ref := roomRef{code: "room", generation: 1}
+	for attempt := 0; attempt < 1000; attempt++ {
+		hub := NewHub()
+		sub, cancel := hub.subscribeRef(ref)
+		start := make(chan struct{})
+		var calls sync.WaitGroup
+		calls.Add(2)
+		go func() { defer calls.Done(); <-start; cancel() }()
+		go func() { defer calls.Done(); <-start; hub.invalidateRef(ref) }()
+		close(start)
+		calls.Wait()
+		cancel()
+		select {
+		case <-sub.done:
+		default:
+			t.Fatal("subscriber remains connected")
+		}
+	}
+}
+
+func TestSweepTerminatesRefHTTPStreamBeforeCodeReuse(t *testing.T) {
+	const code = "reuseh"
 	store := NewStore(time.Hour, time.Hour, reusedCodeGenerator{code: code})
 	hub := NewHub()
 	NewServer(store, hub)
-
-	credentials, err := store.CreateRoom()
-	if err != nil {
+	if _, err := store.CreateRoom(); err != nil {
 		t.Fatalf("CreateRoom old: %v", err)
 	}
-	events, cancel := hub.Subscribe(credentials.Code)
+	sub, snapshot, cancelSub, err := store.subscribeEvents(code, hub)
+	if err != nil {
+		t.Fatalf("subscribeEvents: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	done := compatibilitySubscriberDone(t, hub, credentials.Code, events)
-
+	writer := &controlledSSEWriter{header: make(http.Header)}
+	subscribed := make(chan struct{})
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		close(subscribed)
+		hub.serveSubscriptionHTTP(ctx, writer, sub, cancelSub, snapshot)
+	}()
+	<-subscribed
 	store.mu.Lock()
 	store.rooms[code].LastActivity = time.Now().Add(-2 * store.TTL)
 	store.mu.Unlock()
 	store.sweep()
 	select {
-	case <-done:
-	default:
-		t.Fatal("expired room code-only subscriber remains connected")
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("SSE handler remained connected after expiry")
 	}
-
+	writesAfterExpiry := writer.writes
 	replacement, err := store.CreateRoom()
 	if err != nil {
 		t.Fatalf("CreateRoom replacement: %v", err)
@@ -562,124 +557,8 @@ func TestSweepDisconnectsCodeOnlySubscriberBeforeCodeReuse(t *testing.T) {
 	if _, err := store.Append(ref, Track{ID: "replacement"}); err != nil {
 		t.Fatalf("Append replacement: %v", err)
 	}
-	select {
-	case event := <-events:
-		t.Fatalf("expired code-only subscriber received replacement event: %+v", event)
-	default:
-	}
-}
-
-func TestCompatibilityInvalidationAndCancelAreIdempotent(t *testing.T) {
-	for attempt := 0; attempt < 1000; attempt++ {
-		hub := NewHub()
-		_, cancel := hub.Subscribe("room")
-		start := make(chan struct{})
-		var calls sync.WaitGroup
-		calls.Add(2)
-		go func() {
-			defer calls.Done()
-			<-start
-			cancel()
-		}()
-		go func() {
-			defer calls.Done()
-			<-start
-			hub.invalidateRef(roomRef{code: "room", generation: 1})
-		}()
-		close(start)
-		calls.Wait()
-		cancel()
-	}
-}
-
-func compatibilitySubscriberDone(t *testing.T, hub *Hub, code string, events <-chan Event) <-chan struct{} {
-	t.Helper()
-	hub.mu.Lock()
-	defer hub.mu.Unlock()
-	for sub := range hub.rooms[code].subs {
-		if sub.ch == events {
-			return sub.done
-		}
-	}
-	t.Fatal("code-only subscriber not registered")
-	return nil
-}
-
-func TestSweepTerminatesCompatibilityHTTPStreamsBeforeCodeReuse(t *testing.T) {
-	tests := []struct {
-		name  string
-		serve func(*Hub, context.Context, http.ResponseWriter, string, chan<- struct{}) error
-	}{
-		{
-			name: "ServeHTTP",
-			serve: func(hub *Hub, ctx context.Context, writer http.ResponseWriter, code string, subscribed chan<- struct{}) error {
-				hub.ServeHTTP(ctx, writer, code, func() (int64, interface{}) {
-					close(subscribed)
-					return 0, map[string]interface{}{}
-				})
-				return nil
-			},
-		},
-		{
-			name: "ServeRoomHTTP",
-			serve: func(hub *Hub, ctx context.Context, writer http.ResponseWriter, code string, subscribed chan<- struct{}) error {
-				return hub.ServeRoomHTTP(ctx, writer, code, func() (int64, interface{}, error) {
-					close(subscribed)
-					return 0, map[string]interface{}{}, nil
-				})
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			const code = "reuseh"
-			store := NewStore(time.Hour, time.Hour, reusedCodeGenerator{code: code})
-			hub := NewHub()
-			NewServer(store, hub)
-			if _, err := store.CreateRoom(); err != nil {
-				t.Fatalf("CreateRoom old: %v", err)
-			}
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			writer := &controlledSSEWriter{header: make(http.Header)}
-			subscribed := make(chan struct{})
-			handlerDone := make(chan error, 1)
-			go func() {
-				handlerDone <- test.serve(hub, ctx, writer, code, subscribed)
-			}()
-			<-subscribed
-
-			store.mu.Lock()
-			store.rooms[code].LastActivity = time.Now().Add(-2 * store.TTL)
-			store.mu.Unlock()
-			store.sweep()
-			select {
-			case err := <-handlerDone:
-				if err != nil {
-					t.Fatalf("compatibility SSE handler: %v", err)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("compatibility SSE handler remained connected after expiry")
-			}
-			writesAfterExpiry := writer.writes
-
-			replacement, err := store.CreateRoom()
-			if err != nil {
-				t.Fatalf("CreateRoom replacement: %v", err)
-			}
-			ref, err := store.AppendPreflight(replacement.Code)
-			if err != nil {
-				t.Fatalf("AppendPreflight replacement: %v", err)
-			}
-			if _, err := store.Append(ref, Track{ID: "replacement"}); err != nil {
-				t.Fatalf("Append replacement: %v", err)
-			}
-			if writer.writes != writesAfterExpiry {
-				t.Fatalf("expired compatibility stream received replacement event: writes = %d, want %d", writer.writes, writesAfterExpiry)
-			}
-		})
+	if writer.writes != writesAfterExpiry {
+		t.Fatalf("expired stream received replacement event: writes = %d, want %d", writer.writes, writesAfterExpiry)
 	}
 }
 

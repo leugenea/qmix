@@ -165,10 +165,11 @@ func TestAddTrackRejectsReplacementRoomDuringResolution(t *testing.T) {
 
 	store.mu.Lock()
 	delete(store.rooms, code)
-	replacement := &Room{Code: code, HostToken: newToken(), LastActivity: time.Now()}
+	store.nextGen++
+	replacement := &Room{Code: code, HostToken: newToken(), LastActivity: time.Now(), generation: store.nextGen}
 	store.rooms[code] = replacement
 	store.mu.Unlock()
-	ch, cancel := s.hub.Subscribe(code)
+	ch, cancel := subscribeTestEvents(t, s.store, s.hub, code)
 	defer cancel()
 	close(r.release)
 

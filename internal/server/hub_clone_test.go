@@ -1,139 +1,134 @@
 package server
 
 import (
-	"reflect"
+	"encoding/json"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
 
-type eventClonePartiallyOpaque struct {
-	Values []string
-	marker string
+// countingPayload proves encoding occurs at publication, not once per stream.
+type countingPayload struct{ calls *int }
+
+func (p countingPayload) MarshalJSON() ([]byte, error) {
+	*p.calls++
+	return []byte(`{"version":1}`), nil
 }
 
-type eventCloneNamedMap map[string][]string
-
-type eventCloneNamedSlice []map[string]*[1][]string
-
-func TestCloneEventDataClonesExportedContainersInPartiallyOpaqueStruct(t *testing.T) {
-	original := eventClonePartiallyOpaque{
-		Values: []string{"original"},
-		marker: "preserved",
+func TestPublishEncodesOnceForAllSubscribers(t *testing.T) {
+	hub := NewHub()
+	ref := roomRef{code: "room", generation: 1}
+	first, cancelFirst := hub.subscribeRef(ref)
+	defer cancelFirst()
+	second, cancelSecond := hub.subscribeRef(ref)
+	defer cancelSecond()
+	calls := 0
+	hub.publishRef(ref, "queue_updated", countingPayload{calls: &calls})
+	if calls != 1 {
+		t.Fatalf("marshal calls at publication = %d, want 1", calls)
 	}
-
-	cloned := cloneEventData(original).(eventClonePartiallyOpaque)
-	if cloned.marker != original.marker {
-		t.Fatalf("unexported marker = %q, want %q", cloned.marker, original.marker)
+	for _, sub := range []*subscriber{first, second} {
+		recorder := httptest.NewRecorder()
+		if err := writeEvent(recorder, <-sub.ch); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := recorder.Body.String(), "id: 1\nevent: queue_updated\ndata: {\"version\":1}\n\n"; got != want {
+			t.Fatalf("wire bytes = %q, want %q", got, want)
+		}
 	}
-	cloned.Values[0] = "changed"
-	if original.Values[0] != "original" {
-		t.Fatalf("clone aliases exported slice: original=%q cloned=%q", original.Values[0], cloned.Values[0])
+	if calls != 1 {
+		t.Fatalf("marshal calls after both writes = %d, want 1", calls)
 	}
 }
 
-func TestCloneEventValueSafelyPreservesInvalidValue(t *testing.T) {
-	cloned := cloneEventValue(reflect.Value{})
-	if cloned.IsValid() {
-		t.Fatalf("clone = %#v, want invalid reflect.Value", cloned)
+func TestStoreFanoutEncodesOnceAcrossHubs(t *testing.T) {
+	store := NewStore(time.Hour, time.Hour, &seqCodeGen{})
+	firstHub, secondHub := NewHub(), NewHub()
+	NewServer(store, firstHub)
+	NewServer(store, secondHub)
+	room := mustCreateRoom(t, store)
+	first, cancelFirst := subscribeTestEvents(t, store, firstHub, room.Code)
+	defer cancelFirst()
+	second, cancelSecond := subscribeTestEvents(t, store, secondHub, room.Code)
+	defer cancelSecond()
+	calls := 0
+	store.mu.Lock()
+	store.publishLocked(room, "queue_updated", countingPayload{calls: &calls})
+	store.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("marshal calls across hubs = %d, want 1", calls)
+	}
+	for _, events := range []<-chan Event{first, second} {
+		recorder := httptest.NewRecorder()
+		if err := writeEvent(recorder, <-events); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := recorder.Body.String(), "id: 1\nevent: queue_updated\ndata: {\"version\":1}\n\n"; got != want {
+			t.Fatalf("wire bytes = %q, want %q", got, want)
+		}
 	}
 }
 
-func TestCloneEventDataPreservesTypedNilContainers(t *testing.T) {
-	type payload struct {
-		Interface any
-		Pointer   *eventClonePartiallyOpaque
-		Map       eventCloneNamedMap
-		Slice     eventCloneNamedSlice
+func TestPublishedMarshalErrorUsesLegacyFallback(t *testing.T) {
+	hub := NewHub()
+	ref := roomRef{code: "room", generation: 1}
+	sub, cancel := hub.subscribeRef(ref)
+	defer cancel()
+	hub.publishRef(ref, "queue_updated", make(chan int))
+	recorder := httptest.NewRecorder()
+	if err := writeEvent(recorder, <-sub.ch); err != nil {
+		t.Fatal(err)
 	}
-	var nilPointer *eventClonePartiallyOpaque
-	var nilMap eventCloneNamedMap
-	var nilSlice eventCloneNamedSlice
+	if got, want := recorder.Body.String(), "id: 1\nevent: queue_updated\ndata: {}\n\n"; got != want {
+		t.Fatalf("wire bytes = %q, want %q", got, want)
+	}
+}
 
-	for name, original := range map[string]any{
-		"pointer": nilPointer,
-		"map":     nilMap,
-		"slice":   nilSlice,
-	} {
-		t.Run(name, func(t *testing.T) {
-			cloned := cloneEventData(original)
-			if reflect.TypeOf(cloned) != reflect.TypeOf(original) {
-				t.Fatalf("clone type = %T, want %T", cloned, original)
+// subscribeTestEvents uses the same atomic Store/Hub boundary as HTTP SSE.
+func subscribeTestEvents(t *testing.T, store *Store, hub *Hub, code string) (<-chan Event, func()) {
+	t.Helper()
+	sub, _, cancel, err := store.subscribeEvents(code, hub)
+	if err != nil {
+		t.Fatalf("subscribeEvents: %v", err)
+	}
+	return sub.ch, cancel
+}
+
+func decodeEventPayload[T any](t *testing.T, ev Event) T {
+	t.Helper()
+	var payload T
+	if err := json.Unmarshal([]byte(ev.Data.(eventJSON)), &payload); err != nil {
+		t.Fatalf("decode published event: %v", err)
+	}
+	return payload
+}
+
+// TestPublishedEventWireBytes pins the legacy writer's exact JSON and SSE
+// framing before publish-time serialization replaces per-subscriber cloning.
+func TestPublishedEventWireBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		data interface{}
+		want string
+	}{
+		{"queue_updated", map[string]interface{}{"queue": []Track{{ID: "one", Title: "Track"}}}, "id: 1\nevent: queue_updated\ndata: {\"queue\":[{\"id\":\"one\",\"url\":\"\",\"title\":\"Track\",\"artist\":\"\",\"duration_sec\":0,\"resolved_by\":\"\"}]}\n\n"},
+		{"track_changed", map[string]interface{}{"current": map[string]interface{}{"track_id": "one", "state": "playing"}}, "id: 1\nevent: track_changed\ndata: {\"current\":{\"state\":\"playing\",\"track_id\":\"one\"}}\n\n"},
+		{"player_state", map[string]interface{}{"track_id": "one", "state": "paused", "pos_sec": 7}, "id: 1\nevent: player_state\ndata: {\"pos_sec\":7,\"state\":\"paused\",\"track_id\":\"one\"}\n\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hub := NewHub()
+			ref := roomRef{code: "room", generation: 1}
+			sub, cancel := hub.subscribeRef(ref)
+			defer cancel()
+			hub.publishRef(ref, tc.name, tc.data)
+			recorder := httptest.NewRecorder()
+			if err := writeEvent(recorder, <-sub.ch); err != nil {
+				t.Fatalf("writeEvent: %v", err)
 			}
-			if !reflect.ValueOf(cloned).IsNil() {
-				t.Fatalf("clone = %#v, want typed nil", cloned)
+			if got := recorder.Body.String(); got != tc.want {
+				t.Fatalf("wire bytes = %q, want %q", got, tc.want)
 			}
 		})
-	}
-
-	cloned := cloneEventData(payload{
-		Interface: nil,
-		Pointer:   nilPointer,
-		Map:       nilMap,
-		Slice:     nilSlice,
-	}).(payload)
-	if cloned.Interface != nil || cloned.Pointer != nil || cloned.Map != nil || cloned.Slice != nil {
-		t.Fatalf("nested typed nils became non-nil: %#v", cloned)
-	}
-}
-
-func TestCloneEventDataRecursivelyIsolatesNestedConcreteContainers(t *testing.T) {
-	array := &[1][]string{{"original"}}
-	originalSlice := eventCloneNamedSlice{{"array": array}}
-	originalMap := eventCloneNamedMap{"values": {"original"}}
-	original := map[string]any{
-		"slice": originalSlice,
-		"map":   originalMap,
-	}
-
-	cloned := cloneEventData(original).(map[string]any)
-	clonedSlice, ok := cloned["slice"].(eventCloneNamedSlice)
-	if !ok {
-		t.Fatalf("nested slice type = %T, want eventCloneNamedSlice", cloned["slice"])
-	}
-	clonedMap, ok := cloned["map"].(eventCloneNamedMap)
-	if !ok {
-		t.Fatalf("nested map type = %T, want eventCloneNamedMap", cloned["map"])
-	}
-	clonedSlice[0]["array"][0][0] = "changed"
-	clonedMap["values"][0] = "changed"
-	cloned["added"] = true
-
-	if got := (*array)[0][0]; got != "original" {
-		t.Fatalf("nested pointer/array/slice clone aliases original: got %q", got)
-	}
-	if got := originalMap["values"][0]; got != "original" {
-		t.Fatalf("nested map/slice clone aliases original: got %q", got)
-	}
-	if _, exists := original["added"]; exists {
-		t.Fatal("cloned outer map aliases original")
-	}
-}
-
-func TestCloneEventDataSafelyPreservesOpaqueStructAndLeafValues(t *testing.T) {
-	instant := time.Date(2026, time.September, 19, 12, 34, 56, 789, time.FixedZone("test", 90))
-	signal := make(chan struct{})
-	original := struct {
-		Instant *time.Time
-		Signal  chan struct{}
-		Count   int
-	}{
-		Instant: &instant,
-		Signal:  signal,
-		Count:   7,
-	}
-
-	cloned := cloneEventData(original).(struct {
-		Instant *time.Time
-		Signal  chan struct{}
-		Count   int
-	})
-	if cloned.Instant == original.Instant {
-		t.Fatal("time pointer was not cloned")
-	}
-	if !cloned.Instant.Equal(*original.Instant) {
-		t.Fatalf("cloned time = %v, want %v", cloned.Instant, original.Instant)
-	}
-	if cloned.Signal != signal || cloned.Count != original.Count {
-		t.Fatalf("leaf values changed: clone=%#v original=%#v", cloned, original)
 	}
 }
