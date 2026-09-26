@@ -111,7 +111,11 @@ does not mutate old chart history. PR workflows never write history. See
 before the first run. The owner sets **Settings → Pages → Build and deployment →
 Source: GitHub Actions**. `erosion-pages` deploys a snapshot after each
 successful history write because a branch push using `GITHUB_TOKEN` does not
-itself trigger a Pages build. A failed history or Pages job stays red without
+itself trigger a Pages build. After editing `gh-pages` (for example, cleaning
+up old chart data), re-run only the `erosion-pages` job of the latest `main` CI
+run using the Actions UI **Re-run job**, or `gh run rerun RUN_ID --job JOB_ID`.
+The upload and deploy use the current run attempt's artifact name, so no manual
+artifact deletion is needed. A failed history or Pages job stays red without
 blocking the stable `CI result`. GitHub queues at most 100 pending history
 jobs; inspect and repair missing points after a larger burst.
 

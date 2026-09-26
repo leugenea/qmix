@@ -386,6 +386,24 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertIn("include-hidden-files: true", pages)
         self.assertIn("actions/upload-pages-artifact@", pages)
         self.assertIn("actions/deploy-pages@", pages)
+        # qmix#232: a re-run retains the previous attempt's artifact, so the
+        # upload and deployment must select the same per-attempt artifact.
+        upload = re.search(
+            r"(?ms)^      - name: Upload chart snapshot\n(?P<body>.*?)(?=^      - name:|\Z)",
+            pages,
+        )
+        deploy = re.search(
+            r"(?ms)^      - name: Deploy chart\n(?P<body>.*?)(?=^      - name:|\Z)",
+            pages,
+        )
+        self.assertIsNotNone(upload)
+        self.assertIsNotNone(deploy)
+        upload_name = re.search(r"(?m)^          name: (.+)$", upload.group("body"))
+        deploy_name = re.search(r"(?m)^          artifact_name: (.+)$", deploy.group("body"))
+        self.assertIsNotNone(upload_name, "Pages upload must name the artifact")
+        self.assertIsNotNone(deploy_name, "Pages deploy must select the artifact")
+        self.assertEqual(upload_name.group(1), deploy_name.group(1))
+        self.assertEqual(upload_name.group(1), "github-pages-${{ github.run_attempt }}")
         self.assertIn("needs.erosion-pages.result", job(ci, "result"))
 
         self.assertEqual(ci.count("queue: max"), 2)
