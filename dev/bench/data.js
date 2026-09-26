@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790456614420,
+  "lastUpdate": 1790456617243,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -895,6 +895,70 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go clones",
             "value": 2,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a4b489360cf963d5e342c9b7e7a785c1d0dd7d46",
+          "message": "refactor: deduplicate Store host-authorized lookup (#246) (#247)",
+          "timestamp": "2026-09-27T00:02:58+03:00",
+          "tree_id": "b5eb8c089fa214dcc1ea57f683c3d5743d6bbac5",
+          "url": "https://github.com/leugenea/qmix/commit/a4b489360cf963d5e342c9b7e7a785c1d0dd7d46"
+        },
+        "date": 1790456616300,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
             "unit": "clones"
           },
           {
