@@ -1,4 +1,4 @@
-.PHONY: run compose-up build version test test-integration test-workflow-routing test-erosion test-complexity-gate test-duplication test-clone-gate duplication test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
+.PHONY: run compose-up build version test test-integration test-workflow-routing test-erosion test-complexity-gate test-duplication test-clone-gate test-hotspots duplication hotspots test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
 
 version:
 	go run ./internal/buildinfo/cmd/version -format=json
@@ -28,8 +28,11 @@ test:
 test-integration:
 	go test -race -tags=integration -run 'Integration' ./internal/server/...
 
-test-workflow-routing: test-erosion test-duplication test-complexity-gate test-clone-gate
+test-workflow-routing: test-erosion test-duplication test-complexity-gate test-clone-gate test-hotspots
 	python3 .github/scripts/workflow_paths_test.py -v
+
+test-hotspots:
+	python3 .github/scripts/hotspots_test.py -v
 
 test-clone-gate:
 	python3 .github/scripts/clone_gate_test.py -v
@@ -54,6 +57,32 @@ duplication: test-duplication
 		python3 .github/scripts/jscpd_report.py report "$$out/jscpd-report.json" \
 			"$$out/report.json" "$$out/report.md"; \
 		printf 'Duplication report: %s\n' "$$out/report.md"
+
+# Local informational qmix#242 ranking. Supply the same SHA-verified binary as
+# duplication; HOTSPOTS_OUT optionally selects a persistent output directory.
+HOTSPOTS_REF ?= main
+HOTSPOTS_DAYS ?= 90
+HOTSPOTS_OUT ?=
+hotspots: SHELL := /bin/bash
+hotspots: test-hotspots
+	@set -euo pipefail; : "$${JSCPD_BIN:?Set JSCPD_BIN to the checksum-verified jscpd v5.3.2 binary}"; \
+		: "$${TMPDIR:?Set TMPDIR to a scratch directory}"; \
+		out="$(HOTSPOTS_OUT)"; if [[ -z "$$out" ]]; then out=$$(mktemp -d "$$TMPDIR/qmix-hotspots.XXXXXX"); fi; \
+		mkdir -p "$$out"; scratch=$$(mktemp -d "$$TMPDIR/qmix-hotspots-input.XXXXXX"); \
+		trap 'rm -rf "$$scratch"' EXIT; \
+		python3 .github/scripts/erosion.py --repo . --lizard "$$(command -v lizard)" \
+			--output "$$scratch/erosion.json" --summary "$$scratch/erosion.md"; \
+		python3 .github/scripts/jscpd_report.py sources . > "$$scratch/sources"; \
+		mapfile -d '' -t sources < "$$scratch/sources"; \
+		"$$JSCPD_BIN" --config .jscpd.json --absolute --reporters json \
+			--threshold 100 --fail-on-empty --output "$$scratch" "$${sources[@]}"; \
+		python3 .github/scripts/jscpd_report.py report "$$scratch/jscpd-report.json" \
+			"$$scratch/duplication.json" "$$scratch/duplication.md"; \
+		python3 .github/scripts/hotspots.py --repo . --erosion "$$scratch/erosion.json" \
+			--duplication "$$scratch/duplication.json" --skip-list docs/code-quality.md \
+			--ref "$(HOTSPOTS_REF)" --days "$(HOTSPOTS_DAYS)" \
+			--json "$$out/report.json" --markdown "$$out/report.md"; \
+		printf 'Hotspot reports: %s/report.md %s/report.json\n' "$$out" "$$out"
 
 test-erosion:
 	python3 .github/scripts/erosion_test.py -v

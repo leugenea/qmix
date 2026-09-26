@@ -24,6 +24,51 @@ PATH="$PWD/.venv/bin:$PATH" make test-workflow-routing
 ```
 
 No JVM analysis is run.
+
+## Informational hotspot ranking (qmix#242)
+
+Run `make hotspots` locally with the hash-pinned lizard/tree-sitter Python
+requirements above and the checksum-verified jscpd v5.3.2 binary from the
+[duplication instructions](#duplication-qmix200):
+
+```sh
+TMPDIR=/path/to/scratch JSCPD_BIN=/path/to/verified/jscpd make hotspots
+# To retain both reports at a known location, optionally add:
+# HOTSPOTS_OUT=/path/to/ranking
+```
+
+The target runs the existing erosion and duplication analyzers on the same
+production files and exclusions, then writes `report.md` and `report.json` in a
+scratch directory (or `HOTSPOTS_OUT`). It reads the current checkout's `main`
+ref by default; use `HOTSPOTS_REF=HEAD` to select another ref and
+`HOTSPOTS_DAYS=30` to change the default 90-day lookback. The script's
+`--now` option accepts an ISO-8601 instant for reproducible fixture runs.
+Churn uses Git's `--since-as-filter` (Git 2.37+) so an older-dated commit
+cannot hide newer commits behind it in a non-monotonic history.
+`make test-hotspots` runs the fixture tests. This is local and informational:
+findings never fail CI; missing or malformed inputs return exit 2.
+
+For each function with **CCN > 10**, score = its erosion mass
+(`CCN × √NLOC`) × the number of commits touching its file in the window.
+Functions rank separately within Go, Kotlin, and JS, since Kotlin's CCN is not
+comparable with lizard's. jscpd clones are grouped by their unordered file set;
+score = the group's sum of duplicated lines × the **highest** file churn in
+that set. Churn is **file-level**, not function- or fragment-level: an unrelated
+edit in the same file counts. Git uses `--no-renames`, so changes under an old
+path are not attributed to a renamed file. Zero-churn entries follow ranked
+entries as `cold` and are never top hotspots; owner-approved exceptions follow
+as `skipped` with their reasons. Only ranked entries receive numeric ranks.
+
+For each recurring pass: run the ranking on current `main`, review the top N
+ranked entries (not cold or skipped), and tackle each chosen hotspot in its own
+pull request. Keep behavior unchanged; for untested code, add characterization
+tests in a separate first commit and require them to pass before the refactor
+and after it. Include the hotspot's before → after CCN/NLOC or clone size,
+churn and score, plus a brief explanation of why the code is easier to follow.
+Do not split functions or merge unrelated copies solely to improve a metric.
+The owner chooses the cadence and any exceptions; no automated schedule or new
+gate is introduced.
+
 Both analyzers select the same production scope, but their CCN values have
 **different definitions and are not directly comparable**. For every function,
 `mass = CCN × sqrt(NLOC)`; erosion is the fraction of a language's mass in
@@ -271,3 +316,11 @@ production scope with the adopted 10-line minimum, the baseline is **0.5030%
 overall, four Go clones** (Go 0.8368% / 4, Kotlin 0% / 0, JavaScript 0% / 0).
 The clone gate (#202) reuses this scope and threshold with jscpd baseline
 mode; this informational job remains separate from the gate and history.
+
+## Hotspots left as is
+
+The owner maintains this list after deciding a hotspot should remain unchanged;
+it starts empty. Use one bullet per decision with a one-line reason, e.g.
+`- \`cmd/a.go::functionName\` — reason` for an erosion function ID, or
+`- clone: \`cmd/a.go, internal/b.go\` — reason` for a clone file set.
+Clone file order does not matter. Do not add entries without the owner's decision.
