@@ -104,6 +104,21 @@ class WorkflowPathsTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual("duplication" in workflow_paths.classify([path]), expected)
 
+    def test_clone_gate_inputs_reuse_duplication_route(self):
+        for path in (".github/scripts/clone_gate.py", ".github/scripts/clone_gate_test.py",
+                     ".jscpd.json", ".github/scripts/jscpd_report.py"):
+            with self.subTest(path=path):
+                self.assertIn("duplication", workflow_paths.classify([path]))
+        makefile = (REPOSITORY_ROOT / "Makefile").read_text()
+        docs = (REPOSITORY_ROOT / "docs/code-quality.md").read_text()
+        self.assertIn("test-clone-gate:", makefile)
+        self.assertIn("python3 .github/scripts/clone_gate_test.py -v", makefile)
+        self.assertRegex(makefile, r"test-workflow-routing:.*test-clone-gate")
+        self.assertIn("`clone-gate`", docs)
+        self.assertIn("--baseline-from-ref", docs)
+        self.assertIn("move", docs)
+        self.assertIn("branch protection", docs)
+
     def test_generated_header_does_not_route_but_deleted_source_does(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
