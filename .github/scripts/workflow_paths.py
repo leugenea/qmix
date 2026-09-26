@@ -70,6 +70,8 @@ def main():
     selected = classify(paths)
     if os.environ.get("FORCE_EROSION") == "true":
         selected.add("erosion")
+    if os.environ.get("FORCE_DUPLICATION") == "true":
+        selected.add("duplication")
     for route in OUTPUTS:
         print(f"{route}={'true' if route in selected else 'false'}")
 

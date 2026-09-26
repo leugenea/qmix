@@ -200,6 +200,17 @@ class WorkflowPathsTest(unittest.TestCase):
         ci = (WORKFLOW_DIR / "ci.yml").read_text()
         self.assertIn("FORCE_EROSION: ${{ github.event_name == 'push' }}", self._job(ci, "route"))
 
+    def test_main_push_forces_duplication_even_when_no_source_changed(self):
+        for force, expected in (("true", "duplication=true"), ("false", "duplication=false")):
+            completed = subprocess.run(
+                [sys.executable, str(MODULE_PATH)], input=b"README.md\0",
+                capture_output=True, check=True, env=os.environ | {"FORCE_DUPLICATION": force},
+            )
+            with self.subTest(force=force):
+                self.assertIn(expected, completed.stdout.decode().splitlines())
+        ci = (WORKFLOW_DIR / "ci.yml").read_text()
+        self.assertIn("FORCE_DUPLICATION: ${{ github.event_name == 'push' }}", self._job(ci, "route"))
+
     def test_complexity_gate_is_pr_only_and_reuses_erosion_route(self):
         ci = (WORKFLOW_DIR / "ci.yml").read_text()
         gate = self._job(ci, "complexity-gate")
@@ -520,7 +531,7 @@ class WorkflowPathsTest(unittest.TestCase):
                       "EROSION_REPORT_RESULT": "skipped", "PR_AUTHOR": "dependabot[bot]"}
         self.assertEqual(subprocess.run(["bash", "-e", "-c", script], env=env).returncode, 0)
 
-    def test_ci_result_enforces_duplication_for_prs_and_skips_main_pushes(self):
+    def test_ci_result_enforces_duplication_for_prs_and_main_pushes(self):
         script = self._result_script("ci.yml")
         base = {
             "ROUTE_RESULT": "success", "POLICY_RESULT": "success",
@@ -531,23 +542,24 @@ class WorkflowPathsTest(unittest.TestCase):
             "PAGES_RESULT": "skipped", "REPOSITORY": "leugenea/qmix",
             "ACTOR": "leugenea", "PR_AUTHOR": "leugenea",
         }
-        for event, route, producer, publisher, head, succeeds in (
-            ("pull_request", "true", "success", "success", "leugenea/qmix", True),
-            ("pull_request", "true", "failure", "skipped", "leugenea/qmix", False),
-            ("pull_request", "true", "skipped", "skipped", "leugenea/qmix", False),
-            ("pull_request", "false", "skipped", "skipped", "leugenea/qmix", True),
-            ("pull_request", "true", "success", "skipped", "contributor/qmix", True),
-            ("pull_request", "true", "success", "success", "contributor/qmix", False),
-            ("push", "true", "skipped", "skipped", "", True),
-            ("push", "true", "success", "skipped", "", False),
-            ("push", "false", "skipped", "skipped", "", True),
-            ("pull_request", "invalid", "skipped", "skipped", "leugenea/qmix", False),
+        for event, route, producer, publisher, head, history, succeeds in (
+            ("pull_request", "true", "success", "success", "leugenea/qmix", "skipped", True),
+            ("pull_request", "true", "failure", "skipped", "leugenea/qmix", "skipped", False),
+            ("pull_request", "true", "skipped", "skipped", "leugenea/qmix", "skipped", False),
+            ("pull_request", "false", "skipped", "skipped", "leugenea/qmix", "skipped", True),
+            ("pull_request", "true", "success", "skipped", "contributor/qmix", "skipped", True),
+            ("pull_request", "true", "success", "success", "contributor/qmix", "skipped", False),
+            ("push", "true", "skipped", "skipped", "", "skipped", False),
+            ("push", "true", "success", "skipped", "", "success", False),
+            ("push", "true", "success", "skipped", "", "failure", True),
+            ("push", "false", "skipped", "skipped", "", "skipped", True),
+            ("pull_request", "invalid", "skipped", "skipped", "leugenea/qmix", "skipped", False),
         ):
             env = base | {"EVENT_NAME": event, "DUPLICATION_OUTPUT": route,
                           "DUPLICATION_RESULT": producer, "EROSION_REPORT_RESULT": publisher,
-                          "HEAD_REPOSITORY": head}
+                          "HEAD_REPOSITORY": head, "HISTORY_RESULT": history}
             completed = subprocess.run(["bash", "-e", "-c", script], env=env)
-            with self.subTest(event=event, route=route, producer=producer, head=head):
+            with self.subTest(event=event, route=route, producer=producer, head=head, history=history):
                 self.assertEqual(completed.returncode == 0, succeeds)
 
     def test_live_manual_non_main_ref_never_requires_nas(self):
@@ -598,6 +610,31 @@ class WorkflowPathsTest(unittest.TestCase):
             completed = subprocess.run(["bash", "-e", "-c", script], env=env)
             with self.subTest(event=event, history=history, pages=pages):
                 self.assertEqual(completed.returncode == 0, succeeds)
+
+    def test_history_runs_for_either_successful_main_report(self):
+        script = self._result_script("ci.yml")
+        base = {
+            "ROUTE_RESULT": "success", "POLICY_RESULT": "success",
+            "ROUTE_OUTPUT": "false", "CI_RESULT": "skipped",
+            "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
+            "REPORT_RESULT": "skipped", "EROSION_REPORT_RESULT": "skipped",
+            "EROSION_OUTPUT": "false", "EROSION_RESULT": "skipped",
+            "DUPLICATION_OUTPUT": "true", "DUPLICATION_RESULT": "success",
+            "EVENT_NAME": "push", "REPOSITORY": "leugenea/qmix",
+            "HEAD_REPOSITORY": "", "ACTOR": "leugenea", "PR_AUTHOR": "",
+        }
+        for producer, history, pages, expected in (
+            ("success", "success", "success", True),
+            ("success", "failure", "skipped", True),
+            ("success", "skipped", "skipped", False),
+            ("success", "cancelled", "skipped", False),
+            ("skipped", "skipped", "skipped", False),
+        ):
+            env = base | {"DUPLICATION_RESULT": producer, "HISTORY_RESULT": history,
+                          "PAGES_RESULT": pages}
+            completed = subprocess.run(["bash", "-e", "-c", script], env=env)
+            with self.subTest(producer=producer, history=history, pages=pages):
+                self.assertEqual(completed.returncode == 0, expected)
 
     def test_trusted_service_result_accepts_only_expected_ref_outcome(self):
         script = self._result_script("service-integration.yml")
@@ -733,8 +770,8 @@ class WorkflowPathsTest(unittest.TestCase):
         route = self._job(ci, "route")
         self.assertIn("duplication: ${{ steps.paths.outputs.duplication }}", route)
         producer = self._job(ci, "duplication")
-        self.assertIn("github.event_name == 'pull_request'", producer)
         self.assertIn("needs.route.outputs.duplication == 'true'", producer)
+        self.assertNotIn("github.event_name == 'pull_request'", producer)
         self.assertIn("persist-credentials: false", producer)
         self.assertNotIn("pull-requests: write", producer)
         self.assertIn("v5.3.2/jscpd-linux-x64-gnu.tar.gz", producer)

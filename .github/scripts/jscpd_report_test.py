@@ -69,6 +69,7 @@ class JscpdReportTest(unittest.TestCase):
         del data["statistics"]["formats"]["javascript"]
         data["statistics"]["total"].update(sources=4, lines=200)
         normalized = reporter.normalize(data, ROOT)
+        self.assertEqual(normalized["schema_version"], 1)
         self.assertEqual(normalized["statistics"]["formats"]["javascript"], {
             "percentage": 0, "clones": 0, "lines": 0,
             "duplicatedLines": 0, "sources": 0,

@@ -18,7 +18,7 @@ Completed:
 - **Authenticated VK resolution** (#9) — VK audio links are resolved through `audio.getById` (api.vk.com, v5.131, using the mobile client User-Agent from `cmd/token-vk`); without `QMIX_VK_TOKEN`, the anonymous Open Graph metadata path remains available.
 - **Authenticated Yandex Music resolution** (#10) — music.yandex.ru track links (`/album/{a}/track/{t}` and `/track/{t}`) are resolved through the maintained `goym` client (api.music.yandex.net, `GET /tracks/{id}`); without `QMIX_YM_TOKEN`, the anonymous Open Graph metadata path remains available.
 - **Integration tests** for the main scenarios — required `integration-mandatory` CI job.
-- **Code quality** — [per-language complexity erosion and informational duplication reports](docs/code-quality.md), with erosion history and alert semantics.
+- **Code quality** — [per-language complexity erosion and informational duplication reports](docs/code-quality.md), with both erosion and duplication history and non-blocking alert semantics.
 - Updated toolchain: Go 1.25 / alpine 3.24, with compose configured for deployment constraints (port 8180, `mem_limit`, `restart: on-failure:3`).
 - **M5** — guest PWA, completed in #55.
 
