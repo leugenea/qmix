@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790452037766,
+  "lastUpdate": 1790455085776,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -465,6 +465,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go CCN > 10",
             "value": 14,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 58.44101471485502,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 19,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "958d0c27aca564f3fb21a5d268222109de717a1d",
+          "message": "refactor: remove the Hub legacy routing path (#218) (#245)",
+          "timestamp": "2026-09-26T23:37:30+03:00",
+          "tree_id": "1d30acceabe8e0573b3ac5eb19c33e4873906b67",
+          "url": "https://github.com/leugenea/qmix/commit/958d0c27aca564f3fb21a5d268222109de717a1d"
+        },
+        "date": 1790455084556,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 34.11421430245574,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 13,
             "unit": "functions"
           },
           {
