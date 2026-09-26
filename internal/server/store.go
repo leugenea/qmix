@@ -341,12 +341,9 @@ func (s *Store) appendLocked(ref roomRef, track Track) (Track, error) {
 func (s *Store) Skip(code, token string) (map[string]interface{}, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	room := s.rooms[code]
-	if room == nil {
-		return nil, errRoomNotFound
-	}
-	if !hostTokensEqual(token, room.HostToken) {
-		return nil, errInvalidHostToken
+	room, err := s.authorizedRoomByCodeLocked(code, token)
+	if err != nil {
+		return nil, err
 	}
 	if len(room.Queue) == 0 {
 		return nil, errQueueEmpty
@@ -367,12 +364,9 @@ func (s *Store) Skip(code, token string) (map[string]interface{}, error) {
 func (s *Store) PlayerPreflight(code, token string) (roomRef, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	room := s.rooms[code]
-	if room == nil {
-		return roomRef{}, errRoomNotFound
-	}
-	if !hostTokensEqual(token, room.HostToken) {
-		return roomRef{}, errInvalidHostToken
+	room, err := s.authorizedRoomByCodeLocked(code, token)
+	if err != nil {
+		return roomRef{}, err
 	}
 	return roomRef{code: code, generation: room.generation}, nil
 }
@@ -383,12 +377,9 @@ func (s *Store) PlayerPreflight(code, token string) (roomRef, error) {
 func (s *Store) ReportPlayer(ref roomRef, token string, report playerReport) (*curView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	room, err := s.roomLocked(ref)
+	room, err := s.authorizedRoomByRefLocked(ref, token)
 	if err != nil {
 		return nil, err
-	}
-	if !hostTokensEqual(token, room.HostToken) {
-		return nil, errInvalidHostToken
 	}
 	if room.Current == nil || room.Current.TrackID != report.TrackID {
 		return nil, errPlayerConflict
@@ -413,16 +404,7 @@ func (s *Store) ReportPlayer(ref roomRef, token string, report playerReport) (*c
 // ReorderPreflight validates host authorization before the request body is read
 // and binds the later commit to this room incarnation.
 func (s *Store) ReorderPreflight(code, token string) (roomRef, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	room := s.rooms[code]
-	if room == nil {
-		return roomRef{}, errRoomNotFound
-	}
-	if !hostTokensEqual(token, room.HostToken) {
-		return roomRef{}, errInvalidHostToken
-	}
-	return roomRef{code: code, generation: room.generation}, nil
+	return s.PlayerPreflight(code, token)
 }
 
 // Reorder atomically revalidates identity and authorization, applies an exact
@@ -430,12 +412,9 @@ func (s *Store) ReorderPreflight(code, token string) (roomRef, error) {
 func (s *Store) Reorder(ref roomRef, token string, order []string) ([]Track, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	room, err := s.roomLocked(ref)
+	room, err := s.authorizedRoomByRefLocked(ref, token)
 	if err != nil {
 		return nil, err
-	}
-	if !hostTokensEqual(token, room.HostToken) {
-		return nil, errInvalidHostToken
 	}
 	if !isPermutation(order, room.Queue) {
 		return nil, errInvalidOrder
@@ -512,6 +491,32 @@ func (s *Store) roomLocked(ref roomRef) (*Room, error) {
 	room := s.rooms[ref.code]
 	if room == nil || room.generation != ref.generation {
 		return nil, errRoomNotFound
+	}
+	return room, nil
+}
+
+// authorizedRoomByCodeLocked requires Store.mu and returns the live room only
+// after room existence and host authorization have been checked.
+func (s *Store) authorizedRoomByCodeLocked(code, token string) (*Room, error) {
+	room := s.rooms[code]
+	if room == nil {
+		return nil, errRoomNotFound
+	}
+	if !hostTokensEqual(token, room.HostToken) {
+		return nil, errInvalidHostToken
+	}
+	return room, nil
+}
+
+// authorizedRoomByRefLocked requires Store.mu and checks the exact room
+// incarnation before host authorization.
+func (s *Store) authorizedRoomByRefLocked(ref roomRef, token string) (*Room, error) {
+	room, err := s.roomLocked(ref)
+	if err != nil {
+		return nil, err
+	}
+	if !hostTokensEqual(token, room.HostToken) {
+		return nil, errInvalidHostToken
 	}
 	return room, nil
 }
