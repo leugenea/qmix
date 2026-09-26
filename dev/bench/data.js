@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790452034932,
+  "lastUpdate": 1790452037766,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -659,6 +659,70 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go clones",
             "value": 4,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d4f102f70ea70e3bee2e1cdf17d557196d62eef",
+          "message": "refactor: merge the duplicated token-bucket limiters into internal/ratelimit (#219) (#244)",
+          "timestamp": "2026-09-26T22:46:39+03:00",
+          "tree_id": "37b8b87eaf028a3b45ca5ddc35807fe63f2b0d64",
+          "url": "https://github.com/leugenea/qmix/commit/1d4f102f70ea70e3bee2e1cdf17d557196d62eef"
+        },
+        "date": 1790452037198,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0.3340538416191786,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 3,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0.5542875774372351,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 3,
             "unit": "clones"
           },
           {
