@@ -308,11 +308,9 @@ func trackFromURL(u string) Track {
 	return Track{ID: newTrackID(), URL: u, Title: u}
 }
 
-// retryAfterOverloaded is the fixed Retry-After seconds sent with 503
-// overload responses (qmix#130). It is deliberately short and documented:
-// capacity frees as soon as one yt-dlp subprocess finishes, and clients that
-// honor it naturally smooth bursts without hammering the endpoint.
-const retryAfterOverloaded = "3"
+// Keep the server-side name used by its HTTP contract tests, but source the
+// fixed overload delay from the stream proxy's existing shared value.
+const retryAfterOverloaded = stream.RetryAfterOverloaded
 
 // isOverloaded reports whether err is the typed yt-dlp capacity rejection.
 func isOverloaded(err error) bool {
