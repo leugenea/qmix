@@ -270,6 +270,9 @@ func TestServeHTTPStopsAcceptingThenCancelsActiveRequestAtBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	observed := &closeObservedListener{Listener: listener, closed: make(chan struct{})}
+	hub := NewHub()
+	sub, cancelSub := hub.subscribeRef(roomRef{code: "shutdown"})
+	defer cancelSub()
 
 	requestStarted := make(chan struct{})
 	requestCanceled := make(chan struct{})
@@ -289,7 +292,7 @@ func TestServeHTTPStopsAcceptingThenCancelsActiveRequestAtBound(t *testing.T) {
 	shutdownCtx, stop := context.WithCancel(context.Background())
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- serveHTTP(shutdownCtx, httpServer, observed, cancelRequests, 250*time.Millisecond)
+		serveDone <- serveHTTP(shutdownCtx, httpServer, observed, cancelRequests, hub.StopSubscriptions, 250*time.Millisecond)
 	}()
 
 	responseDone := make(chan error, 1)
@@ -312,6 +315,11 @@ func TestServeHTTPStopsAcceptingThenCancelsActiveRequestAtBound(t *testing.T) {
 	case <-observed.closed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("listener was not closed when shutdown began")
+	}
+	select {
+	case <-sub.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE subscriber was not stopped after listener closure")
 	}
 	if connection, dialErr := net.DialTimeout("tcp", observed.Addr().String(), 25*time.Millisecond); dialErr == nil {
 		connection.Close()
@@ -369,7 +377,9 @@ func TestServeHTTPCancelsActiveStreamBackendAtBound(t *testing.T) {
 	httpServer.BaseContext = func(net.Listener) context.Context { return requestCtx }
 	shutdownCtx, stop := context.WithCancel(context.Background())
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- serveHTTP(shutdownCtx, httpServer, listener, cancelRequests, 50*time.Millisecond) }()
+	go func() {
+		serveDone <- serveHTTP(shutdownCtx, httpServer, listener, cancelRequests, func() {}, 50*time.Millisecond)
+	}()
 	requestDone := make(chan struct{})
 	go func() {
 		response, requestErr := http.Get("http://" + listener.Addr().String())
@@ -421,7 +431,7 @@ func (a testAddr) String() string  { return string(a) }
 func TestServeHTTPReturnsSpontaneousServeFailure(t *testing.T) {
 	want := errors.New("accept failed")
 	server := newHTTPServer("", http.NotFoundHandler())
-	err := serveHTTP(context.Background(), server, failingListener{err: want}, func() {}, time.Second)
+	err := serveHTTP(context.Background(), server, failingListener{err: want}, func() {}, func() {}, time.Second)
 	if !errors.Is(err, want) {
 		t.Fatalf("serve error = %v, want %v", err, want)
 	}
@@ -519,7 +529,7 @@ func TestServeHTTPBoundsFallbackCloseAfterShutdownError(t *testing.T) {
 	const deadline = 40 * time.Millisecond
 	done := make(chan error, 1)
 	go func() {
-		done <- serveHTTP(ctx, server, listener, func() {}, deadline)
+		done <- serveHTTP(ctx, server, listener, func() {}, func() {}, deadline)
 	}()
 	select {
 	case <-listener.accepted:
@@ -571,7 +581,7 @@ func TestServeHTTPPreservesShutdownAndFallbackCloseErrors(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- serveHTTP(ctx, server, listener, func() {}, time.Second)
+		done <- serveHTTP(ctx, server, listener, func() {}, func() {}, time.Second)
 	}()
 	select {
 	case <-listener.accepted:
@@ -596,7 +606,7 @@ func TestServeHTTPReturnsShutdownFailure(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- serveHTTP(ctx, newHTTPServer("", http.NotFoundHandler()), listener, func() {}, time.Second)
+		done <- serveHTTP(ctx, newHTTPServer("", http.NotFoundHandler()), listener, func() {}, func() {}, time.Second)
 	}()
 	select {
 	case <-listener.accepted:
@@ -623,7 +633,7 @@ func TestServeHTTPBoundsStuckShutdown(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- serveHTTP(ctx, newHTTPServer("", http.NotFoundHandler()), listener, func() {}, 250*time.Millisecond)
+		done <- serveHTTP(ctx, newHTTPServer("", http.NotFoundHandler()), listener, func() {}, func() {}, 250*time.Millisecond)
 	}()
 	select {
 	case <-listener.accepted:

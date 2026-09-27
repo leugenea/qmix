@@ -496,11 +496,13 @@ and subscriber invalidation behavior.
   fails safely when yt-dlp is missing or non-executable. `/readyz` rechecks the
   executable without invoking it, while `/healthz` remains unconditional.
 - The process subscribes to `SIGINT` and `SIGTERM` with
-  `signal.NotifyContext`. Shutdown closes the HTTP listener immediately, gives
-  active HTTP, SSE, and audio-stream handlers an 11-second grace period, then
-  cancels their request contexts and force-closes connections within a
-  documented 12-second total deadline. The room janitor is stopped and joined
-  exactly once on normal shutdown and listen/startup failure.
+  `signal.NotifyContext`. Shutdown closes the HTTP listener immediately; SSE
+  subscriptions terminate at shutdown start, including concurrent late
+  subscribers (qmix#207). Other active HTTP and audio-stream handlers retain
+  an 11-second grace period; their request contexts are then canceled and
+  connections force-closed within the 12-second total deadline (qmix#132).
+  The room janitor is stopped and joined exactly once on normal shutdown and
+  listen/startup failure.
 - One service: **docker-compose** with one `backend` container.
 - The container is built from `Dockerfile` (multi-stage build, static Go binary).
 - Port `8080`, configured through the `QMIX_ADDR` environment variable.
@@ -526,8 +528,9 @@ and subscriber invalidation behavior.
   pushes to `main`, manual dispatches, and a weekly schedule. Pull-request code
   and secrets remain on hosted runners and outside these trusted workflows.
 - Deployment constraints: a dedicated Compose project, `mem_limit: 512m`,
-  `restart: on-failure:3`, and external port `8180` (reserved for qmix in the
-  8100–8199 range).
+  `restart: on-failure:3`, `stop_grace_period: 15s` (longer than the 12-second
+  process deadline, qmix#207), and external port `8180` (reserved for qmix in
+  the 8100–8199 range).
 - Backend diagnostics are structured JSON with a default `WARN` level. One
   injected logger attributes records to `server/http`, `store/rooms`, `sse`,
   `resolver`, or `stream`, fans accepted records to stderr and a persistent

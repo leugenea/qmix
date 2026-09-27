@@ -175,9 +175,9 @@ func newHTTPServer(addr string, h http.Handler) *http.Server {
 }
 
 // shutdownTimeout is the documented 12-second process deadline (qmix#132).
-// The listener closes immediately. Active HTTP, SSE, and stream handlers get
-// an 11-second grace period; the final second cancels request contexts and
-// force-closes connections without allowing a stuck close to deadlock exit.
+// The listener closes immediately and SSE subscriptions end at shutdown start.
+// Other active HTTP and stream handlers get an 11-second grace period; the
+// final second cancels request contexts and force-closes connections.
 const (
 	shutdownTimeout  = 12 * time.Second
 	forceCloseWindow = time.Second
@@ -185,11 +185,12 @@ const (
 
 type httpServer interface {
 	Serve(net.Listener) error
+	RegisterOnShutdown(func())
 	Shutdown(context.Context) error
 	Close() error
 }
 
-func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, cancelRequests context.CancelFunc, deadline time.Duration) error {
+func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, cancelRequests context.CancelFunc, stopSSE func(), deadline time.Duration) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
@@ -212,6 +213,13 @@ func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, ca
 
 	shutdownCtx, cancelShutdown := context.WithCancel(context.Background())
 	defer cancelShutdown()
+	stopSSEDone := make(chan struct{})
+	// Shutdown closes the listener before running callbacks; a contended Hub.mu
+	// cannot postpone admission closure or the already-running deadline timers.
+	server.RegisterOnShutdown(func() {
+		defer close(stopSSEDone)
+		stopSSE()
+	})
 	shutdownErr := make(chan error, 1)
 	go func() { shutdownErr <- server.Shutdown(shutdownCtx) }()
 
@@ -227,14 +235,17 @@ func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, ca
 	}
 
 	var shutdownResult, closeResult, serveResult error
-	shutdownDone, closeDone, serveDone := false, false, false
+	shutdownDone, closeDone, serveDone, sseDone := false, false, false, false
 	shutdownCanceled := false
 	for {
-		if shutdownDone && serveDone && (!closeStarted || closeDone) {
+		if shutdownComplete(shutdownDone, serveDone, sseDone, closeStarted, closeDone) {
 			return errors.Join(shutdownResult, closeResult, serveResult)
 		}
 
 		select {
+		case <-stopSSEDone:
+			stopSSEDone = nil
+			sseDone = true
 		case err := <-shutdownErr:
 			shutdownErr = nil
 			shutdownDone = true
@@ -285,6 +296,10 @@ func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, ca
 	}
 }
 
+func shutdownComplete(shutdownDone, serveDone, sseDone, closeStarted, closeDone bool) bool {
+	return shutdownDone && serveDone && sseDone && (!closeStarted || closeDone)
+}
+
 func intentionalServeError(err error) error {
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -320,7 +335,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger, deps Depen
 	requestCtx, cancelRequests := context.WithCancel(context.Background())
 	httpServer := newHTTPServer(cfg.Address, a.Handler())
 	httpServer.BaseContext = func(net.Listener) context.Context { return requestCtx }
-	err = serveHTTP(ctx, httpServer, listener, cancelRequests, shutdownTimeout)
+	err = serveHTTP(ctx, httpServer, listener, cancelRequests, a.Hub.StopSubscriptions, shutdownTimeout)
 	if err != nil {
 		serverLogger.Error("server stopped", "error_kind", "serve_failed")
 	}

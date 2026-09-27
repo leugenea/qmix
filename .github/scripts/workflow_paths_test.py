@@ -141,6 +141,7 @@ class WorkflowPathsTest(unittest.TestCase):
             "go.sum": {"ci", "android", "live"},
             "Makefile": {"ci"},
             "Dockerfile": {"ci"},
+            "docker-compose.yml": {"ci"},  # qmix#207 stop-grace contract is a Go test
             ".dockerignore": {"ci"},
             ".github/scripts/test_summary.py": {"ci"},
             ".github/scripts/generate_sbom.py": {"ci", "android"},

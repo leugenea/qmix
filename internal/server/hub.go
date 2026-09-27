@@ -40,6 +40,7 @@ func marshalEventData(data interface{}) eventJSON {
 type Hub struct {
 	mu           sync.Mutex
 	incarnations map[roomRef]*roomHub
+	stopping     bool
 	Heartbeat    time.Duration // keep-alive comment interval; <=0 means the 15s default
 	WriteTimeout time.Duration // per-SSE-write deadline; <=0 means the 15s default
 	logger       *slog.Logger
@@ -84,6 +85,11 @@ func (h *Hub) subscribeRef(ref roomRef) (*subscriber, func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	if h.stopping {
+		sub := &subscriber{done: make(chan struct{})}
+		close(sub.done)
+		return sub, func() {}
+	}
 	rh := h.incarnations[ref]
 	if rh == nil {
 		rh = &roomHub{subs: make(map[*subscriber]struct{})}
@@ -99,6 +105,18 @@ func (h *Hub) subscribeRef(ref roomRef) (*subscriber, func()) {
 		})
 	}
 	return sub, cancel
+}
+
+// StopSubscriptions ends all SSE streams at shutdown start (qmix#207).
+// The same lock excludes late subscribers and serializes all disconnects.
+func (h *Hub) StopSubscriptions() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.stopping = true
+	for ref, rh := range h.incarnations {
+		h.invalidateRoomHubLocked(rh)
+		delete(h.incarnations, ref)
+	}
 }
 
 func (h *Hub) disconnectRef(ref roomRef, sub *subscriber) {
@@ -185,7 +203,36 @@ func (h *Hub) serveSubscriberHTTP(ctx context.Context, w http.ResponseWriter, su
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	controller := http.NewResponseController(w)
-	if h.setWriteDeadline(controller) != nil ||
+	// Closing done does not interrupt a blocked socket write/flush by itself.
+	// Serialize deadline changes so a normal event cannot extend the immediate
+	// deadline after the watcher observes a disconnect.
+	var deadlineMu sync.Mutex
+	writeDeadline := func() error {
+		deadlineMu.Lock()
+		defer deadlineMu.Unlock()
+		select {
+		case <-sub.done:
+			return context.Canceled
+		default:
+			return h.setWriteDeadline(controller)
+		}
+	}
+	watcherStop, watcherDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-sub.done:
+			deadlineMu.Lock()
+			_ = controller.SetWriteDeadline(time.Now())
+			deadlineMu.Unlock()
+		case <-watcherStop:
+		}
+	}()
+	defer func() {
+		close(watcherStop)
+		<-watcherDone
+	}()
+	if writeDeadline() != nil ||
 		writeEvent(w, Event{ID: snapshotID, Name: "queue_snapshot", Data: snapshotData}) != nil ||
 		controller.Flush() != nil {
 		return nil
@@ -201,7 +248,7 @@ func (h *Hub) serveSubscriberHTTP(ctx context.Context, w http.ResponseWriter, su
 		case <-sub.done:
 			return nil
 		case <-heartbeat.C:
-			if h.setWriteDeadline(controller) != nil {
+			if writeDeadline() != nil {
 				return nil
 			}
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
@@ -219,7 +266,7 @@ func (h *Hub) serveSubscriberHTTP(ctx context.Context, w http.ResponseWriter, su
 			if ev.ID <= snapshotID {
 				continue
 			}
-			if h.setWriteDeadline(controller) != nil || writeEvent(w, ev) != nil || controller.Flush() != nil {
+			if writeDeadline() != nil || writeEvent(w, ev) != nil || controller.Flush() != nil {
 				return nil
 			}
 		}

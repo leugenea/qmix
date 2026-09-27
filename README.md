@@ -295,10 +295,15 @@ it returns stable `503` JSON `{"status":"unavailable"}`. Readiness never runs
 `yt-dlp` and never performs network access.
 
 The backend handles both `SIGINT` and `SIGTERM` through `signal.NotifyContext`.
-It stops accepting new connections immediately, allows active HTTP, SSE, and
-audio-stream work 11 seconds to finish, then cancels request contexts and
-force-closes remaining connections within a 12-second total deadline. The room
-janitor is stopped and joined exactly once on this path and on listen failure.
+It stops SSE subscriptions as shutdown begins (including subscriptions that
+race with shutdown), so connected TVs do not consume the grace window and can
+reconnect after restart (qmix#207). It stops accepting new connections
+immediately, allows other active HTTP and audio-stream work up to 11 seconds
+to finish, then cancels their request contexts and force-closes remaining
+connections within a 12-second total deadline (qmix#132). Compose allows
+`stop_grace_period: 15s`, leaving time beyond the process deadline before
+Docker can force-kill the container. The room janitor is stopped and joined
+exactly once on this path and on listen failure.
 
 ## Backend logs
 

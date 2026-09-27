@@ -58,4 +58,6 @@ services:
         max-size: "10m"
         max-file: "3"
     restart: on-failure:3
+    # Longer than the 12s process deadline, including container teardown (qmix#207).
+    stop_grace_period: 15s
     mem_limit: 512m
