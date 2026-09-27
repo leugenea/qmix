@@ -10,7 +10,7 @@ from erosion import is_in_scope
 ROUTES = ("ci", "android", "live")
 OUTPUTS = (*ROUTES, "erosion", "duplication")
 SHARED_GO_FILES = {"go.mod", "go.sum"}
-CI_ROOT_FILES = {".dockerignore", "Dockerfile", "Makefile"}
+CI_ROOT_FILES = {".dockerignore", "Dockerfile", "docker-compose.yml", "Makefile"}
 
 
 def classify(paths, root=None):
