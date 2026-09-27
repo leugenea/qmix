@@ -305,24 +305,9 @@ func (b *YTDLP) Stream(ctx context.Context, t *Track, rangeHeader string) (*Resu
 	}
 	if !acceptedMediaStatus(resp.StatusCode) {
 		resp.Body.Close()
-		if c != nil {
-			url, attempted, err = b.freshURL(ctx, c, t, attempted)
-		} else {
-			url, err = b.searchURL(ctx, t)
-		}
+		resp, err = b.retryInvalidMedia(ctx, c, t, attempted, rangeHeader)
 		if err != nil {
 			return nil, err
-		}
-		resp, err = b.openURL(ctx, url, rangeHeader)
-		if err != nil {
-			return nil, err
-		}
-		if !acceptedMediaStatus(resp.StatusCode) {
-			resp.Body.Close()
-			if c != nil {
-				c.DeleteIfEntryFinal(cacheKey(t), attempted)
-			}
-			return nil, fmt.Errorf("ytdlp: %w: invalid upstream media response", ErrService)
 		}
 	}
 
@@ -340,6 +325,33 @@ func (b *YTDLP) Stream(ctx context.Context, t *Track, rangeHeader string) (*Resu
 		res.ContentRange = "bytes 0-" + formatInt(resp.ContentLength-1) + "/" + formatInt(resp.ContentLength)
 	}
 	return res, nil
+}
+
+// A rejected GET gets exactly one fresh lookup and retry. Only the selected
+// cache may receive the terminal invalidation, even if SetCache ran meanwhile.
+func (b *YTDLP) retryInvalidMedia(ctx context.Context, c *Cache, t *Track, attempted *entry, rangeHeader string) (*http.Response, error) {
+	var url string
+	var err error
+	if c != nil {
+		url, attempted, err = b.freshURL(ctx, c, t, attempted)
+	} else {
+		url, err = b.searchURL(ctx, t)
+	}
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.openURL(ctx, url, rangeHeader)
+	if err != nil {
+		return nil, err
+	}
+	if !acceptedMediaStatus(resp.StatusCode) {
+		resp.Body.Close()
+		if c != nil {
+			c.DeleteIfEntryFinal(cacheKey(t), attempted)
+		}
+		return nil, fmt.Errorf("ytdlp: %w: invalid upstream media response", ErrService)
+	}
+	return resp, nil
 }
 
 func acceptedMediaStatus(status int) bool {

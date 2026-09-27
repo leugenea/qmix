@@ -217,26 +217,31 @@ func (c *Cache) rejectLocked(key string, s *keyState, attempted *entry, reserve 
 		return false
 	}
 	current := s.liveEntry()
-	if current != attempted {
-		// An expired attempted entry can still reject an ordinary lookup
-		// started before its failed GET. Its generation must be the newest
-		// known one; a late failure of an older entry cannot touch a newer
-		// publication, reservation, or flight. The entry's lineage remains
-		// reachable even when this key's idle state was pruned after expiry.
-		latest := s.latest
-		if attempted.lineage != nil && attempted.lineage.latest > latest {
-			latest = attempted.lineage.latest
-		}
-		if current != nil || attempted.cache != c || attempted.key != key || attempted.gen < latest ||
-			(s.owner != nil && s.owner != attempted) || s.owner == attempted {
-			c.discard(key, s)
-			return false
-		}
-	} else if attempted.gen == 0 {
+	if current != attempted && !c.rejectableExpiredLocked(key, s, attempted, current) {
+		c.discard(key, s)
+		return false
+	}
+	if current == attempted && attempted.gen == 0 {
 		// Tests and callers that inject entries under mu get an identity too.
 		c.next++
 		attempted.gen, attempted.cache, attempted.key, attempted.lineage = c.next, c, key, s.lineage
 	}
+	c.recordRejectionLocked(key, s, attempted, reserve)
+	return current == attempted
+}
+
+// An expired attempt may reject only if no newer publication or owner has
+// superseded it. Its lineage survives pruning of the old idle key state.
+func (c *Cache) rejectableExpiredLocked(key string, s *keyState, attempted, current *entry) bool {
+	latest := s.latest
+	if attempted.lineage != nil && attempted.lineage.latest > latest {
+		latest = attempted.lineage.latest
+	}
+	return current == nil && attempted.cache == c && attempted.key == key &&
+		attempted.gen >= latest && s.owner == nil
+}
+
+func (c *Cache) recordRejectionLocked(key string, s *keyState, attempted *entry, reserve bool) {
 	if attempted.lineage != nil && attempted.lineage.latest > s.latest {
 		s.latest = attempted.lineage.latest
 		s.lineage = attempted.lineage
@@ -245,9 +250,7 @@ func (c *Cache) rejectLocked(key string, s *keyState, attempted *entry, reserve 
 	if reserve {
 		s.owner = attempted
 	} else if s.owner != nil && s.owner.gen <= attempted.gen {
-		// A terminal rejection ends this generation's retry budget. It also
-		// retires any older reservation; otherwise the older lookup could
-		// resurrect a value after this newer failed GET.
+		// Terminal rejection retires this or any older reservation.
 		s.owner = nil
 	}
 	if attempted.gen > s.latest {
@@ -258,7 +261,6 @@ func (c *Cache) rejectLocked(key string, s *keyState, attempted *entry, reserve 
 	}
 	s.epoch++
 	c.discard(key, s)
-	return current == attempted
 }
 
 func (c *Cache) doContext(ctx context.Context, key string, stale *entry, fresh, rejectFirst, leased bool, loader func(context.Context) (interface{}, error)) (*entry, func(), error) {
@@ -266,14 +268,33 @@ func (c *Cache) doContext(ctx context.Context, key string, stale *entry, fresh, 
 		return nil, nil, err
 	}
 	c.mu.Lock()
-	// Admission linearizes under mu. Cancellation while waiting for the lock
-	// must not reject a live entry, reserve an owner, pin, or join a flight.
-	if err := ctx.Err(); err != nil {
+	s, current, err := c.admitLocked(ctx, key, stale, fresh, rejectFirst)
+	if err != nil {
 		c.mu.Unlock()
 		return nil, nil, err
 	}
-	if fresh && stale != nil && c.foreignEntryLocked(key, stale) {
+	release := c.leaseLocked(key, s, leased)
+	if !fresh && current != nil {
 		c.mu.Unlock()
+		return current, release, nil
+	}
+	pending := c.flightLocked(ctx, key, s, current, stale, fresh, loader)
+	pending.waiters++
+	select {
+	case c.waiterChanged <- struct{}{}:
+	default:
+	}
+	c.mu.Unlock()
+	return c.waitForFlight(ctx, key, s, pending, release)
+}
+
+// Admission linearizes under mu. Cancellation while waiting for the lock
+// cannot reject a live entry, reserve an owner, pin, or join a flight.
+func (c *Cache) admitLocked(ctx context.Context, key string, stale *entry, fresh, rejectFirst bool) (*keyState, *entry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if fresh && stale != nil && c.foreignEntryLocked(key, stale) {
 		return nil, nil, ErrService
 	}
 	s := c.state(key)
@@ -282,53 +303,56 @@ func (c *Cache) doContext(ctx context.Context, key string, stale *entry, fresh, 
 		// A stale failure may have discarded a newly-created empty state.
 		s = c.state(key)
 	}
-	current := s.liveEntry()
-	var release func()
-	if leased {
-		s.pins++
-		var once sync.Once
-		release = func() {
-			once.Do(func() {
-				c.mu.Lock()
-				s.pins--
-				c.discard(key, s)
-				c.mu.Unlock()
-			})
-		}
+	return s, s.liveEntry(), nil
+}
+
+func (c *Cache) leaseLocked(key string, s *keyState, leased bool) func() {
+	if !leased {
+		return nil
 	}
-	if !fresh && current != nil {
-		c.mu.Unlock()
-		return current, release, nil
+	s.pins++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.mu.Lock()
+			s.pins--
+			c.discard(key, s)
+			c.mu.Unlock()
+		})
 	}
-	var pending *call
+}
+
+// A status flight is keyed by the failed identity. Ordinary misses may join
+// an owner's refresh but never compete with it for publication.
+func (s *keyState) pending(stale *entry, fresh bool) *call {
 	if fresh {
-		pending = s.refreshes[stale]
-	} else if s.owner != nil && s.refreshes[s.owner] != nil {
-		// This refresh started after rejection, so an ordinary miss arriving
-		// now can safely consume its result without launching a rival lookup.
-		pending = s.refreshes[s.owner]
-	} else {
-		pending = s.ordinary
+		return s.refreshes[stale]
 	}
-	if pending == nil {
-		loadCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-		pending = &call{done: make(chan struct{}), cancel: cancel, fresh: fresh, stale: stale, start: current, epoch: s.epoch, baseline: s.latest, lineage: s.lineage}
-		if fresh {
-			if s.refreshes == nil {
-				s.refreshes = make(map[*entry]*call)
-			}
-			s.refreshes[stale] = pending
-		} else {
-			s.ordinary = pending
+	if s.owner != nil && s.refreshes[s.owner] != nil {
+		return s.refreshes[s.owner]
+	}
+	return s.ordinary
+}
+
+func (c *Cache) flightLocked(ctx context.Context, key string, s *keyState, current, stale *entry, fresh bool, loader func(context.Context) (interface{}, error)) *call {
+	if pending := s.pending(stale, fresh); pending != nil {
+		return pending
+	}
+	loadCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	pending := &call{done: make(chan struct{}), cancel: cancel, fresh: fresh, stale: stale, start: current, epoch: s.epoch, baseline: s.latest, lineage: s.lineage}
+	if fresh {
+		if s.refreshes == nil {
+			s.refreshes = make(map[*entry]*call)
 		}
-		go c.load(loadCtx, key, s, pending, loader)
+		s.refreshes[stale] = pending
+	} else {
+		s.ordinary = pending
 	}
-	pending.waiters++
-	select {
-	case c.waiterChanged <- struct{}{}:
-	default:
-	}
-	c.mu.Unlock()
+	go c.load(loadCtx, key, s, pending, loader)
+	return pending
+}
+
+func (c *Cache) waitForFlight(ctx context.Context, key string, s *keyState, pending *call, release func()) (*entry, func(), error) {
 	select {
 	case <-pending.done:
 		if pending.err != nil && release != nil {
@@ -385,19 +409,8 @@ func (c *Cache) load(ctx context.Context, key string, s *keyState, cl *call, loa
 		s.remove(cl)
 		current := s.liveEntry()
 		if cl.fresh {
-			if s.owner == cl.stale && cl.stale != nil && s.epoch == cl.epoch {
-				if err == nil && current == nil {
-					cl.result = c.publish(s, key, val)
-				}
-				s.owner = nil
-			} else if err == nil && s.owner == nil && (current == nil || current == cl.start) && s.epoch == cl.epoch &&
-				(current == nil || current == cl.stale) {
-				// Without a reservation, an expired newer generation has no
-				// claim. An old failed GET may publish only when no newer live
-				// entry or owner appeared since this lookup began.
-				cl.result = c.publish(s, key, val)
-			}
-		} else if err == nil && s.owner == nil && current == cl.start && s.epoch == cl.epoch {
+			c.finishFreshLocked(key, s, cl, current, val, err)
+		} else if err == nil && cl.canPublishOrdinary(s, current) {
 			cl.result = c.publish(s, key, val)
 		}
 		c.discard(key, s)
@@ -412,6 +425,28 @@ func (c *Cache) load(ctx context.Context, key string, s *keyState, cl *call, loa
 	cl.cancel()
 	close(cl.done)
 	c.mu.Unlock()
+}
+
+func (cl *call) canPublishOrdinary(s *keyState, current *entry) bool {
+	return s.owner == nil && current == cl.start && s.epoch == cl.epoch
+}
+
+// An unreserved refresh can publish after expiry, but not over a live newer
+// generation or an intervening mutation of this key.
+func (cl *call) canPublishUnownedFresh(s *keyState, current *entry) bool {
+	return s.owner == nil && (current == nil || current == cl.start) &&
+		s.epoch == cl.epoch && (current == nil || current == cl.stale)
+}
+
+func (c *Cache) finishFreshLocked(key string, s *keyState, cl *call, current *entry, val interface{}, err error) {
+	if s.owner == cl.stale && cl.stale != nil && s.epoch == cl.epoch {
+		if err == nil && current == nil {
+			cl.result = c.publish(s, key, val)
+		}
+		s.owner = nil
+	} else if err == nil && cl.canPublishUnownedFresh(s, current) {
+		cl.result = c.publish(s, key, val)
+	}
 }
 
 func (c *Cache) publish(s *keyState, key string, val interface{}) *entry {
