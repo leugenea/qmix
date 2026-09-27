@@ -183,15 +183,15 @@ func TestResolver_YouTubeWatchURLExecUsesSingleVideoMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "--skip-download\n--dump-json\n--no-warnings\n--no-playlist\n" + source + "\n"
+	want := "--skip-download\n--dump-json\n--no-warnings\n--no-playlist\n--\n" + source + "\n"
 	if string(got) != want {
 		t.Fatalf("yt-dlp args = %q, want %q", got, want)
 	}
 }
 
-// TestResolver_YouTubePlaylistClassification proves playlist-only submissions
-// fail as unsupported before yt-dlp starts while URLs with a video ID continue
-// to resolve exactly one selected video (qmix#129).
+// TestResolver_YouTubePlaylistClassification preserves qmix#129 single-video
+// behavior for watch URLs with v and list, while non-video resources (including
+// empty or malformed list values) are rejected before yt-dlp starts (qmix#205).
 func TestResolver_YouTubePlaylistClassification(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -220,9 +220,9 @@ func TestResolver_YouTubePlaylistClassification(t *testing.T) {
 		{name: "live video", source: "https://www.youtube.com/live/video-id?list=playlist-id"},
 		{name: "embed video", source: "https://www.youtube.com/embed/video-id?list=playlist-id"},
 		{name: "v path video", source: "https://www.youtube.com/v/video-id?list=playlist-id"},
-		{name: "empty list", source: "https://www.youtube.com/watch?list="},
-		{name: "whitespace list", source: "https://www.youtube.com/watch?list=%20%09"},
-		{name: "malformed list only", source: "https://www.youtube.com/watch?list=%zz"},
+		{name: "empty list", source: "https://www.youtube.com/watch?list=", wantUnsupported: true},
+		{name: "whitespace list", source: "https://www.youtube.com/watch?list=%20%09", wantUnsupported: true},
+		{name: "malformed list only", source: "https://www.youtube.com/watch?list=%zz", wantUnsupported: true},
 		{name: "no playlist", source: "https://www.youtube.com/watch?v=video-id"},
 	}
 

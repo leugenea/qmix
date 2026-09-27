@@ -33,9 +33,9 @@ const ytdlpBin = "yt-dlp"
 // incoming request lifetime. Metadata calls are expected to finish quickly.
 const ytdlpMetadataTimeout = 30 * time.Second
 
-// Run invokes `yt-dlp --skip-download --dump-json --no-playlist`.
+// Run invokes yt-dlp in single-video mode, separating options from the URL.
 func (r ytdlpRunner) Run(ctx context.Context, url string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, r.bin, "--skip-download", "--dump-json", "--no-warnings", "--no-playlist", url)
+	cmd := exec.CommandContext(ctx, r.bin, "--skip-download", "--dump-json", "--no-warnings", "--no-playlist", "--", url)
 	return cmd.Output()
 }
 
@@ -101,28 +101,23 @@ func hasNonBlankQueryValue(u *url.URL, key string) bool {
 	return false
 }
 
+// hasYouTubeVideoID allows only explicit single-video resource forms. A v
+// parameter on a channel, playlist, or search page is not a video resource.
 func hasYouTubeVideoID(u *url.URL) bool {
-	if hasNonBlankQueryValue(u, "v") {
-		return true
-	}
-
 	path := strings.Trim(u.Path, "/")
-	if strings.EqualFold(u.Hostname(), "youtu.be") {
-		id, _, _ := strings.Cut(path, "/")
-		return strings.TrimSpace(id) != ""
+	if hostMatchesDomain(strings.TrimSuffix(strings.ToLower(u.Hostname()), "."), "youtu.be") {
+		return path != "" && !strings.Contains(path, "/") && strings.TrimSpace(path) != ""
 	}
-
+	if path == "watch" {
+		return hasNonBlankQueryValue(u, "v")
+	}
 	parts := strings.Split(path, "/")
-	if len(parts) < 2 {
-		return false
-	}
-	id := strings.TrimSpace(parts[1])
-	if id == "" {
+	if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
 		return false
 	}
 	switch parts[0] {
 	case "embed":
-		return !strings.EqualFold(id, "videoseries")
+		return !strings.EqualFold(parts[1], "videoseries")
 	case "live", "shorts", "v":
 		return true
 	default:
@@ -130,20 +125,21 @@ func hasYouTubeVideoID(u *url.URL) bool {
 	}
 }
 
-func playlistOnlyYouTubeURL(rawurl string) bool {
-	u, err := url.Parse(rawurl)
-	if err != nil || !hasNonBlankQueryValue(u, "list") {
+func isYouTubeVideoURL(rawurl string) bool {
+	host, err := DomainOf(rawurl)
+	if err != nil || (!hostMatchesDomain(host, "youtube.com") && !hostMatchesDomain(host, "youtu.be")) {
 		return false
 	}
-	return !hasYouTubeVideoID(u)
+	u, err := url.Parse(rawurl)
+	return err == nil && hasYouTubeVideoID(u)
 }
 
-// Resolve fetches metadata for a YouTube url through the runner. The yt-dlp
-// subprocess holds one shared capacity slot for exactly its duration
-// (qmix#130); playlist-only URLs are rejected before any capacity is consumed.
+// Resolve fetches metadata for an explicit YouTube video URL. Unsupported
+// resources are rejected before acquiring shared subprocess capacity (qmix#205).
 func (y *YouTube) Resolve(ctx context.Context, rawurl string) (*Track, error) {
-	if playlistOnlyYouTubeURL(rawurl) {
-		return nil, errors.Join(ErrUnsupported, errors.New("youtube: playlist URLs require a video ID"))
+	rawurl = strings.TrimSpace(rawurl)
+	if !isYouTubeVideoURL(rawurl) {
+		return nil, errors.Join(ErrUnsupported, errors.New("youtube: URL requires an explicit video ID"))
 	}
 	if err := y.Limiter.Acquire(ctx); err != nil {
 		return nil, err

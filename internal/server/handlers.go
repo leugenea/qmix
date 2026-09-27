@@ -244,7 +244,8 @@ func (s *Server) handleAddTrack(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if strings.TrimSpace(req.URL) == "" {
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL == "" {
 		writeQueueSubmissionError(w, errEmptyTrackURL)
 		return
 	}

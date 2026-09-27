@@ -111,7 +111,8 @@ contains only `code`, `current`, and `queue`; it never exposes `HostToken`.
 
 **Track**
 - `id` — internal track identifier
-- `url` — original supported Spotify, YouTube, VK, or Yandex Music link
+- `url` — submitted supported Spotify, YouTube, VK, or Yandex Music link,
+  with surrounding whitespace removed by the add-track HTTP handler
 - `title`, `artist` — metadata returned by the resolver
 - `duration_sec` — duration in seconds
 - `resolved_by` — resolver plugin that produced the metadata
@@ -222,9 +223,16 @@ injectable runner interface. Resolver selection is based on the link's domain.
 Links without an anonymous resolution path (such as non-public VK or Yandex
 Music metadata) and unknown domains return 422 with a human-readable error;
 service failures return 502. YouTube metadata extraction uses `--no-playlist`:
-a watch URL containing both `v` and `list` resolves only the selected `v` video,
-while a playlist-only URL without a video ID returns the unsupported-service
-422 before a subprocess starts. The resolver neither uses user accounts nor
+a watch URL containing both `v` and `list` resolves only the selected `v` video.
+Only explicit video-resource URLs (`/watch?v=...`, `youtu.be/<id>`,
+`/embed/<id>` except `videoseries`, `/shorts/<id>`, `/live/<id>`, and
+`/v/<id>`) reach the runner. The resolver rejects playlist-only, channel,
+search, home, and other non-video YouTube resources before subprocess capacity
+is acquired or yt-dlp starts (qmix#205). For queue submissions that reach
+resolution, HTTP maps this rejection to unsupported-service 422; earlier room,
+body, queue, and admission checks retain precedence. The add-track boundary
+removes surrounding whitespace once for resolution and stored URLs; URLs are
+not otherwise rewritten. The resolver neither uses user accounts nor
 fabricates metadata.
 
 Spotify also supports an authorized path. When
