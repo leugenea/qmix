@@ -463,6 +463,7 @@ class PlayerStatePublisherTest {
             },
             parentScope = backgroundScope,
             mutationContext = QueueMutationContext(ImmediateDispatcher) { true },
+            finalReportScope = backgroundScope,
             listener = notifications,
         )
 
@@ -769,6 +770,7 @@ class PlayerStatePublisherTest {
             },
             parentScope = backgroundScope,
             mutationContext = QueueMutationContext(dispatcher) { true },
+            finalReportScope = backgroundScope,
             listener = notifications,
         )
 
@@ -790,6 +792,7 @@ class PlayerStatePublisherTest {
             roomCode = "ABCD", hostToken = "host-secret", reportPlayer = reporter::report,
             parentScope = backgroundScope,
             mutationContext = QueueMutationContext(StandardTestDispatcher(testScheduler)) { true },
+            finalReportScope = backgroundScope,
         )
         publisher.selectTrack("one")
         publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 1), immediate = true)
@@ -813,6 +816,117 @@ class PlayerStatePublisherTest {
         publisher.close()
     }
 
+    @Test
+    fun final_pause_survives_session_cancellation_and_times_out_without_reopening_background_reporting() = runTest {
+        val reporter = SuspendedReporter()
+        val sessionJob = SupervisorJob(backgroundScope.coroutineContext[Job])
+        val session = CoroutineScope(backgroundScope.coroutineContext + sessionJob)
+        val publisher = publisher(reporter, parentScope = session)
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 4), immediate = true)
+        runCurrent()
+
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 5))
+        sessionJob.cancel()
+        publisher.close()
+        runCurrent()
+        assertEquals(listOf(PlayerReportState.PLAYING, PlayerReportState.PAUSED), reporter.states())
+        assertTrue(reporter.calls[0].canceled)
+        assertFalse(reporter.calls[1].canceled)
+
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(reporter.calls[1].canceled)
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 6), immediate = true)
+        advanceTimeBy(15_000)
+        runCurrent()
+        assertEquals(2, reporter.calls.size)
+    }
+
+    @Test
+    fun final_pause_drops_on_timeout_waiting_for_an_uncancellable_previous_report() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 4), immediate = true)
+        runCurrent()
+        reporter.calls.single().ignoreCancellation = true
+
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 5))
+        runCurrent()
+        assertEquals(listOf(PlayerReportState.PLAYING), reporter.states())
+        advanceTimeBy(2_000)
+        runCurrent()
+        reporter.complete(0, PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(listOf(PlayerReportState.PLAYING), reporter.states())
+        publisher.close()
+    }
+
+    @Test
+    fun foreground_recovery_waits_for_the_final_pause_before_a_new_report() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 4), immediate = true)
+        runCurrent()
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 5))
+        runCurrent()
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PAUSED, 6), immediate = true)
+        runCurrent()
+        assertEquals(listOf(4, 5), reporter.positions())
+
+        reporter.complete(1, PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(listOf(4, 5, 6), reporter.positions())
+        publisher.close()
+    }
+
+    @Test
+    fun foreground_recovery_waits_for_the_final_pause_before_resuming_playing() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 4), immediate = true)
+        runCurrent()
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 5))
+        runCurrent()
+
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 6), immediate = true)
+        runCurrent()
+        assertEquals(listOf(PlayerReportState.PLAYING, PlayerReportState.PAUSED), reporter.states())
+        assertEquals(1, reporter.inFlight)
+
+        reporter.complete(1, PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(listOf(PlayerReportState.PLAYING, PlayerReportState.PAUSED, PlayerReportState.PLAYING),
+            reporter.states())
+        assertEquals(listOf(4, 5, 6), reporter.positions())
+        assertEquals(1, reporter.maxInFlight)
+        publisher.close()
+    }
+
+    @Test
+    fun final_pause_transport_exception_is_swallowed() = runTest {
+        var attempts = 0
+        val publisher = PlayerStatePublisher(
+            roomCode = "ABCD", hostToken = "host-secret",
+            reportPlayer = { _, _, _ -> attempts++; throw IllegalStateException("offline") },
+            parentScope = backgroundScope,
+            mutationContext = QueueMutationContext(StandardTestDispatcher(testScheduler)) { true },
+            finalReportScope = backgroundScope,
+        )
+        publisher.selectTrack("one")
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 0))
+        runCurrent()
+        assertEquals(1, attempts)
+        publisher.close()
+    }
+
     private object ImmediateDispatcher : CoroutineDispatcher() {
         override fun isDispatchNeeded(context: CoroutineContext) = false
 
@@ -830,6 +944,7 @@ class PlayerStatePublisherTest {
         reportPlayer = reporter::report,
         parentScope = parentScope,
         mutationContext = QueueMutationContext(dispatcher) { true },
+        finalReportScope = backgroundScope,
         listener = listener,
     )
 

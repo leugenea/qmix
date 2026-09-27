@@ -12,6 +12,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 /** Structured, selection-bound publication of the host's actual local playback state. */
 class PlayerStatePublisher(
@@ -20,6 +21,7 @@ class PlayerStatePublisher(
     private val reportPlayer: suspend (String, String, PlayerReport) -> PlayerReportResult,
     parentScope: CoroutineScope,
     private val mutationContext: QueueMutationContext,
+    private val finalReportScope: CoroutineScope,
     listener: Listener = object : Listener {
         override fun onSynchronizationChanged(synchronized: Boolean) = Unit
         override fun onConflict() = Unit
@@ -34,6 +36,7 @@ class PlayerStatePublisher(
 
     private companion object {
         const val PROGRESS_INTERVAL_MILLIS = 7_500L
+        const val FINAL_PAUSE_TIMEOUT_MILLIS = 2_000L
     }
 
     private enum class ReportingMode { ACTIVE, RECONCILING, STOPPED }
@@ -45,8 +48,10 @@ class PlayerStatePublisher(
     private val listener = listener
     private var selection: Selection? = null
     private var latest: PlayerReport? = null
+    private var acceptedPause: PlayerReport? = null
     private var pending: PlayerReport? = null
     private var reportJob: Job? = null
+    private var finalPauseJob: Job? = null
     private var periodicJob: Job? = null
     private var playingProgressEnabled = false
     private var synchronized = true
@@ -72,6 +77,7 @@ class PlayerStatePublisher(
         selection = selectedTrackId?.let(::Selection)
         mode = ReportingMode.ACTIVE
         latest = null
+        acceptedPause = null
         pending = null
         playingProgressEnabled = false
         periodicJob?.cancel()
@@ -84,14 +90,11 @@ class PlayerStatePublisher(
         immediate: Boolean,
         periodicProgress: Boolean = report.state == PlayerReportState.PLAYING,
     ): Unit = mutationContext.run {
-        val activeSelection = selection
-        if (!sessionJob.isActive || !foreground || mode != ReportingMode.ACTIVE ||
-            report.trackId != activeSelection?.trackId
-        ) {
-            return@run
-        }
+        val activeSelection = selection ?: return@run
+        if (!canUpdate(report, activeSelection)) return@run
 
         latest = report
+        clearAcknowledgedPauseIfChanged(report)
         playingProgressEnabled = periodicProgress && report.state == PlayerReportState.PLAYING
         if (playingProgressEnabled) {
             ensurePeriodic(activeSelection)
@@ -107,6 +110,14 @@ class PlayerStatePublisher(
             send(report, activeSelection)
         }
     }
+
+    private fun clearAcknowledgedPauseIfChanged(report: PlayerReport) {
+        if (report.state != PlayerReportState.PAUSED || acceptedPause != report) acceptedPause = null
+    }
+
+    private fun canUpdate(report: PlayerReport, activeSelection: Selection): Boolean =
+        sessionJob.isActive && foreground && mode == ReportingMode.ACTIVE &&
+            report.trackId == activeSelection.trackId
 
     fun suspendPlayingProgress(): Unit = mutationContext.run {
         if (!sessionJob.isActive) return@run
@@ -127,6 +138,34 @@ class PlayerStatePublisher(
         periodicJob?.cancel()
         periodicJob = null
         activeReport?.cancel()
+    }
+
+    /** One bounded final report, owned by the process rather than the cancelled room session.
+     * Wait for the cancelled in-flight report: the backend has no per-track sequence numbers.
+     * A timeout while an older request ignores cancellation drops the pause. Cancellation
+     * cannot prove ordering for a request the backend already received; this is best effort.
+     * No callbacks or retries are emitted.
+     */
+    fun reportFinalPause(report: PlayerReport, alreadyPaused: Boolean = false): Unit = mutationContext.run {
+        if (report.state != PlayerReportState.PAUSED || report.trackId != selection?.trackId ||
+            !foreground || (alreadyPaused && acceptedPause == report)
+        ) return@run
+        val previous = reportJob
+        val priorPause = finalPauseJob
+        setForeground(false)
+        val job = finalReportScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                withTimeout(FINAL_PAUSE_TIMEOUT_MILLIS) {
+                    priorPause?.join()
+                    previous?.join()
+                    reportPlayer(roomCode, hostToken, report)
+                }
+            } catch (_: Exception) {
+                // Network failures, cancellation, and the deadline cannot block local teardown.
+            }
+        }
+        finalPauseJob = job
+        job.start()
     }
 
     private fun ensurePeriodic(expectedSelection: Selection) {
@@ -158,6 +197,7 @@ class PlayerStatePublisher(
             var completedResult: PlayerReportResult? = null
             try {
                 val result = try {
+                    finalPauseJob?.join()
                     reportPlayer(roomCode, hostToken, report)
                 } catch (canceled: CancellationException) {
                     throw canceled
@@ -165,6 +205,7 @@ class PlayerStatePublisher(
                     PlayerReportResult.FAILED
                 }
                 coroutineContext.ensureActive()
+                recordAcceptedPause(report, result)
                 completedResult = result
             } finally {
                 finish(expectedSelection, activeJob, completedResult)
@@ -172,6 +213,12 @@ class PlayerStatePublisher(
         }
         reportJob = job
         job.start()
+    }
+
+    private fun recordAcceptedPause(report: PlayerReport, result: PlayerReportResult) {
+        if (result == PlayerReportResult.ACCEPTED && report.state == PlayerReportState.PAUSED &&
+            latest == report && foreground
+        ) acceptedPause = report
     }
 
     private fun finish(

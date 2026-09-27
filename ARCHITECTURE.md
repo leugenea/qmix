@@ -447,10 +447,24 @@ and subscriber invalidation behavior.
 - The Android host publishes actual playback through one serialized request
   pipeline. Immediate transitions supersede queued progress, old-track callbacks
   are excluded by selection-bound Job cancellation, and 409 responses force a
-  GET reconciliation without retrying the rejected report. GET/SSE echoes for the same `track_id` update
-  presentation only and never command Media3. During network loss the server
-  deliberately retains the last accepted state and position; local playback
-  continues and marks reporting unsynchronized until a later accepted report.
+  GET reconciliation without retrying the rejected report. Foreground loss or
+  coordinator close while playing/buffering cancels ordinary reports and sends
+  one best-effort PAUSED report (captured track and last position) on the
+  application-owned IO scope, with a two-second deadline. It waits for the
+  cancelled in-flight coroutine before sending PAUSED and drops the final report
+  if an uncooperative older request consumes the deadline. Since the backend has
+  no per-track sequence numbers, cancellation cannot rule out a prior request
+  already received by the server; this last report is best effort. An already
+  acknowledged pause at the same position is not duplicated; an unacknowledged
+  explicit pause is retried once because ordinary reporting is cancelled. Completed,
+  error, and idle selections do not send a final pause. Room end detaches the
+  host session but does not delete the backend room, so the final report remains
+  meaningful after session cancellation; a concurrently skipped/expired room
+  rejects it without a retry. GET/SSE echoes for the same
+  `track_id` update presentation only and never command Media3. During network
+  loss the server deliberately retains the last accepted state and position;
+  local playback continues and marks reporting unsynchronized until a later
+  accepted report.
 - State loss on backend restart is acceptable because MVP rooms are ephemeral.
 
 ## 9. Deployment

@@ -105,6 +105,7 @@ class QMixApplication : Application() {
                             reportPlayer = api::reportPlayer,
                             parentScope = sessionScope,
                             mutationContext = queueMutationContext,
+                            finalReportScope = CoroutineScope(applicationScope.coroutineContext + Dispatchers.IO),
                             listener = listener,
                         ) },
                     )
