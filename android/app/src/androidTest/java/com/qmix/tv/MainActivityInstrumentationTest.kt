@@ -3,6 +3,7 @@ package com.qmix.tv
 import android.content.Context
 import android.content.Intent
 import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasContentDescription
@@ -250,6 +251,93 @@ class MainActivityInstrumentationTest {
                 }
             }
         }
+    }
+
+    /** qmix#211: ambient mode must not interrupt active local playback. */
+    @Test
+    fun keep_screen_on_follows_local_playback_and_room_teardown() {
+        val server = MockWebServer()
+        server.start()
+        server.enqueue(MockResponse().setResponseCode(201).setBody(
+            """{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""",
+        ))
+        val repository = RecordingRepository()
+        val playback = RecordingPlaybackEngine()
+        val controller = createController(server, repository, playback)
+        val application = ApplicationProvider.getApplicationContext<QMixApplication>()
+        val lease = application.installActivityHostSessionProvider { controller }
+        try {
+            assertTrue(controller.createRoom())
+            controller.awaitCreatedForTest()
+            controller.enterRoom()
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                assertKeepScreenOn(scenario, false)
+                val current = CurrentTrack("current", 0, "playing", "Current", "Artist")
+                repository.publishCurrent(current)
+                controller.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING)
+                assertKeepScreenOn(scenario, true)
+
+                playback.emit(playingState())
+                controller.awaitPlaybackStatus(LocalPlaybackStatus.PLAYING)
+                assertKeepScreenOn(scenario, true)
+
+                controller.pausePlayback()
+                controller.awaitPlaybackStatus(LocalPlaybackStatus.PAUSED)
+                assertKeepScreenOn(scenario, false)
+
+                controller.resumePlayback()
+                controller.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING)
+                assertKeepScreenOn(scenario, true)
+
+                playback.emit(PlaybackState(mediaId = "current", status = PlaybackStatus.ENDED))
+                controller.awaitPlaybackStatus(LocalPlaybackStatus.COMPLETED)
+                assertKeepScreenOn(scenario, false)
+
+                repository.publishCurrent(current.copy(trackId = "next"))
+                controller.awaitStateForTest {
+                    (it as? HostingState.LiveRoom)?.playback?.trackId == "next"
+                }
+                assertKeepScreenOn(scenario, true)
+                playback.emit(PlaybackState(mediaId = "next", status = PlaybackStatus.ERROR))
+                controller.awaitPlaybackStatus(LocalPlaybackStatus.ERROR)
+                assertKeepScreenOn(scenario, false)
+
+                repository.publishCurrent(null)
+                controller.awaitPlaybackStatus(LocalPlaybackStatus.IDLE)
+                assertKeepScreenOn(scenario, false)
+
+                repository.publishCurrent(current)
+                controller.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING)
+                assertKeepScreenOn(scenario, true)
+                controller.endRoom()
+                controller.awaitStateForTest { it !is HostingState.LiveRoom }
+                assertKeepScreenOn(scenario, false)
+            }
+        } finally {
+            controller.endRoom()
+            lease.close()
+            server.shutdown()
+        }
+    }
+
+    private fun assertKeepScreenOn(scenario: ActivityScenario<MainActivity>, expected: Boolean) {
+        awaitConditionForTest {
+            var actual = false
+            scenario.onActivity { activity ->
+                actual = activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
+            }
+            actual == expected
+        }
+    }
+
+    private fun RecordingRepository.publishCurrent(current: CurrentTrack?) {
+        publish(RoomSyncState.Active(
+            "ABCD", RoomState("ABCD", current, emptyList()), Freshness.FRESH, LiveConnection.CONNECTED,
+        ))
+    }
+
+    private fun HostSessionController.awaitPlaybackStatus(status: LocalPlaybackStatus) {
+        awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status == status }
     }
 
     @Test

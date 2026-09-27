@@ -2,8 +2,10 @@ package com.qmix.tv
 
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -15,6 +17,12 @@ class MainActivity : ComponentActivity() {
         controller = (application as QMixApplication).hostSessionForActivity()
         setContent {
             val uiState by controller.states.collectAsStateWithLifecycle()
+            val keepScreenOn = shouldKeepScreenOn(uiState)
+            DisposableEffect(keepScreenOn) {
+                if (keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            }
             HostingScreen(
                 state = uiState,
                 onSettingsChanged = controller::updateSettings,
@@ -35,6 +43,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         if (::controller.isInitialized) controller.onHostStopped()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onStop()
     }
 
@@ -55,6 +64,12 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 }
+
+internal fun shouldKeepScreenOn(state: HostingState): Boolean =
+    (state as? HostingState.LiveRoom)?.playback?.status in setOf(
+        LocalPlaybackStatus.PLAYING,
+        LocalPlaybackStatus.BUFFERING,
+    )
 
 internal fun dispatchPlaybackMediaKey(event: KeyEvent, handler: LiveRoomHandler): Boolean {
     val action = when (event.keyCode) {
