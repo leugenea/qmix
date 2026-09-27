@@ -75,8 +75,9 @@ func NewHubWithLogger(logger *slog.Logger) *Hub {
 	}
 	return &Hub{
 		incarnations: make(map[roomRef]*roomHub),
-		Heartbeat:    15 * time.Second,
-		logger:       logger.With("component", "sse"),
+		// qmix#213: Android's 45s SSE read timeout allows three 15s keep-alive intervals.
+		Heartbeat: 15 * time.Second,
+		logger:    logger.With("component", "sse"),
 	}
 }
 

@@ -246,6 +246,26 @@ class SequentialRoomRepositoryTest {
         assertEquals(LiveConnection.CONNECTED, (fixture.observed.last() as RoomSyncState.Active).connection)
     }
 
+    /** qmix#213: a transport timeout has no HTTP status and uses the usual backoff. */
+    @Test
+    fun network_failure_after_open_reconnects_after_backoff() = runTest {
+        val fixture = Fixture(this)
+        fixture.start()
+        fixture.events.latest.emit(RoomEventStreamEvent.Opened)
+        runCurrent()
+        assertEquals(LiveConnection.CONNECTED, (fixture.observed.last() as RoomSyncState.Active).connection)
+
+        fixture.events.latest.emit(RoomEventStreamEvent.Failure(null))
+        runCurrent()
+        assertEquals(LiveConnection.RECONNECTING, (fixture.observed.last() as RoomSyncState.Active).connection)
+        advanceTimeBy(499L)
+        runCurrent()
+        assertEquals(1, fixture.events.connections.size)
+        advanceTimeBy(1L)
+        runCurrent()
+        assertEquals(2, fixture.events.connections.size)
+    }
+
     @Test
     fun clean_sse_close_is_treated_as_a_network_reconnect() = runTest {
         val fixture = Fixture(this)

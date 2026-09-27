@@ -57,6 +57,36 @@ class OkHttpRoomEventStreamTest {
         assertNull(request.headers["X-Host-Token"])
     }
 
+    /** qmix#213: a half-open SSE response must fail rather than wait forever for bytes. */
+    @Test
+    fun stalls_after_event_and_reports_network_failure_within_read_timeout() = runBlocking {
+        val event = "event: queue_updated\ndata: {}\n\n"
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody(event)
+                // Leave the response body incomplete while keeping the socket open.
+                .setHeader("Content-Length", event.toByteArray().size + 1_024),
+        )
+
+        val events = withTimeout(5_000L) {
+            OkHttpRoomEventStreamFactory(
+                OkHttpClient(),
+                server.url("/").toString(),
+                readTimeoutMillis = 250L,
+            ).observe("ABCD").take(3).toList()
+        }
+
+        assertEquals(
+            listOf(
+                RoomEventStreamEvent.Opened,
+                RoomEventStreamEvent.Event("queue_updated"),
+                RoomEventStreamEvent.Failure(null),
+            ),
+            events,
+        )
+    }
+
     @Test
     fun reports_http_status_for_failed_connections() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(404))
