@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790533729039,
+  "lastUpdate": 1790533732214,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1465,6 +1465,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/22ae0728723b2e5bb971ad4ccbbaca9af647acf0"
         },
         "date": 1790526591254,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4000602501445676e556800e34413e791cd69a85",
+          "message": "fix: report PAUSED when the Android host loses foreground or closes (#208) (#252)\n\n* fix: report PAUSED when the Android host loses foreground or closes (#208)\n\n* test: isolate close listener assertion and cover final-pause ordering (#208)",
+          "timestamp": "2026-09-27T21:28:09+03:00",
+          "tree_id": "80fe51f5b3450adb23608e75677addaac8334397",
+          "url": "https://github.com/leugenea/qmix/commit/4000602501445676e556800e34413e791cd69a85"
+        },
+        "date": 1790533731594,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
