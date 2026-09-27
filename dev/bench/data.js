@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790533732214,
+  "lastUpdate": 1790536855824,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -848,6 +848,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Kotlin erosion",
             "value": 56.12109017165151,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 18,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38ea0d01eb53c66f3575f94e31f02c982e7851a3",
+          "message": "fix: detect half-open Android SSE sockets with a read timeout (#213) (#253)",
+          "timestamp": "2026-09-27T22:20:16+03:00",
+          "tree_id": "1c28adcaf8deb8225a92f82c686d887c3c008d22",
+          "url": "https://github.com/leugenea/qmix/commit/38ea0d01eb53c66f3575f94e31f02c982e7851a3"
+        },
+        "date": 1790536854776,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 31.157948727557827,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 56.095050646861665,
             "unit": "%"
           },
           {
