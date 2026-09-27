@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790526588861,
+  "lastUpdate": 1790526592425,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1347,6 +1347,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/8027f68347d1cb2b1c761301b09991ab828cc983"
         },
         "date": 1790515316215,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "22ae0728723b2e5bb971ad4ccbbaca9af647acf0",
+          "message": "fix: keep Android TV screen on during active playback (#251)\n\n* fix: keep Android TV screen on during active playback (#211)\n\nSet FLAG_KEEP_SCREEN_ON while local playback is buffering or playing and\nclear it on every other playback state, room teardown and onStop, so the\nscreensaver/ambient mode no longer stops MainActivity and pauses music.\nForeground-loss pause semantics are unchanged.\n\n* test: label keep-screen-on waits and harden teardown (#211)\n\n* test: synchronize keep-screen-on assertions through the Compose rule (#211)",
+          "timestamp": "2026-09-27T19:29:11+03:00",
+          "tree_id": "bfca4e855fe000e4067bb34394e6c6f557b79884",
+          "url": "https://github.com/leugenea/qmix/commit/22ae0728723b2e5bb971ad4ccbbaca9af647acf0"
+        },
+        "date": 1790526591254,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
