@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790491830827,
+  "lastUpdate": 1790507665038,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -622,6 +622,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go erosion",
             "value": 34.13338688191221,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 58.44101471485502,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 19,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b89066d379471f7ee2a4680941db6301c748ebc6",
+          "message": "fix: refresh rejected stream URLs safely (#249)\n\nReject non-media upstream responses, refresh the exact cached generation once, and preserve cache ordering across concurrent lookups, cancellation, redirects, expiry, and cache replacement.",
+          "timestamp": "2026-09-27T14:13:51+03:00",
+          "tree_id": "25102d2e3c975ef3c57d46c3aaa7cc32d53c0e7d",
+          "url": "https://github.com/leugenea/qmix/commit/b89066d379471f7ee2a4680941db6301c748ebc6"
+        },
+        "date": 1790507664097,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 31.48689915656908,
             "unit": "%"
           },
           {
