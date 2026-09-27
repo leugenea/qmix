@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -257,76 +258,101 @@ class MainActivityInstrumentationTest {
     @Test
     fun keep_screen_on_follows_local_playback_and_room_teardown() {
         val server = MockWebServer()
-        server.start()
-        server.enqueue(MockResponse().setResponseCode(201).setBody(
-            """{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""",
-        ))
-        val repository = RecordingRepository()
-        val playback = RecordingPlaybackEngine()
-        val controller = createController(server, repository, playback)
-        val application = ApplicationProvider.getApplicationContext<QMixApplication>()
-        val lease = application.installActivityHostSessionProvider { controller }
+        var controller: HostSessionController? = null
+        var providerLease: AutoCloseable? = null
+        var scenario: ActivityScenario<MainActivity>? = null
         try {
-            assertTrue(controller.createRoom())
-            controller.awaitCreatedForTest()
-            controller.enterRoom()
-            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                assertKeepScreenOn(scenario, false)
-                val current = CurrentTrack("current", 0, "playing", "Current", "Artist")
-                repository.publishCurrent(current)
-                controller.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING)
-                assertKeepScreenOn(scenario, true)
+            server.start()
+            server.enqueue(MockResponse().setResponseCode(201).setBody(
+                """{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""",
+            ))
+            val repository = RecordingRepository()
+            val playback = RecordingPlaybackEngine()
+            val createdController = createController(server, repository, playback)
+            controller = createdController
+            val application = ApplicationProvider.getApplicationContext<QMixApplication>()
+            providerLease = application.installActivityHostSessionProvider { createdController }
 
-                playback.emit(playingState())
-                controller.awaitPlaybackStatus(LocalPlaybackStatus.PLAYING)
-                assertKeepScreenOn(scenario, true)
-
-                controller.pausePlayback()
-                controller.awaitPlaybackStatus(LocalPlaybackStatus.PAUSED)
-                assertKeepScreenOn(scenario, false)
-
-                controller.resumePlayback()
-                controller.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING)
-                assertKeepScreenOn(scenario, true)
-
-                playback.emit(PlaybackState(mediaId = "current", status = PlaybackStatus.ENDED))
-                controller.awaitPlaybackStatus(LocalPlaybackStatus.COMPLETED)
-                assertKeepScreenOn(scenario, false)
-
-                repository.publishCurrent(current.copy(trackId = "next"))
-                controller.awaitStateForTest {
-                    (it as? HostingState.LiveRoom)?.playback?.trackId == "next"
-                }
-                assertKeepScreenOn(scenario, true)
-                playback.emit(PlaybackState(mediaId = "next", status = PlaybackStatus.ERROR))
-                controller.awaitPlaybackStatus(LocalPlaybackStatus.ERROR)
-                assertKeepScreenOn(scenario, false)
-
-                repository.publishCurrent(null)
-                controller.awaitPlaybackStatus(LocalPlaybackStatus.IDLE)
-                assertKeepScreenOn(scenario, false)
-
-                repository.publishCurrent(current)
-                controller.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING)
-                assertKeepScreenOn(scenario, true)
-                controller.endRoom()
-                controller.awaitStateForTest { it !is HostingState.LiveRoom }
-                assertKeepScreenOn(scenario, false)
+            // Establish the real foreground Activity before admitting a room and its playback.
+            scenario = ActivityScenario.launch(MainActivity::class.java)
+            assertKeepScreenOn(scenario, false, "initial setup")
+            assertTrue(createdController.createRoom())
+            val invitation = createdController.awaitStep("room invitation") {
+                it is HostingState.Invitation || it is HostingState.Error
             }
+            assertTrue("room creation failed: $invitation", invitation is HostingState.Invitation)
+            createdController.enterRoom()
+            createdController.awaitStep("live room admission") { it is HostingState.LiveRoom }
+            val current = CurrentTrack("current", 0, "playing", "Current", "Artist")
+            repository.publishCurrent(current)
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "first current track")
+            assertKeepScreenOn(scenario, true, "first buffering track")
+
+            playback.emit(playingState())
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PLAYING, "playing callback")
+            assertKeepScreenOn(scenario, true, "playing callback")
+
+            createdController.pausePlayback()
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PAUSED, "explicit pause")
+            assertKeepScreenOn(scenario, false, "explicit pause")
+
+            createdController.resumePlayback()
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "explicit resume")
+            assertKeepScreenOn(scenario, true, "explicit resume")
+
+            playback.emit(PlaybackState(mediaId = "current", status = PlaybackStatus.ENDED))
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.COMPLETED, "track completed")
+            assertKeepScreenOn(scenario, false, "track completed")
+
+            repository.publishCurrent(current.copy(trackId = "next"))
+            createdController.awaitStep("next track selected") {
+                (it as? HostingState.LiveRoom)?.playback?.trackId == "next"
+            }
+            assertKeepScreenOn(scenario, true, "next track buffering")
+            playback.emit(PlaybackState(mediaId = "next", status = PlaybackStatus.ERROR))
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.ERROR, "next track error")
+            assertKeepScreenOn(scenario, false, "next track error")
+
+            repository.publishCurrent(null)
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.IDLE, "current track removed")
+            assertKeepScreenOn(scenario, false, "current track removed")
+
+            repository.publishCurrent(current)
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "current track restored")
+            assertKeepScreenOn(scenario, true, "current track restored")
+            createdController.endRoom()
+            createdController.awaitStep("room teardown") { it !is HostingState.LiveRoom }
+            assertKeepScreenOn(scenario, false, "room teardown")
         } finally {
-            controller.endRoom()
-            lease.close()
-            server.shutdown()
+            try {
+                scenario?.close()
+            } finally {
+                try {
+                    controller?.endRoom()
+                } finally {
+                    try {
+                        providerLease?.close()
+                    } finally {
+                        server.shutdown()
+                    }
+                }
+            }
         }
     }
 
-    private fun assertKeepScreenOn(scenario: ActivityScenario<MainActivity>, expected: Boolean) {
-        awaitConditionForTest {
-            var actual = false
-            scenario.onActivity { activity ->
-                actual = activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
+    private fun assertKeepScreenOn(
+        scenario: ActivityScenario<MainActivity>, expected: Boolean, step: String,
+    ) {
+        var actual = false
+        try {
+            awaitConditionForTest {
+                scenario.onActivity { activity ->
+                    actual = activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
+                }
+                actual == expected
             }
-            actual == expected
+        } catch (timeout: TimeoutCancellationException) {
+            throw AssertionError("$step: expected FLAG_KEEP_SCREEN_ON=$expected, observed=$actual", timeout)
         }
     }
 
@@ -336,8 +362,18 @@ class MainActivityInstrumentationTest {
         ))
     }
 
-    private fun HostSessionController.awaitPlaybackStatus(status: LocalPlaybackStatus) {
-        awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status == status }
+    private fun HostSessionController.awaitStep(
+        step: String, predicate: (HostingState) -> Boolean,
+    ): HostingState = try {
+        awaitStateForTest(predicate)
+    } catch (timeout: TimeoutCancellationException) {
+        throw AssertionError("$step: timed out; last controller state=$state", timeout)
+    }
+
+    private fun HostSessionController.awaitPlaybackStatus(status: LocalPlaybackStatus, step: String) {
+        awaitStep("$step: expected local playback $status") {
+            (it as? HostingState.LiveRoom)?.playback?.status == status
+        }
     }
 
     @Test
