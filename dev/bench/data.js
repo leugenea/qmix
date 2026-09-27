@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790507667994,
+  "lastUpdate": 1790515313841,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -676,6 +676,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go erosion",
             "value": 31.48689915656908,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 58.44101471485502,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 19,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8027f68347d1cb2b1c761301b09991ab828cc983",
+          "message": "fix: end SSE streams before shutdown deadline (#250)\n\nClose the HTTP listener before draining SSE subscribers, interrupt blocked SSE writes without shortening ordinary request grace, and configure Compose with a 15-second stop allowance.\\n\\nCloses #207.",
+          "timestamp": "2026-09-27T16:21:19+03:00",
+          "tree_id": "f12c5f1d1fad93c77853c1d471c69e1dd2281371",
+          "url": "https://github.com/leugenea/qmix/commit/8027f68347d1cb2b1c761301b09991ab828cc983"
+        },
+        "date": 1790515313006,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 31.157948727557827,
             "unit": "%"
           },
           {
