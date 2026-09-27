@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790491827601,
+  "lastUpdate": 1790491830827,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -993,6 +993,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/a4b489360cf963d5e342c9b7e7a785c1d0dd7d46"
         },
         "date": 1790456616300,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8ed6b70d43cf559abdaef06a28b25fcb3b32cbf4",
+          "message": "fix: reject non-video YouTube resource URLs (#248)",
+          "timestamp": "2026-09-27T09:49:53+03:00",
+          "tree_id": "982a5078e7c2c3fce6ad79b5dca36dbfa3730e8e",
+          "url": "https://github.com/leugenea/qmix/commit/8ed6b70d43cf559abdaef06a28b25fcb3b32cbf4"
+        },
+        "date": 1790491830183,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
