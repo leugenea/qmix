@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.view.KeyEvent
 import android.view.WindowManager
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasContentDescription
@@ -275,6 +276,7 @@ class MainActivityInstrumentationTest {
 
             // Establish the real foreground Activity before admitting a room and its playback.
             scenario = ActivityScenario.launch(MainActivity::class.java)
+            composeRule.waitForIdle()
             assertKeepScreenOn(scenario, false, "initial setup")
             assertTrue(createdController.createRoom())
             val invitation = createdController.awaitStep("room invitation") {
@@ -345,13 +347,13 @@ class MainActivityInstrumentationTest {
     ) {
         var actual = false
         try {
-            awaitConditionForTest {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
                 scenario.onActivity { activity ->
                     actual = activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
                 }
                 actual == expected
             }
-        } catch (timeout: TimeoutCancellationException) {
+        } catch (timeout: ComposeTimeoutException) {
             throw AssertionError("$step: expected FLAG_KEEP_SCREEN_ON=$expected, observed=$actual", timeout)
         }
     }
