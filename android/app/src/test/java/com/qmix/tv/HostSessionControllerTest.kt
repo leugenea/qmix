@@ -1245,7 +1245,7 @@ class HostSessionControllerTest {
                     }, statePublisherFactory = { listener ->
                         PlayerStatePublisher(credentials.code, credentials.hostToken,
                             { _, _, _ -> finishReport.await(); PlayerReportResult.CONFLICT },
-                            sessionScope, mutation, listener)
+                            sessionScope, mutation, queueScope, listener)
                     })
             },
         )
@@ -1358,7 +1358,7 @@ class HostSessionControllerTest {
                                         cleaned.set(true)
                                     }
                                 }
-                            }, sessionScope, mutation, listener)
+                            }, sessionScope, mutation, queueScope, listener)
                     })
             },
         )

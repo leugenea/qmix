@@ -39,6 +39,13 @@ replacement, foreground loss, close, and parent cancellation structurally cancel
 owned work. Selection identity plus active Job identity prevents late completion
 from mutating a replacement. Virtual-time tests cover the 7.5-second cadence,
 coalescing, transition priority, reconciliation, and cancellation boundaries.
+The sole exception to room-session ownership is a two-second final PAUSED report
+on foreground loss or playback close (#208): the publisher cancels normal work,
+waits for its in-flight report, then sends exactly one captured track/position
+through the injected application-owned IO scope. It never updates session state,
+retries, or delays local pause/teardown; a foreground recovery's next regular
+report waits behind it. Host end cancels the session before playback close but
+leaves the backend room alive until TTL, so this scoped exception is necessary.
 
 Unresolved command state is separate from the coroutine operation. The owned
 lazy Job is registered before pending notifications, so a reentrant foreground

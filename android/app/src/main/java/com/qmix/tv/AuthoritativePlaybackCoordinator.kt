@@ -77,6 +77,7 @@ class AuthoritativePlaybackCoordinator(
         retryJob?.cancel()
         retryJob = null
         invalidateReportReconciliation()
+        reportFinalPauseIfActive()
         statePublisher?.setForeground(false)
         playbackEngine.pause()
         if (currentTrackId != null && state.status in setOf(
@@ -350,8 +351,27 @@ class AuthoritativePlaybackCoordinator(
         periodicProgress: Boolean = false,
     ) {
         val selected = currentTrackId ?: return
+        statePublisher?.update(playerReport(selected, reportState, positionMs), immediate, periodicProgress)
+    }
+
+    private fun playerReport(trackId: String, reportState: PlayerReportState, positionMs: Long): PlayerReport {
         val seconds = (positionMs.coerceAtLeast(0) / 1_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-        statePublisher?.update(PlayerReport(selected, reportState, seconds), immediate, periodicProgress)
+        return PlayerReport(trackId, reportState, seconds)
+    }
+
+    private fun reportFinalPauseIfActive() {
+        val selected = currentTrackId ?: return
+        // An acknowledged PAUSED at this position needs no duplicate; the publisher retries
+        // an unacknowledged PAUSED because foreground loss cancels its ordinary request.
+        // COMPLETED/ERROR are terminal and must never be overwritten.
+        if (state.status !in setOf(
+                LocalPlaybackStatus.PLAYING, LocalPlaybackStatus.BUFFERING, LocalPlaybackStatus.PAUSED,
+            )
+        ) return
+        statePublisher?.reportFinalPause(
+            playerReport(selected, PlayerReportState.PAUSED, state.positionMs),
+            alreadyPaused = state.status == LocalPlaybackStatus.PAUSED,
+        )
     }
 
     private fun invalidateReportReconciliation() {
@@ -395,6 +415,9 @@ class AuthoritativePlaybackCoordinator(
     override fun close(): Unit = mutationContext.run {
         if (closed) return@run
         closed = true
+        // Host room end only detaches the client session; the backend room remains until TTL.
+        // Its session Job may already be cancelled, so admit the process-owned report first.
+        if (foregroundReady) reportFinalPauseIfActive()
         sessionJob.cancel()
         retryJob = null
         reportReconciliationJob = null

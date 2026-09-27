@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -146,6 +147,167 @@ class AuthoritativePlaybackCoordinatorTest {
         assertTrue(advances.isEmpty())
         assertEquals(LocalPlaybackStatus.PAUSED, coordinator.state.status)
     }
+
+    @Test
+    fun foreground_loss_reports_one_final_pause_at_last_position_and_blocks_background_reports() = runTest {
+        val reports = CoordinatorReportClient()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val session = CoroutineScope(SupervisorJob(backgroundScope.coroutineContext[kotlinx.coroutines.Job]) + dispatcher)
+        val guarded = reportingCoordinator(reports, session, backgroundScope, dispatcher)
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 12_750))
+        runCurrent()
+
+        guarded.onForegroundLost()
+        guarded.onForegroundLost()
+        session.cancel()
+        runCurrent()
+        assertTrue(reports.calls.first().canceled)
+        assertEquals(listOf(
+            PlayerReport("one", PlayerReportState.PLAYING, 12),
+            PlayerReport("one", PlayerReportState.PAUSED, 12),
+        ), reports.calls.map { it.report })
+        assertFalse(reports.calls.last().canceled)
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 19_000))
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(2, reports.calls.size)
+        guarded.close()
+        assertEquals(2, reports.calls.size)
+    }
+
+    @Test
+    fun close_reports_one_final_pause_even_after_room_session_cancellation() = runTest {
+        val reports = CoordinatorReportClient()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val session = CoroutineScope(SupervisorJob(backgroundScope.coroutineContext[kotlinx.coroutines.Job]) + dispatcher)
+        val guarded = reportingCoordinator(reports, session, backgroundScope, dispatcher)
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 9_750))
+        runCurrent()
+        session.cancel() // HostSessionController.endRoom detaches and cancels before close.
+
+        guarded.close()
+        guarded.close()
+        runCurrent()
+        assertEquals(listOf(
+            PlayerReport("one", PlayerReportState.PLAYING, 9),
+            PlayerReport("one", PlayerReportState.PAUSED, 9),
+        ), reports.calls.map { it.report })
+        assertFalse(reports.calls.last().canceled)
+        assertFalse(engine.hasListeners)
+    }
+
+    @Test
+    fun idle_and_terminal_states_do_not_send_a_final_pause() = runTest {
+        val reports = CoordinatorReportClient()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val guarded = reportingCoordinator(reports, backgroundScope, backgroundScope, dispatcher)
+        guarded.onForegroundLost()
+        guarded.close()
+        runCurrent()
+        assertTrue(reports.calls.isEmpty())
+
+        listOf(PlaybackStatus.ENDED, PlaybackStatus.ERROR).forEach { terminal ->
+            val client = CoordinatorReportClient()
+            val coordinator = reportingCoordinator(client, backgroundScope, backgroundScope, dispatcher)
+            coordinator.onSynchronization(fresh(room(currentId = terminal.name)))
+            engine.emit(PlaybackState(terminal.name, terminal))
+            runCurrent()
+            coordinator.onForegroundLost()
+            coordinator.close()
+            runCurrent()
+            assertEquals(listOf(if (terminal == PlaybackStatus.ENDED) PlayerReportState.ENDED else PlayerReportState.ERROR),
+                client.calls.map { it.report.state })
+        }
+    }
+
+    @Test
+    fun buffering_sends_a_final_pause_but_an_explicit_pause_is_not_duplicated() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val bufferingReports = CoordinatorReportClient()
+        val buffering = reportingCoordinator(bufferingReports, backgroundScope, backgroundScope, dispatcher)
+        buffering.onSynchronization(fresh(room(currentId = "one")))
+        buffering.onForegroundLost()
+        runCurrent()
+        assertEquals(listOf(PlayerReport("one", PlayerReportState.PAUSED, 0)),
+            bufferingReports.calls.map { it.report })
+        buffering.close()
+
+        val pausedReports = CoordinatorReportClient()
+        val paused = reportingCoordinator(pausedReports, backgroundScope, backgroundScope, dispatcher)
+        paused.onSynchronization(fresh(room(currentId = "two")))
+        paused.pause()
+        runCurrent()
+        assertEquals(listOf(PlayerReport("two", PlayerReportState.PAUSED, 0)),
+            pausedReports.calls.map { it.report })
+        pausedReports.complete(PlayerReportResult.ACCEPTED)
+        runCurrent()
+        paused.onForegroundLost()
+        paused.close()
+        runCurrent()
+        assertEquals(1, pausedReports.calls.size)
+    }
+
+    @Test
+    fun an_unacknowledged_explicit_pause_is_retried_once_on_foreground_loss() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val reports = CoordinatorReportClient()
+        val guarded = reportingCoordinator(reports, backgroundScope, backgroundScope, dispatcher)
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 5_000))
+        reports.complete(PlayerReportResult.ACCEPTED)
+        guarded.pause()
+        runCurrent()
+        guarded.onForegroundLost()
+        runCurrent()
+        assertEquals(listOf(PlayerReportState.PLAYING, PlayerReportState.PAUSED, PlayerReportState.PAUSED),
+            reports.calls.map { it.report.state })
+        assertTrue(reports.calls[1].canceled)
+        assertFalse(reports.calls[2].canceled)
+        guarded.close()
+    }
+
+    @Test
+    fun another_foreground_cycle_sends_its_own_final_pause() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val reports = CoordinatorReportClient()
+        val guarded = reportingCoordinator(reports, backgroundScope, backgroundScope, dispatcher)
+        guarded.onSynchronization(fresh(room(currentId = "one")))
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 5_000))
+        reports.complete(PlayerReportResult.ACCEPTED)
+        guarded.onForegroundLost()
+        runCurrent()
+        reports.complete(PlayerReportResult.ACCEPTED)
+        runCurrent()
+        guarded.onForegroundReconciled(room(currentId = "one"))
+        runCurrent()
+        reports.complete(PlayerReportResult.ACCEPTED)
+        guarded.resume()
+        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 8_000))
+        runCurrent()
+        reports.complete(PlayerReportResult.ACCEPTED)
+        guarded.onForegroundLost()
+        runCurrent()
+        assertEquals(listOf(5, 5, 8), reports.calls.filter { it.report.state == PlayerReportState.PAUSED }
+            .map { it.report.positionSeconds })
+        assertEquals(3, reports.calls.count { it.report.state == PlayerReportState.PAUSED && !it.canceled })
+        guarded.close()
+    }
+
+    private fun reportingCoordinator(
+        reports: CoordinatorReportClient,
+        session: CoroutineScope,
+        finalScope: CoroutineScope,
+        dispatcher: kotlinx.coroutines.CoroutineDispatcher,
+    ) = AuthoritativePlaybackCoordinator(
+        roomCode = "ABCD", streamUrl = "https://qmix.test/stream", playbackEngine = engine,
+        reconciler = reconciler::fetchRoom, parentScope = session,
+        mutationContext = QueueMutationContext(dispatcher) { true }, advanceAfterEnded = { true },
+        statePublisherFactory = { listener -> playerPublisher(
+            reports, session, QueueMutationContext(dispatcher) { true }, listener, finalScope,
+        ) },
+    )
 
     @Test
     fun later_foreground_loss_invalidates_an_already_queued_reconciliation() = runTest {
@@ -1054,12 +1216,14 @@ class AuthoritativePlaybackCoordinatorTest {
             override fun onConflict() = Unit
             override fun onRoomUnavailable() = Unit
         },
+        finalReportScope: CoroutineScope = parentScope,
     ) = PlayerStatePublisher(
         roomCode = "ABCD",
         hostToken = "host-secret",
         reportPlayer = reportClient::reportPlayer,
         parentScope = parentScope,
         mutationContext = mutationContext,
+        finalReportScope = finalReportScope,
         listener = listener,
     )
 
