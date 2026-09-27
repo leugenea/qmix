@@ -357,6 +357,64 @@ func TestYtdlpStream(t *testing.T) {
 	}
 }
 
+// TestYtdlpInvalidStatusRefreshesURL guards qmix#209: a cached direct URL
+// returning HTML must not be served or retained when a fresh lookup succeeds.
+func TestYtdlpInvalidStatusRefreshesURL(t *testing.T) {
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Header.Get("Range") != "bytes=0-4" {
+			t.Errorf("upstream Range = %q", r.Header.Get("Range"))
+		}
+		if r.URL.Path == "/stale" {
+			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Content-Range", "bytes 0-4/999")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, "<html>forbidden upstream</html>")
+			return
+		}
+		w.Header().Set("Content-Type", "audio/webm")
+		w.Header().Set("Content-Range", "bytes 0-4/10")
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "audio")
+	}))
+	defer upstream.Close()
+
+	runner := &sequenceRunner{urls: []string{upstream.URL + "/stale", upstream.URL + "/fresh"}}
+	b := &YTDLP{Runner: runner, Client: upstream.Client(), CacheTTL: time.Minute}
+	track := testTrack()
+	rec := serveProxy(t, b, track, "bytes=0-4")
+	if rec.Code != http.StatusPartialContent || rec.Body.String() != "audio" || rec.Header().Get("Content-Type") != "audio/webm" {
+		t.Fatalf("proxy result = %d %q %q, want 206 audio/webm audio", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+	if rec.Header().Get("Content-Range") != "bytes 0-4/10" || rec.Header().Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("range headers = %v", rec.Header())
+	}
+	if got := runner.calls.Load(); got != 2 {
+		t.Fatalf("searches = %d, want 2", got)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("upstream hits = %d, want 2", got)
+	}
+	if got, ok := b.cacheRef().Get(cacheKey(track)); !ok || got != upstream.URL+"/fresh" {
+		t.Fatalf("cached url = (%v, %v), want fresh", got, ok)
+	}
+}
+
+type sequenceRunner struct {
+	urls  []string
+	calls atomic.Int32
+}
+
+func (r *sequenceRunner) Search(_ context.Context, _ string) ([]byte, error) {
+	n := int(r.calls.Add(1))
+	if n > len(r.urls) {
+		return nil, fmt.Errorf("unexpected search %d", n)
+	}
+	return []byte(fmt.Sprintf(`{"url":%q}`, r.urls[n-1])), nil
+}
+
 // TestYtdlpStreamForwardsRange verifies the client Range is forwarded upstream
 // and a 206 is captured with its Content-Range.
 func TestYtdlpStreamForwardsRange(t *testing.T) {
@@ -503,7 +561,7 @@ func TestYtdlpStreamDerivesContentRange(t *testing.T) {
 func TestYtdlpCachedNonString(t *testing.T) {
 	c := NewCache(time.Minute)
 	track := &Track{ID: "1", Title: "x"}
-	c.entries[cacheKey(track)] = &entry{value: 42, expiry: time.Now().Add(time.Minute)}
+	c.state(cacheKey(track)).entry = &entry{value: 42, expiry: time.Now().Add(time.Minute)}
 	b := &YTDLP{Runner: &fakeRunner{out: []byte(searchFixture)}, CacheTTL: time.Minute}
 	b.SetCache(c)
 	_, err := b.resolveURL(context.Background(), track)

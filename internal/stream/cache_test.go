@@ -53,9 +53,12 @@ func TestCacheLoadErrorNotStored(t *testing.T) {
 func TestCacheSingleflight(t *testing.T) {
 	c := NewCache(time.Minute)
 	var loads int32
+	started, release := make(chan struct{}), make(chan struct{})
+	defer closeIfOpen(release)
 	loader := func() (interface{}, error) {
 		atomic.AddInt32(&loads, 1)
-		time.Sleep(20 * time.Millisecond)
+		close(started)
+		<-release
 		return "shared", nil
 	}
 
@@ -75,6 +78,9 @@ func TestCacheSingleflight(t *testing.T) {
 			}
 		}()
 	}
+	awaitDisplaced(t, started, "singleflight loader")
+	waitForCacheWaiters(t, c, "k", 50)
+	closeIfOpen(release)
 	wg.Wait()
 	close(errs)
 	for err := range errs {
@@ -280,7 +286,7 @@ func TestCacheAbandonedLoadCannotOverwriteReplacement(t *testing.T) {
 	}()
 	<-oldStarted
 	c.mu.Lock()
-	oldCall := c.inflight["k"]
+	oldCall := c.state("k").ordinary
 	c.mu.Unlock()
 	cancelOld()
 	if err := <-oldCallerDone; !errors.Is(err, context.Canceled) {
@@ -310,7 +316,7 @@ func TestCacheAbandonedLoadCannotOverwriteReplacement(t *testing.T) {
 		t.Fatal("abandoned loader did not finish")
 	}
 	c.mu.Lock()
-	replacementCall := c.inflight["k"]
+	replacementCall := c.state("k").ordinary
 	c.mu.Unlock()
 	if replacementCall == nil || replacementCall == oldCall {
 		t.Fatal("abandoned load removed the replacement call")
@@ -325,12 +331,122 @@ func TestCacheAbandonedLoadCannotOverwriteReplacement(t *testing.T) {
 	}
 }
 
+// TestCacheConditionalInvalidation never removes a newer value or another key.
+func TestCacheConditionalInvalidation(t *testing.T) {
+	c := NewCache(time.Minute)
+	for key, value := range map[string]string{"track": "old", "other": "independent"} {
+		if _, err := c.Do(key, func() (interface{}, error) { return value, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldEntry := c.GetEntry("track")
+	if c.DeleteIfEntry("track", c.GetEntry("other")) || c.DeleteIfEntry("missing", oldEntry) {
+		t.Fatal("deleted an unmatched value")
+	}
+	if v, ok := c.Get("track"); !ok || v != "old" {
+		t.Fatalf("unmatched value removed: %v, %v", v, ok)
+	}
+	if !c.DeleteIfEntry("track", oldEntry) || c.DeleteIfEntry("track", oldEntry) {
+		t.Fatal("matched value not removed exactly once")
+	}
+	if v, ok := c.Get("other"); !ok || v != "independent" {
+		t.Fatalf("unrelated key removed: %v, %v", v, ok)
+	}
+	// Rejection reserves the publication slot for the post-failure lookup;
+	// an ordinary miss must not steal it.
+	if _, err := c.DoContextFresh(context.Background(), "track", oldEntry, func(context.Context) (interface{}, error) { return "new", nil }); err != nil {
+		t.Fatal(err)
+	}
+	if c.DeleteIfEntry("track", oldEntry) {
+		t.Fatal("old failure removed a newer value")
+	}
+	if v, ok := c.Get("track"); !ok || v != "new" {
+		t.Fatalf("newer value missing: %v, %v", v, ok)
+	}
+}
+
+func TestCacheFreshLoadBypassesValueAndSharesInflight(t *testing.T) {
+	c := NewCache(time.Minute)
+	if _, err := c.Do("track", func() (interface{}, error) { return "old", nil }); err != nil {
+		t.Fatal(err)
+	}
+	oldEntry := c.GetEntry("track")
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer closeIfOpen(release)
+	var loads atomic.Int32
+	loader := func(context.Context) (interface{}, error) {
+		loads.Add(1)
+		close(entered)
+		<-release
+		return "new", nil
+	}
+	first := make(chan error, 1)
+	go func() { _, err := c.DoContextFresh(context.Background(), "track", oldEntry, loader); first <- err }()
+	awaitDisplaced(t, entered, "fresh cache loader")
+	second := make(chan error, 1)
+	go func() { _, err := c.DoContextFresh(context.Background(), "track", oldEntry, loader); second <- err }()
+	waitForCacheWaiters(t, c, "track", 2)
+	closeIfOpen(release)
+	if err := awaitDisplaced(t, first, "first fresh cache caller"); err != nil {
+		t.Fatal(err)
+	}
+	if err := awaitDisplaced(t, second, "second fresh cache caller"); err != nil {
+		t.Fatal(err)
+	}
+	if loads.Load() != 1 {
+		t.Fatalf("loads = %d, want 1", loads.Load())
+	}
+	if v, ok := c.Get("track"); !ok || v != "new" {
+		t.Fatalf("fresh cache = %v, %v", v, ok)
+	}
+}
+
+func TestCacheFreshLoadDoesNotReplaceNewerConcurrentEntry(t *testing.T) {
+	c := NewCache(time.Minute)
+	if _, err := c.Do("track", func() (interface{}, error) { return "old", nil }); err != nil {
+		t.Fatal(err)
+	}
+	oldEntry := c.GetEntry("track")
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer closeIfOpen(release)
+	finished := make(chan error, 1)
+	go func() {
+		_, err := c.DoContextFresh(context.Background(), "track", oldEntry, func(context.Context) (interface{}, error) {
+			close(entered)
+			<-release
+			return "retry", nil
+		})
+		finished <- err
+	}()
+	awaitDisplaced(t, entered, "late refresh loader")
+	// Simulate a newer cache publication while the old attempt is waiting on
+	// yt-dlp. The cache method must compare publication identity at completion.
+	c.mu.Lock()
+	c.state("track").entry = &entry{value: "newer", expiry: time.Now().Add(time.Minute)}
+	c.mu.Unlock()
+	closeIfOpen(release)
+	if err := awaitDisplaced(t, finished, "late refresh caller"); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := c.Get("track"); !ok || v != "newer" {
+		t.Fatalf("late refresh replaced newer cached URL: %v, %v", v, ok)
+	}
+}
+
 func waitForCacheWaiters(t *testing.T, c *Cache, key string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
+	watchdog := time.NewTimer(time.Second)
+	defer watchdog.Stop()
+	for {
 		c.mu.Lock()
-		pending := c.inflight[key]
+		var pending *call
+		if state := c.states[key]; state != nil {
+			pending = state.ordinary
+			for _, refresh := range state.refreshes {
+				pending = refresh
+				break
+			}
+		}
 		got := 0
 		if pending != nil {
 			got = pending.waiters
@@ -339,7 +455,10 @@ func waitForCacheWaiters(t *testing.T, c *Cache, key string, want int) {
 		if got == want {
 			return
 		}
-		time.Sleep(time.Millisecond)
+		select {
+		case <-c.waiterChanged:
+		case <-watchdog.C:
+			t.Fatalf("cache waiters for %q = %d, want %d", key, got, want)
+		}
 	}
-	t.Fatalf("cache waiters for %q did not reach %d", key, want)
 }

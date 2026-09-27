@@ -195,29 +195,35 @@ func directSource(t *Track) (string, bool) {
 
 // resolveURL finds the direct audio URL for track, honoring the URL cache.
 func (b *YTDLP) resolveURL(ctx context.Context, t *Track) (string, error) {
-	key := cacheKey(t)
+	u, _, _, release, err := b.resolveSource(ctx, t)
+	if release != nil {
+		release()
+	}
+	return u, err
+}
+
+// resolveSource carries the selected cache and exact generation used by a
+// subsequent GET. SetCache cannot redirect this request's rejection or retry.
+func (b *YTDLP) resolveSource(ctx context.Context, t *Track) (string, *Cache, *entry, func(), error) {
 	c := b.cacheRef()
 	if c == nil {
-		return b.searchURL(ctx, t)
-	}
-	if v, ok := c.Get(key); ok {
-		if u, ok := v.(string); ok {
-			return u, nil
-		}
+		u, err := b.searchURL(ctx, t)
+		return u, nil, nil, nil, err
 	}
 	// The shared lookup survives one caller leaving while other callers still
 	// need it, and is canceled when its final waiter disconnects.
-	v, err := c.DoContext(ctx, key, func(loadCtx context.Context) (interface{}, error) {
+	e, release, err := c.DoContextEntryLeased(ctx, cacheKey(t), func(loadCtx context.Context) (interface{}, error) {
 		return b.searchURL(loadCtx, t)
 	})
 	if err != nil {
-		return "", err
+		return "", c, nil, nil, err
 	}
-	u, ok := v.(string)
+	u, ok := e.value.(string)
 	if !ok {
-		return "", fmt.Errorf("ytdlp: %w: cached value is not a url", ErrService)
+		release()
+		return "", c, nil, nil, fmt.Errorf("ytdlp: %w: cached value is not a url", ErrService)
 	}
-	return u, nil
+	return u, c, e, release, nil
 }
 
 // searchURL runs the YouTube search via the runner and extracts the top audio
@@ -280,26 +286,29 @@ func firstJSONLine(out []byte) ([]byte, error) {
 	return nil, errors.New("ytdlp: empty search output")
 }
 
-// Stream resolves the audio URL for track and opens it with the optional Range
-// header. The upstream response status and range headers are captured into the
-// returned Result so the proxy can reproduce them for the client.
+// Stream resolves the audio URL and opens it with the optional Range header.
+// Only media/range statuses (200, 206, 416) reach the proxy. Other HTTP
+// statuses, including redirects, close their bodies, trigger one fresh lookup,
+// and never expose their upstream headers or body to the client (qmix#209).
 func (b *YTDLP) Stream(ctx context.Context, t *Track, rangeHeader string) (*Result, error) {
-	url, err := b.resolveURL(ctx, t)
+	url, c, attempted, release, err := b.resolveSource(ctx, t)
 	if err != nil {
 		return nil, err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("ytdlp: %w: %w", ErrService, err)
-	}
-	if rangeHeader != "" {
-		req.Header.Set("Range", rangeHeader)
+	if release != nil {
+		defer release()
 	}
 
-	resp, err := b.client().Do(req)
+	resp, err := b.openURL(ctx, url, rangeHeader)
 	if err != nil {
-		return nil, fmt.Errorf("ytdlp: %w: %w", ErrService, err)
+		return nil, err
+	}
+	if !acceptedMediaStatus(resp.StatusCode) {
+		resp.Body.Close()
+		resp, err = b.retryInvalidMedia(ctx, c, t, attempted, rangeHeader)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	res := &Result{
@@ -316,6 +325,74 @@ func (b *YTDLP) Stream(ctx context.Context, t *Track, rangeHeader string) (*Resu
 		res.ContentRange = "bytes 0-" + formatInt(resp.ContentLength-1) + "/" + formatInt(resp.ContentLength)
 	}
 	return res, nil
+}
+
+// A rejected GET gets exactly one fresh lookup and retry. Only the selected
+// cache may receive the terminal invalidation, even if SetCache ran meanwhile.
+func (b *YTDLP) retryInvalidMedia(ctx context.Context, c *Cache, t *Track, attempted *entry, rangeHeader string) (*http.Response, error) {
+	var url string
+	var err error
+	if c != nil {
+		url, attempted, err = b.freshURL(ctx, c, t, attempted)
+	} else {
+		url, err = b.searchURL(ctx, t)
+	}
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.openURL(ctx, url, rangeHeader)
+	if err != nil {
+		return nil, err
+	}
+	if !acceptedMediaStatus(resp.StatusCode) {
+		resp.Body.Close()
+		if c != nil {
+			c.DeleteIfEntryFinal(cacheKey(t), attempted)
+		}
+		return nil, fmt.Errorf("ytdlp: %w: invalid upstream media response", ErrService)
+	}
+	return resp, nil
+}
+
+func acceptedMediaStatus(status int) bool {
+	return status == http.StatusOK || status == http.StatusPartialContent || status == http.StatusRequestedRangeNotSatisfiable
+}
+
+func (b *YTDLP) freshURL(ctx context.Context, c *Cache, t *Track, stale *entry) (string, *entry, error) {
+	e, err := c.DoContextRejected(ctx, cacheKey(t), stale, func(loadCtx context.Context) (interface{}, error) {
+		return b.searchURL(loadCtx, t)
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	u, ok := e.value.(string)
+	if !ok {
+		return "", nil, fmt.Errorf("ytdlp: %w: cached value is not a url", ErrService)
+	}
+	return u, e, nil
+}
+
+func (b *YTDLP) openURL(ctx context.Context, url, rangeHeader string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ytdlp: %w: %w", ErrService, err)
+	}
+	if rangeHeader != "" {
+		req.Header.Set("Range", rangeHeader)
+	}
+
+	// Check the status of the requested URL itself: following a redirect could
+	// turn a rejected 3xx into a 200 from an unrelated location. Copy the
+	// client per request so injected redirect policies, transport, jar and
+	// timeout remain untouched. ErrUseLastResponse leaves the 3xx body open
+	// for Stream to close without reading it.
+	client := *b.client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ytdlp: %w: %w", ErrService, err)
+	}
+	return resp, nil
 }
 
 // formatInt formats n as a decimal string (-1 yields "-1", which the caller
