@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790515313841,
+  "lastUpdate": 1790515316817,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1229,6 +1229,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/b89066d379471f7ee2a4680941db6301c748ebc6"
         },
         "date": 1790507667325,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8027f68347d1cb2b1c761301b09991ab828cc983",
+          "message": "fix: end SSE streams before shutdown deadline (#250)\n\nClose the HTTP listener before draining SSE subscribers, interrupt blocked SSE writes without shortening ordinary request grace, and configure Compose with a 15-second stop allowance.\\n\\nCloses #207.",
+          "timestamp": "2026-09-27T16:21:19+03:00",
+          "tree_id": "f12c5f1d1fad93c77853c1d471c69e1dd2281371",
+          "url": "https://github.com/leugenea/qmix/commit/8027f68347d1cb2b1c761301b09991ab828cc983"
+        },
+        "date": 1790515316215,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
