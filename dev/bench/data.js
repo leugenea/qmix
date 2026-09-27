@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790456617243,
+  "lastUpdate": 1790491827601,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -568,6 +568,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go erosion",
             "value": 34.21258994404647,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 58.44101471485502,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 19,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8ed6b70d43cf559abdaef06a28b25fcb3b32cbf4",
+          "message": "fix: reject non-video YouTube resource URLs (#248)",
+          "timestamp": "2026-09-27T09:49:53+03:00",
+          "tree_id": "982a5078e7c2c3fce6ad79b5dca36dbfa3730e8e",
+          "url": "https://github.com/leugenea/qmix/commit/8ed6b70d43cf559abdaef06a28b25fcb3b32cbf4"
+        },
+        "date": 1790491826701,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 34.13338688191221,
             "unit": "%"
           },
           {
