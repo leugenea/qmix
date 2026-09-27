@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790536858832,
+  "lastUpdate": 1790541495676,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -887,6 +887,60 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/38ea0d01eb53c66f3575f94e31f02c982e7851a3"
         },
         "date": 1790536854776,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 31.157948727557827,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 56.095050646861665,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 18,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0793d6cd9d1065e15546acfb09a9157eb957da0f",
+          "message": "test: prove room fetch cancellation without wall-clock windows (#237) (#254)",
+          "timestamp": "2026-09-27T23:36:59+03:00",
+          "tree_id": "3a69f7910ca393ba1e970b24f3ee6102e6f50b6d",
+          "url": "https://github.com/leugenea/qmix/commit/0793d6cd9d1065e15546acfb09a9157eb957da0f"
+        },
+        "date": 1790541494597,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
