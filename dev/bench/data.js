@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790526592425,
+  "lastUpdate": 1790533729039,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -799,6 +799,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Kotlin CCN > 10",
             "value": 19,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4000602501445676e556800e34413e791cd69a85",
+          "message": "fix: report PAUSED when the Android host loses foreground or closes (#208) (#252)\n\n* fix: report PAUSED when the Android host loses foreground or closes (#208)\n\n* test: isolate close listener assertion and cover final-pause ordering (#208)",
+          "timestamp": "2026-09-27T21:28:09+03:00",
+          "tree_id": "80fe51f5b3450adb23608e75677addaac8334397",
+          "url": "https://github.com/leugenea/qmix/commit/4000602501445676e556800e34413e791cd69a85"
+        },
+        "date": 1790533728039,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 31.157948727557827,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 56.12109017165151,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 18,
             "unit": "functions"
           },
           {
