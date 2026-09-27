@@ -23,7 +23,7 @@ type Room struct {
 // filled by the resolver plugin from the source link (see ARCHITECTURE §7).
 type Track struct {
 	ID          string `json:"id"`
-	URL         string `json:"url"`          // original source link
+	URL         string `json:"url"`          // submitted source link with surrounding whitespace removed
 	Title       string `json:"title"`        // resolved by resolver
 	Artist      string `json:"artist"`       // resolved by resolver
 	DurationSec int    `json:"duration_sec"` // seconds; 0 if not known

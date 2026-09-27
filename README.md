@@ -38,12 +38,19 @@ becomes current and the player retrieves its stream from
 How it works:
 
 1. Tracks resolved by the YouTube resolver are passed to `yt-dlp` using their
-   original submitted URL, so streaming selects that exact video. Both metadata
-   and stream lookups use `--no-playlist`: a watch URL containing `v` and `list`
-   selects only the `v` video, while a playlist-only YouTube URL without a video
-   ID is rejected as unsupported (`422`) before `yt-dlp` starts. Tracks from
-   Spotify, VK, Yandex Music, and other non-YouTube resolvers keep the metadata
-   search path (`Artist - Title`) via
+   submitted URL with surrounding whitespace removed, so streaming selects
+   that exact video. Both metadata and stream lookups use `--no-playlist`: a
+   watch URL containing `v` and `list` selects only the `v` video. YouTube
+   metadata resolution accepts only explicit video URLs (`/watch?v=...`,
+   `youtu.be/<id>`, `/embed/<id>` except `videoseries`, `/shorts/<id>`,
+   `/live/<id>`, and `/v/<id>`). The resolver rejects playlist-only,
+   channel, search, home, and other non-video YouTube resources before
+   acquiring yt-dlp subprocess capacity or starting a process (qmix#205).
+   For queue submissions that reach resolution, HTTP maps this rejection to
+   unsupported (`422`); earlier room, body, queue, and admission checks retain
+   precedence.
+   Tracks from Spotify, VK, Yandex Music, and other non-YouTube resolvers keep
+   the metadata search path (`Artist - Title`) via
    `yt-dlp --skip-download --dump-json --no-playlist -f bestaudio "ytsearch:..."`.
 2. The direct audio URL is cached for approximately 5 minutes. Direct YouTube
    entries are keyed by source URL; metadata-search entries are keyed by artist

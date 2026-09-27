@@ -20,7 +20,7 @@ type Track struct {
 	Title       string
 	Artist      string
 	DurationSec int
-	Source      string // the original source URL, echoed through unchanged
+	Source      string // source URL; HTTP add-track submissions have surrounding whitespace trimmed
 	ResolvedBy  string // which resolver produced the metadata (e.g. "spotify")
 }
 
