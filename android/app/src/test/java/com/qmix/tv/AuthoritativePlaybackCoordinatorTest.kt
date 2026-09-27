@@ -179,12 +179,14 @@ class AuthoritativePlaybackCoordinatorTest {
     @Test
     fun close_reports_one_final_pause_even_after_room_session_cancellation() = runTest {
         val reports = CoordinatorReportClient()
+        val reportingEngine = RecordingPlaybackEngine()
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val session = CoroutineScope(SupervisorJob(backgroundScope.coroutineContext[kotlinx.coroutines.Job]) + dispatcher)
-        val guarded = reportingCoordinator(reports, session, backgroundScope, dispatcher)
+        val guarded = reportingCoordinator(reports, session, backgroundScope, dispatcher, reportingEngine)
         guarded.onSynchronization(fresh(room(currentId = "one")))
-        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 9_750))
+        reportingEngine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 9_750))
         runCurrent()
+        assertTrue(reportingEngine.hasListeners)
         session.cancel() // HostSessionController.endRoom detaches and cancels before close.
 
         guarded.close()
@@ -195,7 +197,7 @@ class AuthoritativePlaybackCoordinatorTest {
             PlayerReport("one", PlayerReportState.PAUSED, 9),
         ), reports.calls.map { it.report })
         assertFalse(reports.calls.last().canceled)
-        assertFalse(engine.hasListeners)
+        assertFalse(reportingEngine.hasListeners)
     }
 
     @Test
@@ -300,8 +302,9 @@ class AuthoritativePlaybackCoordinatorTest {
         session: CoroutineScope,
         finalScope: CoroutineScope,
         dispatcher: kotlinx.coroutines.CoroutineDispatcher,
+        playbackEngine: RecordingPlaybackEngine = engine,
     ) = AuthoritativePlaybackCoordinator(
-        roomCode = "ABCD", streamUrl = "https://qmix.test/stream", playbackEngine = engine,
+        roomCode = "ABCD", streamUrl = "https://qmix.test/stream", playbackEngine = playbackEngine,
         reconciler = reconciler::fetchRoom, parentScope = session,
         mutationContext = QueueMutationContext(dispatcher) { true }, advanceAfterEnded = { true },
         statePublisherFactory = { listener -> playerPublisher(

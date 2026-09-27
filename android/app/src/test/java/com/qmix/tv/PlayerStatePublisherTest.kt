@@ -885,6 +885,32 @@ class PlayerStatePublisherTest {
     }
 
     @Test
+    fun foreground_recovery_waits_for_the_final_pause_before_resuming_playing() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 4), immediate = true)
+        runCurrent()
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 5))
+        runCurrent()
+
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 6), immediate = true)
+        runCurrent()
+        assertEquals(listOf(PlayerReportState.PLAYING, PlayerReportState.PAUSED), reporter.states())
+        assertEquals(1, reporter.inFlight)
+
+        reporter.complete(1, PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(listOf(PlayerReportState.PLAYING, PlayerReportState.PAUSED, PlayerReportState.PLAYING),
+            reporter.states())
+        assertEquals(listOf(4, 5, 6), reporter.positions())
+        assertEquals(1, reporter.maxInFlight)
+        publisher.close()
+    }
+
+    @Test
     fun final_pause_transport_exception_is_swallowed() = runTest {
         var attempts = 0
         val publisher = PlayerStatePublisher(
