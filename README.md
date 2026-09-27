@@ -55,10 +55,25 @@ How it works:
 2. The direct audio URL is cached for approximately 5 minutes. Direct YouTube
    entries are keyed by source URL; metadata-search entries are keyed by artist
    and title.
-3. The endpoint streams audio with **HTTP Range/seek** support: a full stream
-   returns `200`, a satisfiable range returns `206 Partial Content`, and an
-   invalid range returns `416`. The `Content-Type`, `Content-Length`,
-   `Content-Range`, and `Accept-Ranges` headers are forwarded to the client.
+3. The endpoint streams audio with **HTTP Range/seek** support. Only upstream
+   `200` (full stream), `206` (satisfied range), and `416` (unsatisfiable range)
+   are accepted; their `Content-Type`, `Content-Length`, `Content-Range`, and
+   `Accept-Ranges` headers are forwarded. Redirects are rejected statuses,
+   never followed to another URL. If the direct audio URL responds with any
+   other HTTP status, QMix closes that response unread, invalidates only the
+   exact attempted cache generation, performs one post-failure yt-dlp lookup
+   (sharing only a status refresh for the same failed generation), and retries
+   the GET once with the same Range header (qmix#209). A delayed failure cannot
+   erase a newer entry or displace its refresh even when yt-dlp republishes the
+   same URL. Rejection and refresh-flight admission are atomic: a duplicate
+   caller canceled before mutex admission cannot mutate cache state or release
+   another caller's owner, and an ordinary
+   miss after invalidation may join the owner refresh but cannot displace it.
+   In-progress GETs retain per-key generation history until their status
+   decision; idle expired keys are pruned once no GET, owner, or flight remains.
+   A second invalid HTTP status returns the safe `502 upstream_failure`
+   JSON envelope, never the upstream error page, headers, URL, or details. Disabling the cache
+   does not disable this one-time refresh.
 
 **Requirement:** `yt-dlp` must be installed in `PATH` on the backend host (or
 its path must be set through `QMIX_YTDLP_BIN`, which configures both metadata

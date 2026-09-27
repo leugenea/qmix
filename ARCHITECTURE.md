@@ -283,12 +283,36 @@ entries by artist/title. The external yt-dlp invocation is behind an injectable
 `Runner` (as in M2), and audio HTTP requests use an injected `http.Client`.
 
 The HTTP proxy (`GET /rooms/{code}/current/stream`) forwards the client's Range
-header upstream and reproduces the upstream status and headers: a complete
-stream returns 200; a satisfied Range returns 206 with `Content-Range`; and an
-invalid or unsatisfiable range returns 416. `Content-Type`, `Content-Length`,
-`Content-Range`, and `Accept-Ranges` are forwarded. Upstream errors (no link:
-404; search or network failure: 502) are not converted to 500. Responses are
-served through `stream.ServeStream`.
+header upstream. Only upstream 200 (complete), 206 (satisfied Range), and 416
+(unsatisfiable Range) are accepted, with their `Content-Type`, `Content-Length`,
+`Content-Range`, and `Accept-Ranges` forwarded. Redirects are not followed:
+their 3xx responses are rejected like any other invalid HTTP status and closed
+unread without exposing body, headers, URL, or details; the
+backend conditionally invalidates only the exact attempted cache generation and
+forces one post-failure yt-dlp lookup (shared only with a status refresh for
+that same failed generation), then one GET with the same Range (qmix#209).
+Per cache key, rejection and attachment of its refresh are one mutex-protected
+transition: an ordinary miss cannot enter between invalidation and the
+post-failure lookup. A duplicate rejection can join the same-generation flight
+but cannot release its owner's reservation when canceled before admission under
+the mutex (even if cancellation occurred while waiting for the lock). An ordinary
+lookup started before the failure cannot supply or publish the retry value;
+a miss arriving after the refresh begins may join it. A newer rejected
+generation takes ownership of publication, but an older late failure cannot
+revoke that owner. Every cached publication, including a repeat of the same
+URL, has a distinct generation. In-progress media GETs pin the key's lineage
+through their status decision; an idle expired key is pruned after the last
+lease, owner, or flight ends. Expired entries have no live claim over a refresh:
+an older retry may publish after a newer entry expires during its lookup, but
+not if another generation was published or reserved in the meantime. Load
+errors and last-waiter cancellation release only their own reservation. A
+second invalid status closes its
+response and maps through `ErrService` to the existing safe
+502 `upstream_failure` envelope. The same single retry occurs when caching is
+disabled. Search misses (404), transport/search failure (502), and capacity
+overload (503 plus `Retry-After`) retain their existing mappings; transport
+failures do not trigger a status retry. Responses are served through
+`stream.ServeStream`.
 
 **yt-dlp capacity limiter** (qmix#130). One shared `internal/ytdlpcap.Limiter`
 bounds how many yt-dlp subprocesses run at once, because the Compose service is
