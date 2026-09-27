@@ -207,6 +207,15 @@ and credentials are never accepted, stored, published, logged, or returned.
   - `player_state` — exact `{track_id,state,pos_sec}` player report or initial
     skip state; reconnect snapshots carry the latest accepted current state
 
+The server flushes an SSE comment (`: ping`) every 15 seconds when otherwise
+idle. The Android client uses a 45-second **read** timeout (qmix#213), allowing
+three heartbeat intervals but detecting a half-open socket when no bytes arrive.
+Each flushed comment or event resets the read deadline; the stream's overall
+call timeout stays disabled. A read timeout is a network failure with no HTTP
+status, so the room repository enters `RECONNECTING` and retries using its
+existing jittered backoff; a reopened stream triggers a fresh REST snapshot.
+Keep the Android timeout longer than the server heartbeat if either changes.
+
 ## 7. Plugin interfaces
 
 **Resolver** — `url → Track metadata`

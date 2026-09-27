@@ -12,15 +12,19 @@ import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 
+/** qmix#213: three missed 15-second Hub heartbeats before treating an SSE socket as stalled. */
+private const val DEFAULT_SSE_READ_TIMEOUT_MILLIS = 45_000L
+
 class OkHttpRoomEventStreamFactory(
     client: OkHttpClient,
     backendUrl: String,
     private val connect: ((Request, EventSourceListener) -> EventSource)? = null,
+    readTimeoutMillis: Long = DEFAULT_SSE_READ_TIMEOUT_MILLIS,
 ) : RoomEventStreamFactory {
     private val backend = backendUrl.trimEnd('/').toHttpUrl()
     private val client = client.newBuilder()
         .callTimeout(0, TimeUnit.MILLISECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(readTimeoutMillis, TimeUnit.MILLISECONDS)
         .followRedirects(false)
         .followSslRedirects(false)
         .retryOnConnectionFailure(false)
@@ -52,7 +56,8 @@ class OkHttpRoomEventStreamFactory(
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                trySend(RoomEventStreamEvent.Failure(response?.code))
+                // A socket timeout may carry the successful 200 response; it is not an HTTP failure.
+                trySend(RoomEventStreamEvent.Failure(if (t == null) response?.code else null))
                 close()
             }
         }
