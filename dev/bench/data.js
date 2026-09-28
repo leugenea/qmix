@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790616415837,
+  "lastUpdate": 1790616418946,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2173,6 +2173,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/ec02f301a4f21a794b6873a200bee6ab1fbc63e0"
         },
         "date": 1790596914057,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80a84c80fda1d44d52eadafa9ca24f94b2137d09",
+          "message": "feat(tv): recover when the host's room goes missing (#264) (#266)\n\n* feat(tv): recover when the host's room goes missing (#264)\n\n* test(tv): separate invitation and live observation generations in reentrant teardown tests (#264)\n\n* build(android): count Robolectric-executed unit tests in JaCoCo coverage (#264)",
+          "timestamp": "2026-09-28T20:26:10+03:00",
+          "tree_id": "92095a16fed869138ee20104de15cf8a6cd6dd69",
+          "url": "https://github.com/leugenea/qmix/commit/80a84c80fda1d44d52eadafa9ca24f94b2137d09"
+        },
+        "date": 1790616418422,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
