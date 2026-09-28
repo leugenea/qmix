@@ -1136,21 +1136,29 @@ class HostSessionControllerTest {
             .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
         val room = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+        val invitationStarted = CountDownLatch(1)
         val collectionStarted = CountDownLatch(1)
         val cleanupStarted = CountDownLatch(1)
         val allowCleanup = CountDownLatch(1)
         val cleanupCompleted = AtomicBoolean(false)
+        val collections = AtomicInteger()
         val repository = object : RoomRepository {
             override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
-                collectionStarted.countDown()
-                try {
-                    emit(RoomSyncState.Active(roomCode, room, Freshness.FRESH, LiveConnection.CONNECTED))
+                val generation = collections.incrementAndGet()
+                if (generation == 1) {
+                    invitationStarted.countDown()
                     kotlinx.coroutines.awaitCancellation()
-                } finally {
-                    withContext(NonCancellable + Dispatchers.IO) {
-                        cleanupStarted.countDown()
-                        check(allowCleanup.await(5, TimeUnit.SECONDS))
-                        cleanupCompleted.set(true)
+                } else {
+                    collectionStarted.countDown()
+                    try {
+                        emit(RoomSyncState.Active(roomCode, room, Freshness.FRESH, LiveConnection.CONNECTED))
+                        kotlinx.coroutines.awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            cleanupStarted.countDown()
+                            check(allowCleanup.await(5, TimeUnit.SECONDS))
+                            cleanupCompleted.set(true)
+                        }
                     }
                 }
             }
@@ -1196,8 +1204,10 @@ class HostSessionControllerTest {
         try {
             controller.createRoom()
             controller.awaitCreatedForTest()
+            assertTrue("invitation collection did not start", invitationStarted.await(5, TimeUnit.SECONDS))
             controller.enterRoom()
-            assertTrue(collectionStarted.await(5, TimeUnit.SECONDS))
+            assertTrue("live collection did not start", collectionStarted.await(5, TimeUnit.SECONDS))
+            assertEquals(2, collections.get())
             assertTrue("authoritative queue was not delivered", queueReady.await(5, TimeUnit.SECONDS))
             controller.onStartOrNext()
             assertTrue("pending state was not observed", sawPending.get())
@@ -1401,7 +1411,7 @@ class HostSessionControllerTest {
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
         )
-        val repository = BlockingCleanupRoomRepository()
+        val repository = BlockingCleanupRoomRepository(blockedGeneration = 2)
         val dispatcher = Executors.newSingleThreadExecutor { task -> Thread(task, "stop-mutation") }
             .asCoroutineDispatcher()
         val controller = HostSessionController(
@@ -1418,8 +1428,10 @@ class HostSessionControllerTest {
         )
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        assertTrue("invitation collection did not start", repository.invitationStarted.await(5, TimeUnit.SECONDS))
         controller.enterRoom()
-        assertTrue(repository.collectionStarted.await(5, TimeUnit.SECONDS))
+        assertTrue("live collection did not start", repository.collectionStarted.await(5, TimeUnit.SECONDS))
+        assertEquals(2, repository.collections.get())
         val begin = CountDownLatch(1)
         val returned = CountDownLatch(2)
         val callers = Executors.newFixedThreadPool(2)
@@ -1838,23 +1850,31 @@ class HostSessionControllerTest {
         }
     }
 
-    private class BlockingCleanupRoomRepository : RoomRepository {
+    private class BlockingCleanupRoomRepository(private val blockedGeneration: Int = 1) : RoomRepository {
+        val invitationStarted = CountDownLatch(1)
         val collectionStarted = CountDownLatch(1)
         val cleanupStarted = CountDownLatch(1)
         val cleanupDone = CountDownLatch(1)
         val allowCleanup = CountDownLatch(1)
         val cleanupCompleted = AtomicBoolean(false)
+        val collections = AtomicInteger()
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
             assertEquals("ABCD", roomCode)
-            collectionStarted.countDown()
-            try {
-                Channel<RoomSyncState>(Channel.UNLIMITED).receive()
-            } finally {
-                cleanupStarted.countDown()
-                check(allowCleanup.await(5, TimeUnit.SECONDS)) { "Collection cleanup gate timed out" }
-                cleanupCompleted.set(true)
-                cleanupDone.countDown()
+            val generation = collections.incrementAndGet()
+            if (generation == 1) invitationStarted.countDown()
+            if (generation != blockedGeneration) {
+                kotlinx.coroutines.awaitCancellation()
+            } else {
+                collectionStarted.countDown()
+                try {
+                    Channel<RoomSyncState>(Channel.UNLIMITED).receive()
+                } finally {
+                    cleanupStarted.countDown()
+                    check(allowCleanup.await(5, TimeUnit.SECONDS)) { "Collection cleanup gate timed out" }
+                    cleanupCompleted.set(true)
+                    cleanupDone.countDown()
+                }
             }
         }
     }
