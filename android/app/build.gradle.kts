@@ -1,4 +1,5 @@
 import groovy.json.JsonSlurper
+import org.gradle.testing.jacoco.plugins.JacocoTaskExtension
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
 
@@ -63,6 +64,12 @@ android {
         unitTests.all {
             it.reports.junitXml.required.set(true)
             it.reports.html.required.set(true)
+            // Robolectric's sandbox class loader gives app classes no location;
+            // otherwise JaCoCo misses the lines those tests execute.
+            it.extensions.configure(JacocoTaskExtension::class.java) {
+                isIncludeNoLocationClasses = true
+                excludes = listOf("jdk.internal.*")
+            }
         }
     }
 

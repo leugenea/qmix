@@ -205,7 +205,9 @@ error/action rather than automatically looping `POST /rooms`.
 The required gate is at least 95% instruction coverage for all bytecode in the
 `com.qmix.tv` package. Only the generated Android classes `R` and `BuildConfig`
 are excluded; handwritten UI/state/domain classes and Compose code are not.
-The report combines JVM/Robolectric and native instrumentation coverage:
+The report combines JVM/Robolectric and native instrumentation coverage. JaCoCo
+includes classes loaded by Robolectric's sandbox class loader in the JVM data.
+Run the gate with:
 
 ```bash
 cd android
