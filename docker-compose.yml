@@ -40,6 +40,9 @@ services:
       QMIX_ROOM_SUBMISSION_BURST: "${QMIX_ROOM_SUBMISSION_BURST:-10}"
       # Process-wide live-room bound (qmix#157). Expiry releases slots.
       QMIX_MAX_LIVE_ROOMS: "${QMIX_MAX_LIVE_ROOMS:-256}"
+      # Unused rooms (no successful track append) expire after 45m of idle time
+      # by default (qmix#260); must be positive and at most the 12h empty TTL.
+      QMIX_UNUSED_ROOM_TTL: "${QMIX_UNUSED_ROOM_TTL:-45m}"
       # Proxy passthrough for environments where YouTube is reachable only
       # via a proxy: yt-dlp and the audio proxy both honor these. Empty by
       # default.

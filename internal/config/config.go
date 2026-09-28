@@ -66,6 +66,7 @@ const (
 	// (qmix#130); deeper bursts are told to retry rather than queued into
 	// unbounded request latency.
 	defaultYTDLPQueueLimit     = 8
+	defaultUnusedRoomTTL       = 45 * time.Minute
 	defaultEmptyRoomTTL        = 12 * time.Hour
 	defaultNonEmptyRoomTTL     = 24 * time.Hour
 	defaultRoomJanitorInterval = time.Minute
@@ -116,9 +117,10 @@ type Stream struct {
 	CacheTTL time.Duration
 }
 
-// Rooms contains the current process-wide room lifetime settings. They are not
-// environment-configurable, but live beside the runtime settings they affect.
+// Rooms contains room lifetime settings. UnusedTTL is configurable; empty and
+// non-empty TTLs and the janitor cadence retain their fixed defaults.
 type Rooms struct {
+	UnusedTTL       time.Duration
 	EmptyTTL        time.Duration
 	NonEmptyTTL     time.Duration
 	JanitorInterval time.Duration
@@ -209,7 +211,7 @@ func Parse(lookup LookupEnv) (Config, error) {
 			QueueLimit:      defaultYTDLPQueueLimit,
 		},
 		Stream: Stream{CacheTTL: defaultStreamCacheTTL},
-		Rooms:  Rooms{EmptyTTL: defaultEmptyRoomTTL, NonEmptyTTL: defaultNonEmptyRoomTTL, JanitorInterval: defaultRoomJanitorInterval, MaxLiveRooms: defaultMaxLiveRooms},
+		Rooms:  Rooms{UnusedTTL: defaultUnusedRoomTTL, EmptyTTL: defaultEmptyRoomTTL, NonEmptyTTL: defaultNonEmptyRoomTTL, JanitorInterval: defaultRoomJanitorInterval, MaxLiveRooms: defaultMaxLiveRooms},
 		RoomCreation: RoomCreation{
 			RatePerMinute: defaultRoomCreateRate,
 			Burst:         defaultRoomCreateBurst,
@@ -243,44 +245,84 @@ func Parse(lookup LookupEnv) (Config, error) {
 		cfg.YTDLP.Binary = bin
 	}
 
-	var err error
-	if cfg.Stream.CacheTTL, err = duration(lookup, "QMIX_STREAM_CACHE_TTL", defaultStreamCacheTTL, true); err != nil {
+	if err := parseDurations(&cfg, lookup); err != nil {
 		return Config{}, err
 	}
-	if cfg.YTDLP.MetadataTimeout, err = duration(lookup, "QMIX_YTDLP_METADATA_TIMEOUT", defaultYTDLPMetadataTimeout, false); err != nil {
+	if err := parseYTDLPCapacity(&cfg, lookup); err != nil {
 		return Config{}, err
 	}
-	if cfg.YTDLP.SearchTimeout, err = duration(lookup, "QMIX_YTDLP_SEARCH_TIMEOUT", defaultYTDLPSearchTimeout, false); err != nil {
-		return Config{}, err
-	}
-	if cfg.YTDLP.MaxConcurrent, err = positiveInt(lookup, "QMIX_YTDLP_MAX_CONCURRENT", defaultYTDLPMaxConcurrent); err != nil {
-		return Config{}, err
-	}
-	if cfg.YTDLP.QueueLimit, err = queueLimit(lookup, "QMIX_YTDLP_QUEUE_LIMIT", defaultYTDLPQueueLimit); err != nil {
-		return Config{}, err
-	}
-	if cfg.RoomCreation.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_RATE_PER_MINUTE", defaultRoomCreateRate, ratelimit.MaxRatePerMinute); err != nil {
-		return Config{}, err
-	}
-	if cfg.RoomCreation.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_BURST", defaultRoomCreateBurst, ratelimit.MaxBurst); err != nil {
-		return Config{}, err
-	}
-	if cfg.RoomCreation.IdentityLimit, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_IDENTITY_LIMIT", defaultRoomIdentityLimit, roomcreate.MaxIdentityLimit); err != nil {
-		return Config{}, err
-	}
-	if cfg.RoomSubmission.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE", defaultRoomSubmissionRate, ratelimit.MaxRatePerMinute); err != nil {
-		return Config{}, err
-	}
-	if cfg.RoomSubmission.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_BURST", defaultRoomSubmissionBurst, ratelimit.MaxBurst); err != nil {
-		return Config{}, err
-	}
-	if cfg.Rooms.MaxLiveRooms, err = positiveInt(lookup, "QMIX_MAX_LIVE_ROOMS", defaultMaxLiveRooms); err != nil {
-		return Config{}, err
-	}
-	if cfg.RoomCreation.TrustedProxyCIDRs, err = cidrList(lookup, "QMIX_TRUSTED_PROXY_CIDRS"); err != nil {
+	if err := parseRoomAdmission(&cfg, lookup); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func parseDurations(cfg *Config, lookup LookupEnv) error {
+	var err error
+	if cfg.Rooms.UnusedTTL, err = unusedRoomTTL(lookup); err != nil {
+		return err
+	}
+	if cfg.Stream.CacheTTL, err = duration(lookup, "QMIX_STREAM_CACHE_TTL", defaultStreamCacheTTL, true); err != nil {
+		return err
+	}
+	if cfg.YTDLP.MetadataTimeout, err = duration(lookup, "QMIX_YTDLP_METADATA_TIMEOUT", defaultYTDLPMetadataTimeout, false); err != nil {
+		return err
+	}
+	if cfg.YTDLP.SearchTimeout, err = duration(lookup, "QMIX_YTDLP_SEARCH_TIMEOUT", defaultYTDLPSearchTimeout, false); err != nil {
+		return err
+	}
+	return nil
+}
+
+func parseYTDLPCapacity(cfg *Config, lookup LookupEnv) error {
+	var err error
+	if cfg.YTDLP.MaxConcurrent, err = positiveInt(lookup, "QMIX_YTDLP_MAX_CONCURRENT", defaultYTDLPMaxConcurrent); err != nil {
+		return err
+	}
+	if cfg.YTDLP.QueueLimit, err = queueLimit(lookup, "QMIX_YTDLP_QUEUE_LIMIT", defaultYTDLPQueueLimit); err != nil {
+		return err
+	}
+	return nil
+}
+
+func parseRoomAdmission(cfg *Config, lookup LookupEnv) error {
+	var err error
+	if cfg.RoomCreation.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_RATE_PER_MINUTE", defaultRoomCreateRate, ratelimit.MaxRatePerMinute); err != nil {
+		return err
+	}
+	if cfg.RoomCreation.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_BURST", defaultRoomCreateBurst, ratelimit.MaxBurst); err != nil {
+		return err
+	}
+	if cfg.RoomCreation.IdentityLimit, err = boundedPositiveInt(lookup, "QMIX_ROOM_CREATE_IDENTITY_LIMIT", defaultRoomIdentityLimit, roomcreate.MaxIdentityLimit); err != nil {
+		return err
+	}
+	if cfg.RoomSubmission.RatePerMinute, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE", defaultRoomSubmissionRate, ratelimit.MaxRatePerMinute); err != nil {
+		return err
+	}
+	if cfg.RoomSubmission.Burst, err = boundedPositiveInt(lookup, "QMIX_ROOM_SUBMISSION_BURST", defaultRoomSubmissionBurst, ratelimit.MaxBurst); err != nil {
+		return err
+	}
+	if cfg.Rooms.MaxLiveRooms, err = positiveInt(lookup, "QMIX_MAX_LIVE_ROOMS", defaultMaxLiveRooms); err != nil {
+		return err
+	}
+	if cfg.RoomCreation.TrustedProxyCIDRs, err = cidrList(lookup, "QMIX_TRUSTED_PROXY_CIDRS"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// unusedRoomTTL is bounded by the fixed empty-room lifetime. Guidance uses
+// only compile-time constants, never the operator's supplied value.
+func unusedRoomTTL(lookup LookupEnv) (time.Duration, error) {
+	const name = "QMIX_UNUSED_ROOM_TTL"
+	ttl, err := duration(lookup, name, defaultUnusedRoomTTL, false)
+	if err != nil {
+		return 0, err
+	}
+	if ttl > defaultEmptyRoomTTL {
+		return 0, invalid(name, "must not exceed the empty-room TTL (12h0m0s)")
+	}
+	return ttl, nil
 }
 
 func rawValue(lookup LookupEnv, name string) string {

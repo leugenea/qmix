@@ -78,6 +78,7 @@ func NewApp(cfg config.Config, logger *slog.Logger, deps Dependencies) (*App, er
 	if err != nil {
 		return nil, err
 	}
+	store.UnusedTTL = cfg.Rooms.UnusedTTL
 	store.NonEmptyTTL = cfg.Rooms.NonEmptyTTL
 	hub := NewHubWithLogger(logger)
 	server := NewServerWithLogger(store, hub, logger)

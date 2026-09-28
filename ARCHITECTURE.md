@@ -103,8 +103,11 @@ that cover the complete requirement.
 - `Queue` — ordered list of tracks
 - `Current` — current track (`*Current`, with the last host-reported `State` and
   position in `PosSec`; the position is not advanced by a server clock)
-- `LastActivity` — last queue or playback mutation time used to expire idle
-  rooms
+- `LastActivity` — creation time initially, then last successful queue or
+  playback mutation; expiry for every room class is measured from this timestamp
+- `hadTrack` — internal lifetime flag set on a successful queue append and
+  retained after the track is played or removed; resolver-pending/rejected adds
+  never set it (qmix#260)
 
 The in-memory `Store` holds multiple rooms. The public room representation
 contains only `code`, `current`, and `queue`; it never exposes `HostToken`.
@@ -433,8 +436,10 @@ message `room capacity is temporarily exhausted`, and a positive integer
 least one second and is advisory, not a guaranteed expiry time. Existing-room
 operations remain usable while full. Empty/non-empty expiry or explicit host
 close deletes rooms and releases slots while preserving incarnation,
-stale-reference, and subscriber invalidation behavior; shortening idle TTLs
-remains separate qmix#260 work.
+stale-reference, and subscriber invalidation behavior. Unused rooms (no
+successful queue append ever) expire after 45 minutes of inactivity by default
+(qmix#260); rooms that have received a track retain the existing 12-hour empty
+or 24-hour non-empty lifetime.
 
 ## 8. State management
 
@@ -474,9 +479,15 @@ remains separate qmix#260 work.
   An already-started audio response is not guaranteed to stop: stream URLs are
   cached by source or metadata key and retain their ordinary
   `QMIX_STREAM_CACHE_TTL` behavior, not evicted simply because a room closes.
-- Empty rooms (no queued or current track) expire after 12 hours of inactivity.
-  Non-empty rooms expire after 24 hours without a queue or playback mutation,
-  bounding memory retained by abandoned queues.
+- Unused rooms (no successful queue append ever) expire after 45 minutes of
+  inactivity by default (`QMIX_UNUSED_ROOM_TTL`, qmix#260). The clock starts at
+  creation and only successful queue/playback mutations refresh `LastActivity`;
+  resolver-pending/failed submissions do not. Expiry invalidates existing SSE
+  subscribers and releases the live-room slot on the janitor sweep.
+- A room that received a track retains its history after the track finishes:
+  when empty (no queued or current track), it expires after 12 hours of
+  inactivity. Non-empty rooms expire after 24 hours without a queue or playback
+  mutation, bounding memory retained by abandoned queues.
 - SSE clients can reconnect; on connection they receive a `queue_snapshot`
   containing the complete state.
 - The Android host publishes actual playback through one serialized request
@@ -522,9 +533,10 @@ remains separate qmix#260 work.
   `QMIX_YTDLP_QUEUE_LIMIT`, `QMIX_ROOM_CREATE_RATE_PER_MINUTE`,
   `QMIX_ROOM_CREATE_BURST`, `QMIX_ROOM_CREATE_IDENTITY_LIMIT`,
   `QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE`, `QMIX_ROOM_SUBMISSION_BURST`,
-  `QMIX_MAX_LIVE_ROOMS`, and `QMIX_TRUSTED_PROXY_CIDRS`. Defaults are respectively `:8080`, `warn`,
+  `QMIX_MAX_LIVE_ROOMS`, `QMIX_UNUSED_ROOM_TTL`, and
+  `QMIX_TRUSTED_PROXY_CIDRS`. Defaults are respectively `:8080`, `warn`,
   `qmix.log`, empty credentials, `yt-dlp`, `5m`, `30s`, `60s`, `2`, `8`, `10`,
-  `5`, `4096`, `30`, `10`, `256`, and an empty trusted-proxy list.
+  `5`, `4096`, `30`, `10`, `256`, `45m`, and an empty trusted-proxy list.
   Build and Compose orchestration variables are outside this runtime contract.
 - Missing or blank runtime values use their defaults. Explicit malformed
   levels/durations fail startup with one secret-safe JSON record. It retains
@@ -540,8 +552,10 @@ remains separate qmix#260 work.
   submission rates must be in `1..60000`; their bursts must be in `1..10000`,
   and the room-creation identity limit must be in `1..65536`. Values outside
   those bounded domains fail startup rather than being clamped. The
-  maximum live-room setting must be a strictly positive integer. The
-  trusted-proxy setting must be empty or a comma-separated list of valid
+  maximum live-room setting must be a strictly positive integer. The unused
+  room TTL must be a positive Go duration no longer than the fixed 12-hour
+  empty-room TTL; malformed, zero, negative, or greater values fail startup.
+  The trusted-proxy setting must be empty or a comma-separated list of valid
   IPv4/IPv6 CIDRs. Those failures use
   the same safe diagnostic fields and never echo supplied values. Startup also
   fails safely when yt-dlp is missing or non-executable. `/readyz` rechecks the

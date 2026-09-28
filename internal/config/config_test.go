@@ -24,7 +24,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				Logging:        Logging{Level: slog.LevelWarn, File: "qmix.log"},
 				YTDLP:          YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
 				Stream:         Stream{CacheTTL: 5 * time.Minute},
-				Rooms:          Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute, MaxLiveRooms: 256},
+				Rooms:          Rooms{UnusedTTL: 45 * time.Minute, EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute, MaxLiveRooms: 256},
 				RoomCreation:   RoomCreation{RatePerMinute: 10, Burst: 5, IdentityLimit: 4096},
 				RoomSubmission: RoomSubmission{RatePerMinute: 30, Burst: 10},
 			},
@@ -50,6 +50,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				"QMIX_ROOM_CREATE_IDENTITY_LIMIT":      "99",
 				"QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE": "45",
 				"QMIX_ROOM_SUBMISSION_BURST":           "12",
+				"QMIX_UNUSED_ROOM_TTL":                 "90m",
 				"QMIX_MAX_LIVE_ROOMS":                  "17",
 				"QMIX_TRUSTED_PROXY_CIDRS":             "10.0.0.0/8, 2001:db8::/32",
 			},
@@ -62,7 +63,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				},
 				YTDLP:  YTDLP{Binary: "/opt/bin/yt-dlp", MetadataTimeout: 17 * time.Second, SearchTimeout: 41 * time.Second, MaxConcurrent: 5, QueueLimit: 9},
 				Stream: Stream{CacheTTL: -time.Second},
-				Rooms:  Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute, MaxLiveRooms: 17},
+				Rooms:  Rooms{UnusedTTL: 90 * time.Minute, EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute, MaxLiveRooms: 17},
 				RoomCreation: RoomCreation{
 					RatePerMinute: 30,
 					Burst:         7,
@@ -86,7 +87,7 @@ func TestParseRuntimeEnvironment(t *testing.T) {
 				Logging:        Logging{Level: slog.LevelWarn, File: "qmix.log"},
 				YTDLP:          YTDLP{Binary: "yt-dlp", MetadataTimeout: 30 * time.Second, SearchTimeout: 60 * time.Second, MaxConcurrent: 2, QueueLimit: 8},
 				Stream:         Stream{CacheTTL: 5 * time.Minute},
-				Rooms:          Rooms{EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute, MaxLiveRooms: 256},
+				Rooms:          Rooms{UnusedTTL: 45 * time.Minute, EmptyTTL: 12 * time.Hour, NonEmptyTTL: 24 * time.Hour, JanitorInterval: time.Minute, MaxLiveRooms: 256},
 				RoomCreation:   RoomCreation{RatePerMinute: 10, Burst: 5, IdentityLimit: 4096},
 				RoomSubmission: RoomSubmission{RatePerMinute: 30, Burst: 10},
 			},
@@ -121,6 +122,56 @@ func TestParseAcceptsDocumentedLogLevels(t *testing.T) {
 			}
 			if cfg.Logging.Level != want {
 				t.Fatalf("level = %v, want %v", cfg.Logging.Level, want)
+			}
+		})
+	}
+}
+
+func TestParseUnusedRoomTTL(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "missing", want: 45 * time.Minute},
+		{name: "blank", raw: "  ", want: 45 * time.Minute},
+		{name: "custom", raw: "90m", want: 90 * time.Minute},
+		{name: "equal to empty TTL", raw: "12h", want: 12 * time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse(mapEnvironment(map[string]string{"QMIX_UNUSED_ROOM_TTL": tc.raw}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Rooms.UnusedTTL != tc.want {
+				t.Fatalf("unused TTL = %v, want %v", cfg.Rooms.UnusedTTL, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseRejectsInvalidUnusedRoomTTL(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		raw      string
+		guidance string
+	}{
+		{name: "malformed", raw: "secret-not-a-duration", guidance: "use Go duration syntax"},
+		{name: "zero", raw: "0s", guidance: "must be greater than zero"},
+		{name: "negative", raw: "-1m", guidance: "must be greater than zero"},
+		{name: "exceeds empty TTL", raw: "13h", guidance: "must not exceed the empty-room TTL (12h0m0s)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse(mapEnvironment(map[string]string{"QMIX_UNUSED_ROOM_TTL": tc.raw}))
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("error = %v, want ErrInvalid", err)
+			}
+			detail, ok := InvalidDetail(err)
+			if !ok || detail != (ValidationDetail{Variable: "QMIX_UNUSED_ROOM_TTL", Guidance: tc.guidance}) {
+				t.Fatalf("detail = %#v, %v, want safe guidance %q", detail, ok, tc.guidance)
+			}
+			if strings.Contains(err.Error(), tc.raw) {
+				t.Fatalf("error echoed supplied value: %v", err)
 			}
 		})
 	}
