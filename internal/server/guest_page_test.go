@@ -3,6 +3,9 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -33,6 +36,62 @@ func TestGuestPageServesRoomUIWithoutAuthentication(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(body), "login") {
 		t.Fatal("guest page unexpectedly contains a login requirement")
+	}
+}
+
+func TestGuestPageIncludesPersistentRoomEndedNotice(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	page := doReq(t, mux, http.MethodGet, "/r/"+code, "", "").Body.String()
+	if !strings.Contains(page, `id="room-ended" class="card" role="alert" hidden`) {
+		t.Fatal("guest page needs a hidden, accessible room-ended notice")
+	}
+}
+
+func TestGuestAppJavaScriptBehavior(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		if os.Getenv("QMIX_REQUIRE_NODE") == "1" {
+			t.Fatal("Node.js is required to run guest app tests")
+		}
+		t.Skip("Node.js is not installed")
+	}
+	cmd := exec.Command(node, "--test", "guest/app.test.js")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("guest JavaScript tests: %v\n%s", err, output)
+	}
+}
+
+func TestGuestAppJavaScriptRequiresNodeWhenConfigured(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGuestAppJavaScriptBehavior$")
+	cmd.Env = append(os.Environ(), "PATH=", "QMIX_REQUIRE_NODE=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "Node.js is required") {
+		t.Fatalf("mandatory Node check must fail when Node is absent: err=%v, output=%s", err, output)
+	}
+}
+
+func TestCIGoTestJobsRequireNode(t *testing.T) {
+	content, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ci", "integration-mandatory"} {
+		section := strings.SplitN(string(content), "\n  "+name+":\n", 2)
+		if len(section) != 2 {
+			t.Fatalf("CI job %s not found", name)
+		}
+		job := section[1]
+		if next := regexp.MustCompile(`(?m)^  [a-z][a-z0-9-]*:$`).FindStringIndex(job); next != nil {
+			job = job[:next[0]]
+		}
+		if !strings.Contains(job, "\n    env:\n      QMIX_REQUIRE_NODE: \"1\"\n") {
+			t.Errorf("CI job %s does not require Node for Go tests", name)
+		}
+		if name == "integration-mandatory" && !strings.Contains(job, "\n      - name: Verify Node.js is available\n        run: node --version\n") {
+			t.Error("mandatory integration job must fail when Node is absent")
+		}
 	}
 }
 

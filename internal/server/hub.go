@@ -40,6 +40,7 @@ func marshalEventData(data interface{}) eventJSON {
 type Hub struct {
 	mu           sync.Mutex
 	incarnations map[roomRef]*roomHub
+	closing      map[*subscriber]struct{} // terminal writers detached from room hubs
 	stopping     bool
 	Heartbeat    time.Duration // keep-alive comment interval; <=0 means the 15s default
 	WriteTimeout time.Duration // per-SSE-write deadline; <=0 means the 15s default
@@ -59,8 +60,10 @@ type roomHub struct {
 
 // subscriber is a single SSE connection.
 type subscriber struct {
-	ch   chan Event
-	done chan struct{}
+	ch       chan Event
+	done     chan struct{}
+	stop     chan struct{} // closed at shutdown for a deleted-room terminal writer
+	terminal *Event        // set before done closes; read only after observing done
 }
 
 // NewHub returns an empty Hub.
@@ -75,6 +78,7 @@ func NewHubWithLogger(logger *slog.Logger) *Hub {
 	}
 	return &Hub{
 		incarnations: make(map[roomRef]*roomHub),
+		closing:      make(map[*subscriber]struct{}),
 		// qmix#213: Android's 45s SSE read timeout allows three 15s keep-alive intervals.
 		Heartbeat: 15 * time.Second,
 		logger:    logger.With("component", "sse"),
@@ -96,7 +100,7 @@ func (h *Hub) subscribeRef(ref roomRef) (*subscriber, func()) {
 		rh = &roomHub{subs: make(map[*subscriber]struct{})}
 		h.incarnations[ref] = rh
 	}
-	sub := &subscriber{ch: make(chan Event, 16), done: make(chan struct{})}
+	sub := &subscriber{ch: make(chan Event, 16), done: make(chan struct{}), stop: make(chan struct{})}
 	rh.subs[sub] = struct{}{}
 
 	var once sync.Once
@@ -118,6 +122,10 @@ func (h *Hub) StopSubscriptions() {
 		h.invalidateRoomHubLocked(rh)
 		delete(h.incarnations, ref)
 	}
+	for sub := range h.closing {
+		close(sub.stop)
+		delete(h.closing, sub)
+	}
 }
 
 func (h *Hub) disconnectRef(ref roomRef, sub *subscriber) {
@@ -127,6 +135,7 @@ func (h *Hub) disconnectRef(ref roomRef, sub *subscriber) {
 }
 
 func (h *Hub) disconnectRefLocked(ref roomRef, sub *subscriber) {
+	delete(h.closing, sub)
 	rh := h.incarnations[ref]
 	if rh == nil {
 		return
@@ -158,6 +167,25 @@ func (h *Hub) invalidateRoomHubLocked(rh *roomHub) {
 		delete(rh.subs, sub)
 		close(sub.done)
 	}
+}
+
+// closeRef delivers a terminal event separately from the bounded mutation
+// queue, then invalidates this exact incarnation. Even a full queue cannot
+// displace the terminal event or delay removal of the room from the Store.
+func (h *Hub) closeRef(ref roomRef, data eventJSON) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	rh := h.incarnations[ref]
+	if rh == nil {
+		return
+	}
+	event := Event{ID: rh.seq + 1, Name: "room_closed", Data: data}
+	for sub := range rh.subs {
+		sub.terminal = &event
+		h.closing[sub] = struct{}{}
+	}
+	h.invalidateRoomHubLocked(rh)
+	delete(h.incarnations, ref)
 }
 
 // publishRef sequences an event for one room incarnation.
@@ -212,8 +240,16 @@ func (h *Hub) serveSubscriberHTTP(ctx context.Context, w http.ResponseWriter, su
 		deadlineMu.Lock()
 		defer deadlineMu.Unlock()
 		select {
-		case <-sub.done:
+		case <-sub.stop:
 			return context.Canceled
+		default:
+		}
+		select {
+		case <-sub.done:
+			if sub.terminal == nil {
+				return context.Canceled
+			}
+			return h.setWriteDeadline(controller)
 		default:
 			return h.setWriteDeadline(controller)
 		}
@@ -223,6 +259,13 @@ func (h *Hub) serveSubscriberHTTP(ctx context.Context, w http.ResponseWriter, su
 		defer close(watcherDone)
 		select {
 		case <-sub.done:
+			if sub.terminal != nil {
+				select {
+				case <-sub.stop:
+				case <-watcherStop:
+					return
+				}
+			}
 			deadlineMu.Lock()
 			_ = controller.SetWriteDeadline(time.Now())
 			deadlineMu.Unlock()
@@ -241,37 +284,74 @@ func (h *Hub) serveSubscriberHTTP(ctx context.Context, w http.ResponseWriter, su
 
 	heartbeat := time.NewTicker(h.heartbeatInterval())
 	defer heartbeat.Stop()
+	send := func(ev Event) bool {
+		if ev.ID <= snapshotID {
+			return true
+		}
+		return writeDeadline() == nil && writeEvent(w, ev) == nil && controller.Flush() == nil
+	}
+	serveEventLoop(ctx, w, sub, controller, heartbeat.C, writeDeadline, send)
+	return nil
+}
 
+func serveEventLoop(ctx context.Context, w http.ResponseWriter, sub *subscriber, controller *http.ResponseController, heartbeat <-chan time.Time, writeDeadline func() error, send func(Event) bool) {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-sub.done:
-			return nil
-		case <-heartbeat.C:
-			if writeDeadline() != nil {
-				return nil
-			}
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
-				return nil
-			}
-			if controller.Flush() != nil {
-				return nil
+			drainTerminal(sub, send)
+			return
+		case <-heartbeat:
+			if !writeHeartbeat(w, controller, writeDeadline) {
+				return
 			}
 		case ev := <-sub.ch:
-			select {
-			case <-sub.done:
-				return nil
-			default:
-			}
-			if ev.ID <= snapshotID {
-				continue
-			}
-			if writeDeadline() != nil || writeEvent(w, ev) != nil || controller.Flush() != nil {
-				return nil
+			if !sendLiveEvent(sub, ev, send) {
+				return
 			}
 		}
 	}
+}
+
+func drainTerminal(sub *subscriber, send func(Event) bool) {
+	if sub.terminal == nil {
+		return
+	}
+	// Publication and invalidation share the Hub lock. No more events can
+	// arrive after done closes, so drain the bounded queue first.
+	for {
+		select {
+		case ev := <-sub.ch:
+			if !send(ev) {
+				return
+			}
+		default:
+			_ = send(*sub.terminal)
+			return
+		}
+	}
+}
+
+func sendLiveEvent(sub *subscriber, ev Event, send func(Event) bool) bool {
+	select {
+	case <-sub.done:
+		if sub.terminal == nil {
+			return false
+		}
+	default:
+	}
+	return send(ev)
+}
+
+func writeHeartbeat(w http.ResponseWriter, controller *http.ResponseController, writeDeadline func() error) bool {
+	if writeDeadline() != nil {
+		return false
+	}
+	if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+		return false
+	}
+	return controller.Flush() == nil
 }
 
 // setWriteDeadline prevents a client that stops reading from pinning an SSE

@@ -172,9 +172,44 @@ When full, `POST /rooms` returns `503`, a positive integer `Retry-After`, and
 `{"error":"room_capacity_exhausted","message":"room capacity is temporarily exhausted"}`.
 The retry delay is advisory and derived from the room janitor cadence; it does
 not guarantee that a room will expire at that time. Existing-room REST, SSE,
-queue, and streaming operations remain available at capacity. The ordinary
-empty/non-empty expiry sweep releases slots; there is no separate capacity
-lifecycle.
+queue, and streaming operations remain available at capacity. Capacity follows
+room-map membership rather than a separate counter: the ordinary expiry sweep
+or an explicit host close releases a slot.
+
+## Closing a room
+
+The host can close a room explicitly (qmix#258) with
+`DELETE /rooms/{code}` and the `X-Host-Token` returned by `POST /rooms`:
+
+```bash
+curl -i -X DELETE -H "X-Host-Token: $HOST_TOKEN" \
+  "http://localhost:8080/rooms/$ROOM_CODE"
+```
+
+Success is `204 No Content` with no response body. A missing or wrong token
+returns `403` with `{"error":"invalid_host_token","message":"invalid host token"}`;
+an unknown or already-closed room returns `404` with
+`{"error":"room_not_found","message":"room not found"}`. Repeating the
+request after a successful close therefore returns `404`. Closing removes the
+room and releases its live-room slot immediately, without waiting for its
+12-hour (empty) or 24-hour (non-empty) inactivity expiry. Until the code is
+reused, subsequent room reads, SSE connections, queue operations, and
+current-stream requests for that code fail as they do after expiry; an
+in-progress audio response is not guaranteed to stop, and the stream URL cache
+retains its normal TTL rather than being cleared on close.
+
+Existing SSE subscribers receive a terminal `room_closed` event before their
+streams end. The guest page also checks `GET /r/{code}` after an SSE error:
+a `404`, or a `404` from queue submission, ends the room when the terminal
+event was lost. Other lookup failures retain reconnect backoff. In the ended
+state it disables submission and stops SSE reconnection (including
+visibility-change retries).
+If a new room later receives the same code, it has a different incarnation and
+host token; in-flight mutations bound to the old incarnation and its SSE
+subscriptions cannot carry over. The Android TV client does **not** yet send
+DELETE when its local session ends; that integration is tracked separately in
+#259. Shorter idle TTLs and per-identity caps are separate #260 work, not part
+of explicit close.
 
 ## Integration tests
 

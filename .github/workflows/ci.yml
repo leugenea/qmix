@@ -76,6 +76,8 @@ jobs:
     needs: route
     if: needs.route.outputs.ci == 'true'
     runs-on: ubuntu-latest
+    env:
+      QMIX_REQUIRE_NODE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -123,6 +125,8 @@ jobs:
     needs: route
     if: needs.route.outputs.ci == 'true'
     runs-on: ubuntu-latest
+    env:
+      QMIX_REQUIRE_NODE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -130,6 +134,8 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.25"
+      - name: Verify Node.js is available
+        run: node --version
       # Args mirror `make test-integration`; gotestsum adds the JUnit report
       # for the "Tests" check (qmix#47).
       - name: Integration tests (mandatory)
