@@ -543,10 +543,11 @@ or 24-hour non-empty lifetime.
   an existing Invitation or LiveRoom (qmix#259), the TV sends one host-authenticated
   `DELETE /rooms/{code}` on the application-owned IO scope. It joins the
   cancelled room session's ordinary reports and any final PAUSED report from
-  coordinator close or an earlier foreground loss before attempting DELETE,
-  so no report can race the close into a `404`. If an uncooperative final
-  report or its cancelled predecessor exceeds the bounded join, DELETE is
-  skipped rather than racing an in-flight request. DELETE has its own
+  coordinator close or an earlier foreground loss before attempting DELETE.
+  The join is best effort and bounded to 2.5 seconds: if a session report,
+  final PAUSED, or its cancelled predecessor is still in flight, DELETE is
+  skipped and the room is left to server TTL rather than risking a late
+  report into a closed room. DELETE has its own
   three-second deadline; failure is logged by safe category only and never
   delays local teardown or the Setup transition. No DELETE is sent for
   foreground loss alone, process/application teardown, an already-missing

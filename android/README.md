@@ -147,8 +147,8 @@ explicit `EXIT_ACTIVITY` result to the UI. On the initial Invitation, Back
 explicitly ends the room before finishing the Activity; `onDestroy` itself
 only detaches locally and never initiates DELETE.
 
-The host's explicit **End room** from Invitation or LiveRoom (qmix#259)
-closes the backend with one `DELETE /rooms/{code}` and `X-Host-Token` after
+Back from Invitation or LiveRoom explicitly ends the room (qmix#259),
+closing the backend with one `DELETE /rooms/{code}` and `X-Host-Token` after
 local teardown begins. The request runs on the application-owned IO scope,
 not the cancelled room session; Setup does not await it. It waits for the
 cancelled session's ordinary reports and any final PAUSED player report

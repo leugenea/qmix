@@ -867,6 +867,32 @@ class PlayerStatePublisherTest {
     }
 
     @Test
+    fun completed_final_pause_predecessors_are_pruned_across_foreground_cycles() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        val predecessors = PlayerStatePublisher::class.java.getDeclaredField("finalPausePredecessors")
+            .apply { isAccessible = true }
+        publisher.selectTrack("one")
+
+        repeat(12) { cycle ->
+            publisher.update(PlayerReport("one", PlayerReportState.PLAYING, cycle), immediate = true)
+            runCurrent()
+            publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, cycle))
+            runCurrent()
+            assertTrue(reporter.calls[cycle * 2].canceled)
+            reporter.complete(cycle * 2 + 1, PlayerReportResult.ACCEPTED)
+            runCurrent()
+            assertTrue(publisher.canCloseRoomAfterFinalPause())
+            assertEquals("only the most recent predecessor is retained", 1,
+                (predecessors.get(publisher) as Set<*>).size)
+            publisher.setForeground(true)
+            publisher.reconciled("one")
+        }
+        assertEquals(24, reporter.calls.size)
+        publisher.close()
+    }
+
+    @Test
     fun foreground_recovery_waits_for_the_final_pause_before_a_new_report() = runTest {
         val reporter = SuspendedReporter()
         val publisher = publisher(reporter)

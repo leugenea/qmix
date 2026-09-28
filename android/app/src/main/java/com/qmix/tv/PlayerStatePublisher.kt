@@ -154,7 +154,9 @@ class PlayerStatePublisher(
         ) return@run
         val previous = reportJob
         val priorPause = finalPauseJob
-        if (previous != null) finalPausePredecessors = finalPausePredecessors + previous
+        if (previous != null) {
+            finalPausePredecessors = finalPausePredecessors.filterNot(Job::isCompleted).toSet() + previous
+        }
         setForeground(false)
         val job = finalReportScope.launch(start = CoroutineStart.LAZY) {
             try {
