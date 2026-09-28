@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790591350647,
+  "lastUpdate": 1790596911777,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1059,6 +1059,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go CCN > 10",
             "value": 12,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 56.095050646861665,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 18,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ec02f301a4f21a794b6873a200bee6ab1fbc63e0",
+          "message": "feat: expire never-used rooms after a short TTL (#260) (#265)",
+          "timestamp": "2026-09-28T15:01:17+03:00",
+          "tree_id": "3efa638c76721fafbbaed7fed524a39cafddbc98",
+          "url": "https://github.com/leugenea/qmix/commit/ec02f301a4f21a794b6873a200bee6ab1fbc63e0"
+        },
+        "date": 1790596910998,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 25.306274549099474,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
             "unit": "functions"
           },
           {
