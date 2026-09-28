@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790589956765,
+  "lastUpdate": 1790591347155,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -995,6 +995,60 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/17f40ed4a99018b8e9e68d7b364416995d130ad3"
         },
         "date": 1790589952023,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 28.359826945652483,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 12,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 56.095050646861665,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 18,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "44da1e04dbf1373572569add37d0875caaf3bcfe",
+          "message": "fix: time out the guest room-status probe after SSE errors (#262) (#263)",
+          "timestamp": "2026-09-28T13:28:28+03:00",
+          "tree_id": "df0826ee719ec5b45cd19e076e5a1bf4262d0c78",
+          "url": "https://github.com/leugenea/qmix/commit/44da1e04dbf1373572569add37d0875caaf3bcfe"
+        },
+        "date": 1790591346156,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
