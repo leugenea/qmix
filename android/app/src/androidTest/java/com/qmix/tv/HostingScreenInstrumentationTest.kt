@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -18,6 +19,7 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -164,6 +166,73 @@ class HostingScreenInstrumentationTest {
         composeRule.onNodeWithText("Enter room").assertIsFocused()
             .performKeyInput { pressKey(Key.Enter) }
         composeRule.runOnIdle { assertEquals(1, entered) }
+    }
+
+    @Test
+    fun missing_room_focuses_new_room_for_remote_ok_and_replacement_invite_uses_new_qr() {
+        val queued = QueuedTrack("old", "https://example/old", "Old queued title", "Artist", 60, "fixture")
+        val state = mutableStateOf<HostingState>(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", CurrentTrack("current", 0, "playing", "Old title", "Artist"), listOf(queued)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+                playback = LocalPlaybackState("current", LocalPlaybackStatus.PLAYING, isPlaying = true),
+            ),
+        )
+        var newRoomActions = 0
+        val handler = object : LiveRoomHandler {
+            override fun onStartOrNext() = error("old room command")
+            override fun onInvite() = error("old room invite")
+            override fun onNewRoom() {
+                newRoomActions++
+                state.value = HostingState.Invitation(
+                    GuestInvite("WXYZ", "https://guest.example/r/WXYZ"), roomReplacementNotice = true,
+                )
+            }
+            override fun onBack() = LiveRoomBackResult.IGNORED
+        }
+        composeRule.setContent {
+            HostingScreen(state.value, { _, _ -> }, {}, {}, liveRoomHandler = handler)
+        }
+        composeRule.onNodeWithTag("room-next").assertIsFocused()
+        composeRule.runOnIdle {
+            state.value = (state.value as HostingState.LiveRoom).copy(
+                synchronization = RoomSyncState.Missing("ABCD"),
+                invitationVisible = true,
+                replacementError = UserMessage.SERVER_UNAVAILABLE,
+            )
+        }
+        composeRule.onNodeWithText("Room unavailable").assertExists()
+        composeRule.onNodeWithText("This room is no longer available.").assertExists()
+        composeRule.onNodeWithText("The server is temporarily unavailable.").assertExists()
+        composeRule.onNodeWithTag("room-next").assertDoesNotExist()
+        composeRule.onNodeWithTag("room-invite").assertDoesNotExist()
+        composeRule.onNodeWithTag("playback-play-pause").assertDoesNotExist()
+        composeRule.onNodeWithTag("queue-list").assertDoesNotExist()
+        composeRule.onNodeWithText("Old title").assertDoesNotExist()
+        composeRule.onNodeWithText("Old queued title").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertDoesNotExist()
+        composeRule.onNodeWithText("New room").assertIsFocused().assertIsDisplayed()
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        assertTrue("D-pad center was not accepted", device.pressDPadCenter())
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                composeRule.onAllNodesWithText("Room code: WXYZ").fetchSemanticsNodes().isNotEmpty()
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("new-room remote activation: room code WXYZ not displayed", timeout)
+        }
+        composeRule.onNodeWithText("The old room is gone. Here is a new one.")
+            .assertExists()
+        composeRule.onNodeWithText("Room code: WXYZ").assertExists()
+        composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/WXYZ").assertExists()
+        composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertDoesNotExist()
+        composeRule.onNodeWithText("Enter room").assertIsFocused()
+        composeRule.runOnIdle { assertEquals(1, newRoomActions) }
     }
 
     @Test
@@ -417,7 +486,8 @@ class HostingScreenInstrumentationTest {
         composeRule.onNodeWithText("Could not refresh the room.").assertExists()
 
         composeRule.runOnIdle { synchronization.value = RoomSyncState.Missing("ABCD") }
-        composeRule.onNodeWithText("Room not found.").assertExists()
+        composeRule.onNodeWithText("This room is no longer available.").assertExists()
+        composeRule.onNodeWithText("New room").assertIsFocused()
     }
 
     @Test
@@ -671,6 +741,30 @@ class HostingScreenInstrumentationTest {
         assertInsideRoot("\u041e\u0448\u0438\u0431\u043a\u0430 \u0432\u043e\u0441\u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0434\u0435\u043d\u0438\u044f: \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u044c \u0430\u0443\u0434\u0438\u043e\u043f\u043e\u0442\u043e\u043a (HTTP 503).")
         assertInsideRoot("\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u0442\u0440\u0435\u043a")
         assertInsideRoot("\u0422\u0440\u0435\u043a, \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439 \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u043c")
+
+        composeRule.runOnIdle {
+            state.value = HostingState.LiveRoom(
+                GuestInvite("ABCD", invitationUrl), RoomSyncState.Missing("ABCD"),
+                replacementError = UserMessage.SERVER_TIMEOUT,
+            )
+        }
+        assertInsideRoot("\u041a\u043e\u043c\u043d\u0430\u0442\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430")
+        assertInsideRoot("\u042d\u0442\u0430 \u043a\u043e\u043c\u043d\u0430\u0442\u0430 \u0431\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430.")
+        assertInsideRoot("\u0421\u0435\u0440\u0432\u0435\u0440 \u043d\u0435 \u043e\u0442\u0432\u0435\u0442\u0438\u043b \u0432\u043e\u0432\u0440\u0435\u043c\u044f. \u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435 \u043f\u043e\u043f\u044b\u0442\u043a\u0443.")
+        composeRule.onNodeWithText("\u041d\u043e\u0432\u0430\u044f \u043a\u043e\u043c\u043d\u0430\u0442\u0430").assertIsFocused()
+
+        composeRule.runOnIdle {
+            state.value = HostingState.Invitation(
+                GuestInvite("WXYZ", "https://guest.example/r/WXYZ"), roomReplacementNotice = true,
+            )
+        }
+        assertInsideRoot("\u041f\u0440\u0435\u0436\u043d\u044f\u044f \u043a\u043e\u043c\u043d\u0430\u0442\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430. \u0412\u043e\u0442 \u043d\u043e\u0432\u0430\u044f.")
+        assertInsideRoot("\u041a\u043e\u0434 \u043a\u043e\u043c\u043d\u0430\u0442\u044b: WXYZ")
+        assertInsideRoot(
+            composeRule.onNodeWithContentDescription("QR-\u043a\u043e\u0434 \u0434\u043b\u044f https://guest.example/r/WXYZ"),
+            "Russian replacement QR semantics",
+        )
+        composeRule.onNodeWithText("\u0412\u043e\u0439\u0442\u0438 \u0432 \u043a\u043e\u043c\u043d\u0430\u0442\u0443").assertIsFocused()
     }
 
     private fun assertInsideRoot(text: String) {

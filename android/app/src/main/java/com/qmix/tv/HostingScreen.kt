@@ -33,8 +33,12 @@ internal fun HostingScreen(
                 onSettingsChanged,
                 onCreate,
             )
-            is HostingState.Invitation -> InvitationScreen(state.invite, onEnterRoom)
-            is HostingState.LiveRoom -> LiveRoomScreen(state, liveRoomHandler, onExitLiveRoom)
+            is HostingState.Invitation -> InvitationScreen(
+                state.invite,
+                onEnterRoom,
+                roomReplacementNotice = state.roomReplacementNotice,
+            )
+            is HostingState.LiveRoom -> MissingAwareLiveRoomScreen(state, liveRoomHandler, onExitLiveRoom)
         }
     }
 }

@@ -157,7 +157,9 @@ class MainActivityInstrumentationTest {
 
             assertTrue(createdController.createRoom())
             createdController.awaitCreatedForTest()
+            awaitInvitationObservation(repository)
             createdController.enterRoom()
+            awaitLiveObservation(repository)
             repository.publish(
                 RoomSyncState.Active(
                     "ABCD",
@@ -283,8 +285,10 @@ class MainActivityInstrumentationTest {
                 it is HostingState.Invitation || it is HostingState.Error
             }
             assertTrue("room creation failed: $invitation", invitation is HostingState.Invitation)
+            awaitInvitationObservation(repository)
             createdController.enterRoom()
             createdController.awaitStep("live room admission") { it is HostingState.LiveRoom }
+            awaitLiveObservation(repository)
             val current = CurrentTrack("current", 0, "playing", "Current", "Artist")
             repository.publishCurrent(current)
             createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "first current track")
@@ -358,6 +362,15 @@ class MainActivityInstrumentationTest {
         }
     }
 
+    private fun awaitInvitationObservation(repository: RecordingRepository) {
+        composeRule.waitUntil(timeoutMillis = 5_000) { repository.observations.get() >= 1 }
+    }
+
+    private fun awaitLiveObservation(repository: RecordingRepository) {
+        // Wait through the Compose rule so its main-dispatcher effects can run.
+        composeRule.waitUntil(timeoutMillis = 5_000) { repository.observations.get() >= 2 }
+    }
+
     private fun RecordingRepository.publishCurrent(current: CurrentTrack?) {
         publish(RoomSyncState.Active(
             "ABCD", RoomState("ABCD", current, emptyList()), Freshness.FRESH, LiveConnection.CONNECTED,
@@ -408,7 +421,9 @@ class MainActivityInstrumentationTest {
             providerLease = application.installActivityHostSessionProvider { createdController }
             assertTrue(createdController.createRoom())
             createdController.awaitCreatedForTest()
+            awaitInvitationObservation(repository)
             createdController.enterRoom()
+            awaitLiveObservation(repository)
             val initial = RoomState(
                 "ABCD",
                 CurrentTrack("current", 0, "playing", "Current", "Artist"),
@@ -550,9 +565,11 @@ class MainActivityInstrumentationTest {
     )
 
     private class RecordingRepository : RoomRepository {
+        val observations = java.util.concurrent.atomic.AtomicInteger()
         private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+            observations.incrementAndGet()
             for (state in states) emit(state)
         }
 

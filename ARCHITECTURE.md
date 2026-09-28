@@ -483,13 +483,49 @@ or 24-hour non-empty lifetime.
   inactivity by default (`QMIX_UNUSED_ROOM_TTL`, qmix#260). The clock starts at
   creation and only successful queue/playback mutations refresh `LastActivity`;
   resolver-pending/failed submissions do not. Expiry invalidates existing SSE
-  subscribers and releases the live-room slot on the janitor sweep.
+  subscribers and releases the live-room slot on the janitor sweep. A host SSE
+  connection does not refresh activity: no host heartbeat or keep-alive extends
+  the unused lifetime (qmix#264). Host tokens are available to any room creator,
+  so a heartbeat would let clients retain the full unused-room slot budget.
 - A room that received a track retains its history after the track finishes:
   when empty (no queued or current track), it expires after 12 hours of
   inactivity. Non-empty rooms expire after 24 hours without a queue or playback
   mutation, bounding memory retained by abandoned queues.
 - SSE clients can reconnect; on connection they receive a `queue_snapshot`
   containing the complete state.
+- **TV missing-room recovery (qmix#264):** A definitive `404` from
+  room REST or SSE while the foreground invitation QR **or** live room is shown,
+  including a foreground-return room read, means the old room is gone; a timeout,
+  disconnect, or other inconclusive response does not. Invitation observation uses
+  the same read-only `RoomRepository.observe(code)` SSE/REST stream as the live room:
+  GET and SSE do not update `LastActivity`, so monitoring cannot postpone expiry.
+  It stops on entry to the live room (joining its worker before starting the live
+  observer), backgrounding, or session end. Foreground return checks the old code
+  once with GET before restarting observation. The host tracks whether it has *ever
+  observed* a queued or current track on the invitation or live room in that
+  session, even if a later snapshot is empty. If it has not, the TV tears down the
+  old local session and automatically creates one replacement with a fresh code,
+  host token, invitation URL, and QR code, plus a short expiration notice. The
+  replacement always lands on the Invitation screen: press **Enter room** again.
+  If it has observed a track, it instead switches to the LiveRoom missing-state
+  screen (even when still at the QR) and offers a focused **New room** action;
+  it never silently replaces a used session. The dead room's QR and old queue
+  are not shown as active content.
+  Cancel/join the old observer, reconnect/refresh work, playback, queue commands,
+  and reports before activating a replacement; old callbacks must not affect it.
+  Missing is a local teardown, not a host `DELETE` of the already missing backend
+  room. Do not create rooms in the background: if the old-worker join completes
+  after Home, defer the replacement POST until foreground return. If Home occurs
+  during a pending replacement POST, finish it without monitoring the new invite;
+  mark foreground recovery pending and check that code once on return. A missing
+  automatic replacement is not replaced again until a fresh authoritative read
+  has confirmed it; show the explicit missing state and **New room** instead.
+  Foreground recovery reconciles the old code before enabling commands or
+  replacement playback. Transient failures
+  retain the old room and restart observation with existing reconnect/backoff
+  behavior; failed replacement creation shows a recoverable error rather than
+  looping `POST /rooms`. Guest clients holding the old code retain their existing
+  terminal-event/404 handling.
 - The Android host publishes actual playback through one serialized request
   pipeline. Immediate transitions supersede queued progress, old-track callbacks
   are excluded by selection-bound Job cancellation, and 409 responses force a

@@ -54,11 +54,14 @@ class QueueAdvancementInstrumentationTest {
                 """{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""",
             ),
         )
-        server.enqueue(
-            MockResponse().setResponseCode(200).setBody(
-                """{"code":"ABCD","current":null,"queue":[]}""",
-            ),
-        )
+        // Invitation and LiveRoom each start their own observation generation.
+        repeat(2) {
+            server.enqueue(
+                MockResponse().setResponseCode(200).setBody(
+                    """{"code":"ABCD","current":null,"queue":[]}""",
+                ),
+            )
+        }
         val application = ApplicationProvider.getApplicationContext<QMixApplication>()
         val controller = application.hostSession
         controller.endRoom()
@@ -192,7 +195,9 @@ class QueueAdvancementInstrumentationTest {
         )
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        repository.awaitInvitationObservationForTest()
         controller.enterRoom()
+        repository.awaitLiveObservationForTest()
         repository.publish(
             RoomSyncState.Active(
                 "ABCD",
@@ -276,7 +281,9 @@ class QueueAdvancementInstrumentationTest {
 
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        repository.awaitInvitationObservationForTest()
         controller.enterRoom()
+        repository.awaitLiveObservationForTest()
         repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
             LocalPlaybackStatus.BUFFERING }
@@ -389,10 +396,22 @@ class QueueAdvancementInstrumentationTest {
     }
 
     private class RecordingRepository : RoomRepository {
+        private val invitationObserved = CountDownLatch(1)
+        private val liveObserved = CountDownLatch(2)
         private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+            invitationObserved.countDown()
+            liveObserved.countDown()
             for (state in states) emit(state)
+        }
+
+        fun awaitInvitationObservationForTest() {
+            assertTrue("invitation observation did not start", invitationObserved.await(5, TimeUnit.SECONDS))
+        }
+
+        fun awaitLiveObservationForTest() {
+            assertTrue("live room observation did not start", liveObserved.await(5, TimeUnit.SECONDS))
         }
 
         fun publish(state: RoomSyncState) {

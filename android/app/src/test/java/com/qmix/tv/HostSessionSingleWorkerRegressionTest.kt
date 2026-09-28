@@ -67,11 +67,13 @@ class HostSessionSingleWorkerRegressionTest {
         try {
             assertTrue(controller.createRoom())
             controller.awaitCreatedForTest()
-            controller.enterRoom()
             assertTrue("factory restart did not begin recovery", firstRecovery.await(5, TimeUnit.SECONDS))
+            // Enter cancels the invitation's recovery; another foreground restart
+            // must not admit a replacement until that worker finishes cleanup.
+            controller.enterRoom()
+            assertTrue("enter did not cancel recovery", cleanup.await(5, TimeUnit.SECONDS))
             controller.onHostStopped()
             controller.onHostStarted()
-            assertTrue("stop lost the running recovery", cleanup.await(5, TimeUnit.SECONDS))
             // Recovery uses Unconfined: any admission on the mutation lane starts inline.
             // Drain that lane while cleanup is held, then inspect the attempted starts.
             mutation.run { Unit }
@@ -95,6 +97,7 @@ class HostSessionSingleWorkerRegressionTest {
         val restarted = CountDownLatch(1)
         val observerRestarted = CountDownLatch(1)
         val staleCollection = CountDownLatch(1)
+        val liveFactory = CountDownLatch(1)
         val mutation = QueueMutationContext(Dispatchers.Default.limitedParallelism(1))
         val factories = AtomicInteger()
         val recoveries = AtomicInteger()
@@ -104,10 +107,12 @@ class HostSessionSingleWorkerRegressionTest {
             initialGuestOrigin = "https://guest.example", roomCollectionScope = scope,
             queueMutationContext = mutation, foregroundRecoveryContext = Dispatchers.IO,
             roomRepositoryFactory = {
-                events.add("factory ${factories.incrementAndGet()} observer=${restartedOnce.get()}")
-                if (factories.get() > 1) staleCollection.countDown()
+                val generation = factories.incrementAndGet()
+                events.add("factory $generation observer=${restartedOnce.get()}")
+                if (generation > 2) staleCollection.countDown()
                 object : RoomRepository {
                     override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
+                        if (generation == 2) liveFactory.countDown()
                         kotlinx.coroutines.awaitCancellation()
                     }
                 }
@@ -133,6 +138,7 @@ class HostSessionSingleWorkerRegressionTest {
             assertTrue(controller.createRoom())
             controller.awaitCreatedForTest()
             controller.enterRoom()
+            assertTrue("live collection never started", liveFactory.await(5, TimeUnit.SECONDS))
             controller.onHostStopped()
             controller.onHostStarted()
             assertTrue("observer did not restart the host", observerRestarted.await(5, TimeUnit.SECONDS))
@@ -141,7 +147,7 @@ class HostSessionSingleWorkerRegressionTest {
             mutation.run { Unit }
             assertTrue("observer did not start a new recovery", restarted.await(5, TimeUnit.SECONDS))
             assertEquals("stale recovery started a collection: $events", 1L, staleCollection.count)
-            assertEquals(1, factories.get())
+            assertEquals(2, factories.get())
             assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         } finally {
             observation.close()

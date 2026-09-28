@@ -335,7 +335,9 @@ class HostSessionReviewFindingsTest {
     @Test fun setup_collector_cannot_admit_reentrant_session_before_old_cleanup() {
         val server = MockWebServer().apply { start(); enqueue(roomResponse()); enqueue(roomResponse()) }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val invitationStarted = CountDownLatch(1)
         val collectionStarted = CountDownLatch(1)
+        val collections = AtomicInteger()
         val cleanupStarted = CountDownLatch(1)
         val allowCleanup = CountDownLatch(1)
         val cleanupCompleted = AtomicBoolean(false)
@@ -348,13 +350,18 @@ class HostSessionReviewFindingsTest {
             roomCollectionContext = Dispatchers.IO,
             roomRepositoryFactory = { object : RoomRepository {
                 override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
-                    collectionStarted.countDown()
-                    try { kotlinx.coroutines.awaitCancellation() }
-                    finally {
-                        withContext(NonCancellable + Dispatchers.IO) {
-                            cleanupStarted.countDown()
-                            check(allowCleanup.await(10, TimeUnit.SECONDS))
-                            cleanupCompleted.set(true)
+                    if (collections.incrementAndGet() == 1) {
+                        invitationStarted.countDown()
+                        kotlinx.coroutines.awaitCancellation()
+                    } else {
+                        collectionStarted.countDown()
+                        try { kotlinx.coroutines.awaitCancellation() }
+                        finally {
+                            withContext(NonCancellable + Dispatchers.IO) {
+                                cleanupStarted.countDown()
+                                check(allowCleanup.await(10, TimeUnit.SECONDS))
+                                cleanupCompleted.set(true)
+                            }
                         }
                     }
                 }
@@ -369,8 +376,9 @@ class HostSessionReviewFindingsTest {
         try {
             controller.createRoom()
             controller.awaitCreatedForTest()
+            assertTrue("invitation collection never started", invitationStarted.await(5, TimeUnit.SECONDS))
             controller.enterRoom()
-            assertTrue("old collection never started", collectionStarted.await(5, TimeUnit.SECONDS))
+            assertTrue("old live collection never started", collectionStarted.await(5, TimeUnit.SECONDS))
             watchSetup.set(true)
             endThread.execute { controller.endRoom(); teardownReturned.countDown() }
             assertTrue("old cleanup never started", cleanupStarted.await(5, TimeUnit.SECONDS))
@@ -448,7 +456,9 @@ class HostSessionReviewFindingsTest {
     @Test fun foreground_restart_waits_for_non_cancellable_collection_cleanup() {
         val server = MockWebServer().apply { start(); enqueue(roomResponse()) }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val invitationCollecting = CountDownLatch(1)
         val collecting = CountDownLatch(1)
+        val collections = AtomicInteger()
         val cleanup = CountDownLatch(1)
         val release = CountDownLatch(1)
         val recovery = CountDownLatch(1)
@@ -456,12 +466,17 @@ class HostSessionReviewFindingsTest {
             initialGuestOrigin = "https://guest.example", roomCollectionScope = scope,
             roomRepositoryFactory = { object : RoomRepository {
                 override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
-                    collecting.countDown()
-                    try { kotlinx.coroutines.awaitCancellation() }
-                    finally { withContext(NonCancellable + Dispatchers.IO) {
-                        cleanup.countDown()
-                        check(release.await(30, TimeUnit.SECONDS))
-                    } }
+                    if (collections.incrementAndGet() == 1) {
+                        invitationCollecting.countDown()
+                        kotlinx.coroutines.awaitCancellation()
+                    } else {
+                        collecting.countDown()
+                        try { kotlinx.coroutines.awaitCancellation() }
+                        finally { withContext(NonCancellable + Dispatchers.IO) {
+                            cleanup.countDown()
+                            check(release.await(30, TimeUnit.SECONDS))
+                        } }
+                    }
                 }
             } }, foregroundRecoveryContext = Dispatchers.Unconfined, foregroundReconcilerFactory = { { _: String ->
                 recovery.countDown()
@@ -470,6 +485,7 @@ class HostSessionReviewFindingsTest {
         try {
             controller.createRoom()
             controller.awaitCreatedForTest()
+            assertTrue(invitationCollecting.await(5, TimeUnit.SECONDS))
             controller.enterRoom()
             assertTrue(collecting.await(5, TimeUnit.SECONDS))
             controller.onHostStopped()
@@ -501,18 +517,24 @@ class HostSessionReviewFindingsTest {
             foregroundRecoveryContext = Dispatchers.Unconfined,
             roomRepositoryFactory = { object : RoomRepository {
                 override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
-                    if (collections.incrementAndGet() == 1) {
-                        firstCollection.countDown()
-                        kotlinx.coroutines.awaitCancellation()
-                    } else {
-                        nextCollection.countDown()
-                        try {
+                    when (collections.incrementAndGet()) {
+                        1 -> { // Invitation collector; entry cancels it.
+                            firstCollection.countDown()
+                            kotlinx.coroutines.awaitCancellation()
+                        }
+                        2 -> { // Live collector; foreground loss must await its cleanup.
+                            nextCollection.countDown()
+                            emit(RoomSyncState.Active(roomCode, room, Freshness.FRESH, LiveConnection.CONNECTED))
+                            try { kotlinx.coroutines.awaitCancellation() }
+                            finally { withContext(NonCancellable + Dispatchers.IO) {
+                                cleanup.countDown()
+                                check(release.await(30, TimeUnit.SECONDS))
+                            } }
+                        }
+                        else -> {
                             emit(RoomSyncState.Active(roomCode, room, Freshness.FRESH, LiveConnection.CONNECTED))
                             kotlinx.coroutines.awaitCancellation()
-                        } finally { withContext(NonCancellable + Dispatchers.IO) {
-                            cleanup.countDown()
-                            check(release.await(30, TimeUnit.SECONDS))
-                        } }
+                        }
                     }
                 }
             } }, foregroundReconcilerFactory = { { _: String ->
@@ -522,13 +544,15 @@ class HostSessionReviewFindingsTest {
         try {
             controller.createRoom()
             controller.awaitCreatedForTest()
-            controller.enterRoom()
             assertTrue(firstCollection.await(5, TimeUnit.SECONDS))
+            controller.enterRoom()
+            assertTrue(nextCollection.await(5, TimeUnit.SECONDS))
+            controller.awaitRoomStateForTest { it.synchronization ==
+                RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED) }
             controller.onHostStopped()
             controller.onHostStarted()
-            assertTrue(nextCollection.await(5, TimeUnit.SECONDS))
             assertTrue(cleanup.await(5, TimeUnit.SECONDS))
-            assertEquals("recovery overlapped cancelled collection", 1, fetches.get())
+            assertEquals("recovery overlapped cancelled collection", 0, fetches.get())
             release.countDown()
             assertTrue("recovery did not resume after collection cleanup", secondRecovery.await(5, TimeUnit.SECONDS))
         } finally {

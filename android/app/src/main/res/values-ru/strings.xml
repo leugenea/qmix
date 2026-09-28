@@ -11,6 +11,7 @@
     <string name="cancel">Отмена</string>
     <string name="enter_room">Войти в комнату</string>
     <string name="back_to_room">Вернуться в комнату</string>
+    <string name="replacement_invitation_notice">Прежняя комната недоступна. Вот новая.</string>
     <string name="join_this_room">Присоединяйтесь к комнате</string>
     <string name="invitation_room_code">Код комнаты: %1$s</string>
     <string name="invitation_qr_description">QR-код для %1$s</string>
@@ -44,7 +45,9 @@
     <string name="playback_decode_failed">Не удалось воспроизвести этот аудиоформат.</string>
     <string name="playback_network_interrupted">Соединение с сетью прервано.</string>
     <string name="playback_unknown_failed">Не удалось продолжить воспроизведение.</string>
-    <string name="sync_room_missing">Комната не найдена.</string>
+    <string name="room_unavailable_title">Комната недоступна</string>
+    <string name="sync_room_missing">Эта комната больше недоступна.</string>
+    <string name="new_room">Новая комната</string>
     <string name="sync_connecting">Подключаемся к комнате…</string>
     <string name="sync_reconnecting_with_room">Подключаемся снова… Показано последнее состояние комнаты.</string>
     <string name="sync_reconnecting">Подключаемся снова…</string>

@@ -13,6 +13,7 @@
     <string name="cancel">Cancel</string>
     <string name="enter_room">Enter room</string>
     <string name="back_to_room">Back to room</string>
+    <string name="replacement_invitation_notice">The old room is gone. Here is a new one.</string>
     <string name="join_this_room">Join this room</string>
     <string name="invitation_room_code">Room code: %1$s</string>
     <string name="invitation_qr_description">QR code for %1$s</string>
@@ -46,7 +47,9 @@
     <string name="playback_decode_failed">Audio format could not be played.</string>
     <string name="playback_network_interrupted">Network connection interrupted.</string>
     <string name="playback_unknown_failed">Playback failed unexpectedly.</string>
-    <string name="sync_room_missing">Room not found.</string>
+    <string name="room_unavailable_title">Room unavailable</string>
+    <string name="sync_room_missing">This room is no longer available.</string>
+    <string name="new_room">New room</string>
     <string name="sync_connecting">Connecting to room…</string>
     <string name="sync_reconnecting_with_room">Reconnecting… Showing last known room.</string>
     <string name="sync_reconnecting">Reconnecting…</string>
