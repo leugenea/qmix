@@ -73,6 +73,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /assets/qmix-512.svg", handleGuestIcon(guestIcon512))
 	mux.HandleFunc("POST /rooms", s.observeHTTP(s.handleCreateRoom))
 	mux.HandleFunc("GET /rooms/{code}", s.observeHTTP(s.handleGetRoom))
+	mux.HandleFunc("DELETE /rooms/{code}", s.observeHTTP(s.handleDeleteRoom))
 	mux.HandleFunc("POST /rooms/{code}/queue", s.observeHTTP(s.handleAddTrack))
 	mux.HandleFunc("GET /r/{code}", s.observeHTTP(s.handleGuestPage))
 	mux.HandleFunc("POST /r/{code}/queue", s.observeHTTP(s.handleAddTrack))
@@ -193,6 +194,19 @@ func (s *Server) handleGetRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// handleDeleteRoom ends a room with the host token and releases its slot.
+func (s *Server) handleDeleteRoom(w http.ResponseWriter, r *http.Request) {
+	err := s.store.DeleteRoom(r.PathValue("code"), hostToken(r))
+	switch {
+	case errors.Is(err, errRoomNotFound):
+		writeError(w, http.StatusNotFound, "room_not_found", errRoomNotFound.Error())
+	case errors.Is(err, errInvalidHostToken):
+		writeError(w, http.StatusForbidden, "invalid_host_token", errInvalidHostToken.Error())
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // viewRoom is the public representation of a room (no host token).

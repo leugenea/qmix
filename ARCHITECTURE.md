@@ -135,6 +135,12 @@ through `StreamBackend` and caches the URL with a TTL
   process-wide live-room bound is full, it returns `503`, `Retry-After`, and the
   public `room_capacity_exhausted` envelope
 - `GET /rooms/{code}` — get public room state (`code`, `current`, and `queue`; no `host_token`)
+- `DELETE /rooms/{code}` — close a room (host only, `X-Host-Token` from
+  `POST /rooms`). Returns `204` with no body on success, `403` with
+  `{"error":"invalid_host_token","message":"invalid host token"}` for a
+  missing or wrong token, or `404` with
+  `{"error":"room_not_found","message":"room not found"}` for an unknown or
+  already-closed code. A repeat DELETE returns `404`, not another `204`
 - `POST /rooms/{code}/queue` — append a track with `{url}`; the request body is
   limited to 4 KiB and each room holds at most 100 queued tracks. When the
   shared yt-dlp capacity queue is full, resolution is rejected with `503` plus
@@ -192,7 +198,7 @@ bodies remain unchanged. The guest web client already reads `message`; the
 Android client does not submit queue links, so neither client requires a format
 migration.
 
-Host operations (skip, reorder, and player reports) require the
+Host operations (close, skip, reorder, and player reports) require the
 `X-Host-Token` header issued when the room is created. Player reports accept at
 most 4 KiB and exactly the three documented keys; unknown, missing, duplicate,
 null, malformed, or trailing JSON is rejected. Player errors carry only the
@@ -206,6 +212,14 @@ and credentials are never accepted, stored, published, logged, or returned.
   - `track_changed` — current track changed
   - `player_state` — exact `{track_id,state,pos_sec}` player report or initial
     skip state; reconnect snapshots carry the latest accepted current state
+  - `room_closed` — terminal `{code}` event for a host-closed room (qmix#258), published
+    to that room incarnation's existing subscribers before their streams end.
+    It is a lifecycle signal, not a queue or playback update; clients must stop
+    reconnecting and submitting links for that room rather than awaiting another
+    snapshot. New event connections for the closed code receive `404`.
+    The guest PWA treats an SSE error followed by `GET /r/{code}` returning
+    `404`, or a queue-submit `404`, as an ended room if the terminal event
+    was missed; inconclusive lookups keep the normal reconnect backoff.
 
 The server flushes an SSE comment (`: ping`) every 15 seconds when otherwise
 idle. The Android client uses a 45-second **read** timeout (qmix#213), allowing
@@ -417,9 +431,10 @@ mapped only by `POST /rooms` to `503`, `room_capacity_exhausted`, the fixed
 message `room capacity is temporarily exhausted`, and a positive integer
 `Retry-After`. That delay is the configured janitor cadence rounded up to at
 least one second and is advisory, not a guaranteed expiry time. Existing-room
-operations remain usable while full. The existing empty/non-empty expiry path
-deletes rooms and releases slots while preserving incarnation, stale-reference,
-and subscriber invalidation behavior.
+operations remain usable while full. Empty/non-empty expiry or explicit host
+close deletes rooms and releases slots while preserving incarnation,
+stale-reference, and subscriber invalidation behavior; shortening idle TTLs
+remains separate qmix#260 work.
 
 ## 8. State management
 
@@ -437,6 +452,12 @@ and subscriber invalidation behavior.
   outside Store locks. Append commits revalidate the original room incarnation
   and queue capacity, so deletion, expiry, or code reuse during resolution
   cannot mutate a replacement room.
+- A host-authorized close (qmix#258) removes that room under the Store mutex,
+  releasing its live-room slot immediately rather than waiting for the janitor
+  or the 12/24-hour idle TTL. The Store publishes `room_closed` before invalidating
+  subscriptions for that exact incarnation. A late resolver result or player
+  report cannot commit to the removed room or a later room using the same code;
+  the latter has a distinct generation and submission limiter.
 - A Store mutation holds the Store-before-Hub lock order through non-blocking
   event publication. Every Hub registered by a Server receives the committed
   event; registration is idempotent, and snapshots read the same Hub used by
@@ -446,8 +467,13 @@ and subscriber invalidation behavior.
   `queue_updated`, and SSE connection snapshots capture room state plus their
   event-ID boundary atomically.
 - Hub subscriptions and publications are keyed by room code plus Store-assigned
-  incarnation generation. Expiry disconnects that exact incarnation before its
-  code can be reused, so a stale SSE stream cannot observe a replacement room.
+  incarnation generation. Close or expiry disconnects that exact incarnation
+  before its code can be reused, so a stale SSE stream cannot observe a
+  replacement room. After close, fresh room REST/SSE/current-stream requests
+  for the removed code return `404` as for expiry until the code is reused.
+  An already-started audio response is not guaranteed to stop: stream URLs are
+  cached by source or metadata key and retain their ordinary
+  `QMIX_STREAM_CACHE_TTL` behavior, not evicted simply because a room closes.
 - Empty rooms (no queued or current track) expire after 12 hours of inactivity.
   Non-empty rooms expire after 24 hours without a queue or playback mutation,
   bounding memory retained by abandoned queues.
@@ -473,7 +499,9 @@ and subscriber invalidation behavior.
   `track_id` update presentation only and never command Media3. During network
   loss the server deliberately retains the last accepted state and position;
   local playback continues and marks reporting unsynchronized until a later
-  accepted report.
+  accepted report. The existing Android TV room-end flow detaches the local
+  session without sending DELETE; host-side automatic close is separate qmix#259
+  and is not part of qmix#258.
 - State loss on backend restart is acceptable because MVP rooms are ephemeral.
 
 ## 9. Deployment
@@ -521,7 +549,8 @@ and subscriber invalidation behavior.
 - The process subscribes to `SIGINT` and `SIGTERM` with
   `signal.NotifyContext`. Shutdown closes the HTTP listener immediately; SSE
   subscriptions terminate at shutdown start, including concurrent late
-  subscribers (qmix#207). Other active HTTP and audio-stream handlers retain
+  subscribers and terminal writers detached by a room close (qmix#207/#258).
+  Other active HTTP and audio-stream handlers retain
   an 11-second grace period; their request contexts are then canceled and
   connections force-closed within the 12-second total deadline (qmix#132).
   The room janitor is stopped and joined exactly once on normal shutdown and

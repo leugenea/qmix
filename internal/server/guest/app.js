@@ -13,8 +13,26 @@
   let messageTimer = null;
   let retryDelay = 1000;
   const maxRetryDelay = 30000;
+  let roomEnded = false;
+
+  function endRoom() {
+    if (roomEnded) return;
+    roomEnded = true;
+    clearTimeout(retryTimer);
+    clearTimeout(messageTimer);
+    messageElement.textContent = "";
+    delete messageElement.dataset.kind;
+    if (source) source.close();
+    source = null;
+    const notice = document.getElementById("room-ended");
+    notice.textContent = "This room has ended. Tracks can no longer be added.";
+    notice.hidden = false;
+    urlInput.disabled = true;
+    form.querySelector('button[type="submit"]').disabled = true;
+  }
 
   function showMessage(message, kind, dismissAfter = 5000) {
+    if (roomEnded) return;
     clearTimeout(messageTimer);
     messageTimer = null;
     messageElement.textContent = message;
@@ -62,16 +80,30 @@
   }
 
   function connect() {
+    if (roomEnded) return;
     if (source) source.close();
     const eventSource = new EventSource(`/rooms/${encodeURIComponent(code)}/events`);
     source = eventSource;
+    let checking = false;
     eventSource.onopen = () => {
       if (source !== eventSource) return;
       retryDelay = 1000;
     };
-    eventSource.onerror = () => {
-      if (source !== eventSource) return;
+    eventSource.onerror = async () => {
+      if (source !== eventSource || checking) return;
+      checking = true;
       eventSource.close();
+      try {
+        const response = await fetch(`/r/${encodeURIComponent(code)}`);
+        if (source !== eventSource) return;
+        if (response.status === 404) {
+          endRoom();
+          return;
+        }
+      } catch (_) {
+        // A failed lookup is inconclusive: keep the existing retry policy.
+      }
+      if (source !== eventSource) return;
       clearTimeout(retryTimer);
       retryTimer = setTimeout(connect, retryDelay);
       retryDelay = Math.min(retryDelay * 2, maxRetryDelay);
@@ -104,12 +136,35 @@
         renderCurrent();
       }
     });
+    eventSource.addEventListener("room_closed", () => {
+      if (source !== eventSource) return;
+      endRoom();
+    });
   }
 
   connect();
 
+  async function addTrack(url) {
+    const response = await fetch(`/r/${encodeURIComponent(code)}/queue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (roomEnded) return;
+    if (response.status === 404) {
+      endRoom();
+      return;
+    }
+    const data = await response.json().catch(() => ({}));
+    if (roomEnded) return;
+    if (!response.ok) throw new Error(data.message || "Could not add this link");
+    form.reset();
+    showMessage("Added to the queue", "success");
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (roomEnded) return;
     const url = urlInput.value.trim();
     if (!url) return;
 
@@ -117,24 +172,16 @@
     submit.disabled = true;
     showMessage("Adding…", "progress", null);
     try {
-      const response = await fetch(`/r/${encodeURIComponent(code)}/queue`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || "Could not add this link");
-      form.reset();
-      showMessage("Added to the queue", "success");
+      await addTrack(url);
     } catch (error) {
       showMessage(error.message || "Could not add this link", "error");
     } finally {
-      submit.disabled = false;
+      if (!roomEnded) submit.disabled = false;
     }
   });
 
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
+    if (!roomEnded && document.visibilityState === "visible") {
       clearTimeout(retryTimer);
       retryDelay = 1000;
       connect();

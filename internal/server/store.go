@@ -336,6 +336,24 @@ func (s *Store) appendLocked(ref roomRef, track Track) (Track, error) {
 	return track, nil
 }
 
+// DeleteRoom atomically authorizes the host, delivers a terminal event to each
+// live subscription, invalidates that incarnation, and releases its capacity.
+func (s *Store) DeleteRoom(code, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	room, err := s.authorizedRoomByCodeLocked(code, token)
+	if err != nil {
+		return err
+	}
+	ref := roomRef{code: code, generation: room.generation}
+	payload := marshalEventData(map[string]string{"code": code})
+	for hub := range s.hubs {
+		hub.closeRef(ref, payload)
+	}
+	delete(s.rooms, code)
+	return nil
+}
+
 // Skip atomically authorizes the host, advances playback, and publishes the
 // deterministic track_changed, player_state, queue_updated event sequence.
 func (s *Store) Skip(code, token string) (map[string]interface{}, error) {
