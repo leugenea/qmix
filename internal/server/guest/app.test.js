@@ -39,6 +39,7 @@ function roomApp(fetch = async () => ({ ok: true, json: async () => ({}) })) {
     emit(name, data = "{}") { this.listeners[name]({ data }); }
   }
   const timers = new Map();
+  const timerDelays = new Map();
   let nextTimer = 0;
   const document = {
     visibilityState: "visible",
@@ -51,11 +52,17 @@ function roomApp(fetch = async () => ({ ok: true, json: async () => ({}) })) {
     document,
     window: { location: { pathname: "/r/testroom" } },
     EventSource: FakeEventSource,
+    AbortController,
     fetch,
-    setTimeout(fn) { timers.set(++nextTimer, fn); return nextTimer; },
-    clearTimeout(id) { timers.delete(id); },
+    setTimeout(fn, delay) {
+      const id = ++nextTimer;
+      timers.set(id, fn);
+      timerDelays.set(id, delay);
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); timerDelays.delete(id); },
   });
-  return { elements, submit, sources, timers, document, form };
+  return { elements, submit, sources, timers, timerDelays, document, form };
 }
 
 test("room_closed presents a persistent ended state and closes the stream", () => {
@@ -120,6 +127,31 @@ test("transient reconnect lookup failures retain backoff and retry", async () =>
     [...app.timers.values()][0]();
     assert.equal(app.sources.length, 2);
   }
+});
+
+test("a stalled room lookup times out and retries without ending the room", async () => {
+  let probeSignal;
+  const app = roomApp((url, options) => {
+    assert.equal(url, "/r/testroom");
+    probeSignal = options?.signal;
+    return new Promise(() => {}); // Simulate a stalled transport that ignores abort.
+  });
+  const source = app.sources[0];
+  const pending = source.onerror();
+  assert.equal(app.timers.size, 1);
+  const [probeTimer, timeout] = [...app.timerDelays.entries()][0];
+  assert.equal(timeout, 5000);
+
+  app.timers.get(probeTimer)();
+  await pending;
+
+  assert.equal(probeSignal.aborted, true);
+  assert.equal(source.closed, true);
+  assert.equal(app.elements.get("room-ended").hidden, true);
+  assert.equal(app.timers.size, 1);
+  assert.equal([...app.timerDelays.values()][0], 1000);
+  [...app.timers.values()][0]();
+  assert.equal(app.sources.length, 2);
 });
 
 test("stale 404 lookup cannot end room after visibility reconnect", async () => {

@@ -13,6 +13,7 @@
   let messageTimer = null;
   let retryDelay = 1000;
   const maxRetryDelay = 30000;
+  const roomProbeTimeout = 5000;
   let roomEnded = false;
 
   function endRoom() {
@@ -79,6 +80,24 @@
     }
   }
 
+  async function probeRoom() {
+    const controller = new AbortController();
+    let timeout;
+    try {
+      return await Promise.race([
+        fetch(`/r/${encodeURIComponent(code)}`, { signal: controller.signal }),
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            reject(new Error("room lookup timed out"));
+          }, roomProbeTimeout);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   function connect() {
     if (roomEnded) return;
     if (source) source.close();
@@ -94,7 +113,7 @@
       checking = true;
       eventSource.close();
       try {
-        const response = await fetch(`/r/${encodeURIComponent(code)}`);
+        const response = await probeRoom();
         if (source !== eventSource) return;
         if (response.status === 404) {
           endRoom();
