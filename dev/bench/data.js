@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790625545243,
+  "lastUpdate": 1790625549024,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2291,6 +2291,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/80a84c80fda1d44d52eadafa9ca24f94b2137d09"
         },
         "date": 1790616418422,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "811bc3329c6ebf5b935a3afbc2a299fa068e819a",
+          "message": "feat(tv): close the backend room when the host ends it (#259) (#267)\n\n* feat(tv): close the backend room when the host ends it (#259)\n\n* test(tv): route DELETE by method in lifecycle test, classify new literals, prune settled predecessors (#259)",
+          "timestamp": "2026-09-28T22:58:25+03:00",
+          "tree_id": "0b2356ed2dd06126619ef20f074108e19d4a6672",
+          "url": "https://github.com/leugenea/qmix/commit/811bc3329c6ebf5b935a3afbc2a299fa068e819a"
+        },
+        "date": 1790625547800,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
