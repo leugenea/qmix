@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	defaultUnusedRoomTTL   = 45 * time.Minute
 	defaultNonEmptyRoomTTL = 24 * time.Hour
 	defaultMaxLiveRooms    = 256
 )
@@ -30,6 +31,7 @@ type Store struct {
 	rooms    map[string]*Room
 
 	TTL         time.Duration
+	UnusedTTL   time.Duration
 	NonEmptyTTL time.Duration
 	Tick        time.Duration
 
@@ -95,6 +97,7 @@ func NewStoreWithLimits(ttl, tick time.Duration, gen CodeGenerator, maxLiveRooms
 	return &Store{
 		rooms:           make(map[string]*Room),
 		TTL:             ttl,
+		UnusedTTL:       min(defaultUnusedRoomTTL, ttl),
 		NonEmptyTTL:     defaultNonEmptyRoomTTL,
 		Tick:            tick,
 		gen:             gen,
@@ -331,6 +334,7 @@ func (s *Store) appendLocked(ref roomRef, track Track) (Track, error) {
 		return Track{}, errQueueFull
 	}
 	room.Queue = append(room.Queue, track)
+	room.hadTrack = true
 	s.touch(room)
 	s.publishLocked(room, "queue_updated", queuePayload(room))
 	return track, nil
@@ -577,12 +581,24 @@ func (s *Store) sweepAt(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for code, room := range s.rooms {
-		idle := now.Sub(room.LastActivity)
-		if (room.isEmpty() && idle > s.TTL) || (!room.isEmpty() && idle > s.NonEmptyTTL) {
+		if now.Sub(room.LastActivity) > s.roomTTL(room) {
 			s.invalidateLocked(room)
 			delete(s.rooms, code)
 		}
 	}
+}
+
+// roomTTL uses the track history only while empty. A queued or current track
+// always keeps the existing non-empty lifetime, including while resolution is
+// pending for a different submission.
+func (s *Store) roomTTL(room *Room) time.Duration {
+	if !room.isEmpty() {
+		return s.NonEmptyTTL
+	}
+	if room.hadTrack {
+		return s.TTL
+	}
+	return s.UnusedTTL
 }
 
 func (r *Room) isEmpty() bool { return len(r.Queue) == 0 && r.Current == nil }

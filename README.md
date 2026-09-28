@@ -174,7 +174,14 @@ The retry delay is advisory and derived from the room janitor cadence; it does
 not guarantee that a room will expire at that time. Existing-room REST, SSE,
 queue, and streaming operations remain available at capacity. Capacity follows
 room-map membership rather than a separate counter: the ordinary expiry sweep
-or an explicit host close releases a slot.
+or an explicit host close releases a slot. Rooms that never successfully queued
+any track use `QMIX_UNUSED_ROOM_TTL` (default `45m`) instead of the 12-hour
+empty-room TTL, preventing idle creates from holding all slots for 12 hours.
+Once a track is appended, later empty rooms keep the 12-hour TTL; queued/current
+rooms keep the 24-hour TTL. All lifetimes are measured from `LastActivity`:
+creation initializes it, successful queue or playback mutations refresh it,
+and resolver-pending or failed submissions do not. The janitor invalidates SSE
+subscribers on expiry, and explicit host DELETE still frees slots immediately.
 
 ## Closing a room
 
@@ -191,9 +198,10 @@ returns `403` with `{"error":"invalid_host_token","message":"invalid host token"
 an unknown or already-closed room returns `404` with
 `{"error":"room_not_found","message":"room not found"}`. Repeating the
 request after a successful close therefore returns `404`. Closing removes the
-room and releases its live-room slot immediately, without waiting for its
-12-hour (empty) or 24-hour (non-empty) inactivity expiry. Until the code is
-reused, subsequent room reads, SSE connections, queue operations, and
+room and releases its live-room slot immediately, without waiting for the
+45-minute (unused), 12-hour (used and empty), or 24-hour (non-empty) inactivity
+expiry. Until the code is reused, subsequent room reads, SSE connections,
+queue operations, and
 current-stream requests for that code fail as they do after expiry; an
 in-progress audio response is not guaranteed to stop, and the stream URL cache
 retains its normal TTL rather than being cleared on close.
@@ -208,8 +216,8 @@ If a new room later receives the same code, it has a different incarnation and
 host token; in-flight mutations bound to the old incarnation and its SSE
 subscriptions cannot carry over. The Android TV client does **not** yet send
 DELETE when its local session ends; that integration is tracked separately in
-#259. Shorter idle TTLs and per-identity caps are separate #260 work, not part
-of explicit close.
+#259. The shorter unused-room TTL is implemented separately by #260; explicit
+close does not wait for any inactivity timeout.
 
 ## Integration tests
 
@@ -225,9 +233,9 @@ real socket with the full `App.Handler()`, without network access or secrets:
 - streaming through a fake `yt-dlp` (configured with `QMIX_YTDLP_BIN`) and a
   local mock upstream with Range support: exact YouTube URL selection,
   non-YouTube metadata-search fallback, and 200/206 responses;
-- TTL: an empty room expires on the shorter TTL, while a recently active room
-  with a queue survives that interval; abandoned non-empty rooms expire after
-  24 hours.
+- TTL: a never-used room expires on the configurable unused TTL; a room
+  with a queue survives that shorter interval and expires on the 24-hour
+  non-empty TTL. Unit tests cover the 12-hour used-but-empty TTL.
 
 The tests use the `integration` build tag, so regular `go test ./...` runs and
 the coverage gate do not include them. CI runs them in the separate required
@@ -300,11 +308,14 @@ application configuration.
 | `QMIX_ROOM_SUBMISSION_RATE_PER_MINUTE` | `30` | Integer from `1` through `60000`; per-room-incarnation queue-submission token replenishment shared by canonical and guest aliases |
 | `QMIX_ROOM_SUBMISSION_BURST` | `10` | Integer from `1` through `10000`; maximum admitted queue-submission burst per room incarnation |
 | `QMIX_MAX_LIVE_ROOMS` | `256` | Strictly positive integer; maximum live rooms in this process. Expiry releases capacity |
+| `QMIX_UNUSED_ROOM_TTL` | `45m` | Positive Go duration no greater than the 12-hour empty-room TTL; idle lifetime for rooms that never successfully queued a track (qmix#260) |
 | `QMIX_TRUSTED_PROXY_CIDRS` | empty | Comma-separated IPv4/IPv6 CIDRs for immediate reverse proxies trusted to supply one `X-Forwarded-For` field; empty means all forwarding headers are ignored |
 
 Missing or blank values use the listed defaults. `QMIX_MAX_LIVE_ROOMS` must be
 a strictly positive integer; malformed, zero, negative, and overflowing values
-fail startup. For
+fail startup. `QMIX_UNUSED_ROOM_TTL` must be a valid, positive Go duration at
+most `12h`; malformed, zero, negative, or greater values fail startup without
+echoing the input. For
 `QMIX_YTDLP_QUEUE_LIMIT`, explicit zero or any negative integer also uses the
 listed default; malformed or overflowing integers are invalid. Room creation
 rate must be from 1 through 60000, burst from 1 through 10000, and identity

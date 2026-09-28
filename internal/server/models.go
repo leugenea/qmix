@@ -14,6 +14,7 @@ type Room struct {
 	Queue              []Track
 	Current            *Current
 	LastActivity       time.Time
+	hadTrack           bool // set only by a successful queue append, never cleared
 	generation         uint64
 	submissionLimiter  *roomsubmission.Limiter
 	appendReservations int

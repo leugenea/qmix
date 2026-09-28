@@ -789,16 +789,17 @@ func TestIntegrationStreamFakeYtdlp(t *testing.T) {
 	}
 }
 
-// Scenario 6: an idle empty room expires on the short TTL; a room with a queue
-// survives that window but expires on the longer non-empty TTL.
+// Scenario 6: a never-used room expires on the unused TTL; a room with a
+// queue survives that window but expires on the longer non-empty TTL.
 func TestIntegrationRoomTTL(t *testing.T) {
 	_, _ = fakeYtdlp(t, "http://127.0.0.1:1/never-called")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Rooms.EmptyTTL = 80 * time.Millisecond
-	cfg.Rooms.NonEmptyTTL = 240 * time.Millisecond
+	cfg.Rooms.UnusedTTL = 45 * time.Minute
+	cfg.Rooms.EmptyTTL = 12 * time.Hour
+	cfg.Rooms.NonEmptyTTL = 24 * time.Hour
 	cfg.Rooms.JanitorInterval = 25 * time.Millisecond
 	app, err := NewApp(cfg, nil, Dependencies{})
 	if err != nil {
@@ -811,16 +812,29 @@ func TestIntegrationRoomTTL(t *testing.T) {
 		t.Fatalf("fresh room status = %d, want %d", r.status, http.StatusOK)
 	}
 
-	// A room with a track must survive the same window.
+	// Both a queued room and one whose track ended must survive the unused TTL.
 	code2, _ := integCreateRoom(t, base)
 	integAddTrack(t, base, code2, "https://www.youtube.com/watch?v=fake1")
+	usedEmptyCode, usedEmptyToken := integCreateRoom(t, base)
+	usedTrack := integAddTrack(t, base, usedEmptyCode, "https://www.youtube.com/watch?v=fake2")
+	if r := integSkip(t, base, usedEmptyCode, usedEmptyToken); r.status != http.StatusOK {
+		t.Fatalf("used-room skip status = %d; body=%s", r.status, r.body)
+	}
+	if r := integPlayer(t, base, usedEmptyCode, usedEmptyToken, usedTrack.ID, "ended", 0); r.status != http.StatusOK {
+		t.Fatalf("used-room end status = %d; body=%s", r.status, r.body)
+	}
 
+	// At 46 minutes only the never-used room qualifies for expiry; a 12-hour
+	// empty-room TTL could not expire it during this test's five-second window.
+	staleActivity := time.Now().Add(-46 * time.Minute)
 	app.Store.mu.Lock()
-	app.Store.rooms[code].LastActivity = time.Now().Add(-2 * app.Store.TTL)
+	app.Store.rooms[code].LastActivity = staleActivity
+	app.Store.rooms[code2].LastActivity = staleActivity
+	app.Store.rooms[usedEmptyCode].LastActivity = staleActivity
 	app.Store.mu.Unlock()
 	t.Cleanup(app.Close)
 
-	// Poll until the empty room is swept: GET by code → 404.
+	// Poll until the never-used room is swept: GET by code → 404.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		r, _ := integGetRoom(t, base, code)
@@ -828,17 +842,23 @@ func TestIntegrationRoomTTL(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("empty room %q still alive (status %d) after TTL", code, r.status)
+			t.Fatalf("unused room %q still alive (status %d) after unused TTL", code, r.status)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// The tracked room is still there.
+	if r, view := integGetRoom(t, base, usedEmptyCode); r.status != http.StatusOK || len(view.Queue) != 0 {
+		t.Fatalf("used empty room status = %d, view = %+v", r.status, view)
+	}
+	// The queued room is also still there at the same age.
 	r, view := integGetRoom(t, base, code2)
 	if r.status != http.StatusOK || len(view.Queue) != 1 {
 		t.Fatalf("tracked room status = %d, view = %+v", r.status, view)
 	}
 
+	app.Store.mu.Lock()
+	app.Store.rooms[code2].LastActivity = time.Now().Add(-app.Store.NonEmptyTTL - time.Minute)
+	app.Store.mu.Unlock()
 	for {
 		r, _ := integGetRoom(t, base, code2)
 		if r.status == http.StatusNotFound {
