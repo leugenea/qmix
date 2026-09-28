@@ -225,7 +225,9 @@ class HostSessionControllerInstrumentationTest {
         try {
             assertTrue(controller.createRoom())
             controller.awaitCreatedForTest()
+            repository.awaitObservationForTest()
             controller.enterRoom()
+            repository.awaitObservationCountForTest(2)
             val synchronized = RoomSyncState.Active(
                 "ABCD",
                 RoomState("ABCD", null, emptyList()),
@@ -280,7 +282,9 @@ class HostSessionControllerInstrumentationTest {
 
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        repository.awaitObservationForTest()
         controller.enterRoom()
+        repository.awaitObservationCountForTest(2)
         val queue = listOf(QueuedTrack("track-1", "https://example/1", "Title", "Artist", 0, "fixture"))
         val room = RoomState("ABCD", null, queue)
         val synchronized = RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED)
@@ -330,9 +334,14 @@ class HostSessionControllerInstrumentationTest {
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"replacement-secret","url":"/r/ABCD"}"""),
         )
+        val firstInvitationRepository = RecordingRoomRepository()
         val firstRepository = RecordingRoomRepository()
+        val secondInvitationRepository = RecordingRoomRepository()
         val secondRepository = RecordingRoomRepository()
-        val repositories = ArrayDeque(listOf(firstRepository, secondRepository))
+        val repositories = ArrayDeque(listOf(
+            firstInvitationRepository, firstRepository,
+            secondInvitationRepository, secondRepository,
+        ))
         val controller = HostSessionController(
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
@@ -344,7 +353,9 @@ class HostSessionControllerInstrumentationTest {
         )
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        firstInvitationRepository.awaitObservationForTest()
         controller.enterRoom()
+        firstRepository.awaitObservationForTest()
         val room = RoomState("ABCD", null, emptyList())
         firstRepository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization ==
@@ -372,13 +383,17 @@ class HostSessionControllerInstrumentationTest {
         controller.awaitSetupForTest()
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        secondInvitationRepository.awaitObservationForTest()
         controller.enterRoom()
+        secondRepository.awaitObservationForTest()
         val replacementInitialState = controller.state
 
         firstRepository.publish(RoomSyncState.Missing("ABCD"))
 
         assertEquals(replacementInitialState, controller.state)
+        assertTrue(firstInvitationRepository.closed)
         assertTrue(firstRepository.closed)
+        assertTrue(secondInvitationRepository.closed)
         assertFalse(secondRepository.closed)
     }
 
@@ -400,7 +415,9 @@ class HostSessionControllerInstrumentationTest {
         )
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        repository.awaitObservationForTest()
         controller.enterRoom()
+        repository.awaitObservationCountForTest(2)
         val room = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "Artist", 60, "fixture")))
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
@@ -413,7 +430,7 @@ class HostSessionControllerInstrumentationTest {
         controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization is RoomSyncState.Missing }
         assertEquals(1, fetches.get())
         assertEquals(RoomSyncState.Missing("ABCD"), controller.roomSyncState)
-        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        assertFalse((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         controller.onStartOrNext()
         assertEquals(0, commands)
         controller.endRoom()
@@ -447,7 +464,9 @@ class HostSessionControllerInstrumentationTest {
         )
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        repository.awaitObservationForTest()
         controller.enterRoom()
+        repository.awaitObservationCountForTest(2)
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.synchronization ==
             RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED) }
@@ -496,7 +515,9 @@ class HostSessionControllerInstrumentationTest {
         )
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        repository.awaitObservationForTest()
         controller.enterRoom()
+        repository.awaitObservationCountForTest(2)
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
         controller.onHostStopped()
         controller.collectStatesForTest { state ->
@@ -544,7 +565,9 @@ class HostSessionControllerInstrumentationTest {
             try {
                 assertTrue(controller.createRoom())
                 controller.awaitCreatedForTest()
+                repository.awaitObservationForTest()
                 controller.enterRoom()
+                repository.awaitObservationCountForTest(2)
                 repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
                 controller.awaitStateForTest { state ->
                     (state as? HostingState.LiveRoom)?.synchronization ==
@@ -838,10 +861,12 @@ class HostSessionControllerInstrumentationTest {
         )
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        repository.awaitObservationForTest()
         controller.enterRoom()
         controller.awaitSetupForTest()
         assertTrue(controller.state is HostingState.Setup)
-        assertNull(repository.roomCode)
+        assertEquals("ABCD", repository.roomCode)
+        assertEquals(1, repository.observations)
         assertEquals(0, playbackConstructions)
 
         assertTrue(controller.createRoom())
@@ -849,7 +874,8 @@ class HostSessionControllerInstrumentationTest {
         controller.enterRoom()
         controller.awaitSetupForTest()
         assertTrue(controller.state is HostingState.Setup)
-        assertNull(repository.roomCode)
+        assertEquals("ABCD", repository.roomCode)
+        assertEquals(2, repository.observations)
         assertEquals(2, queueConstructions)
         assertEquals(1, playbackConstructions)
         assertEquals(1, playbackPauses)
@@ -888,6 +914,7 @@ class HostSessionControllerInstrumentationTest {
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
             this@RecordingRoomRepository.roomCode = roomCode
+            closed = false
             observations++
             firstObservation.countDown()
             try {
@@ -903,6 +930,10 @@ class HostSessionControllerInstrumentationTest {
 
         fun awaitObservationForTest() {
             assertTrue("room collection did not start", firstObservation.await(5, TimeUnit.SECONDS))
+        }
+
+        fun awaitObservationCountForTest(count: Int) {
+            awaitConditionForTest { observations >= count }
         }
     }
 

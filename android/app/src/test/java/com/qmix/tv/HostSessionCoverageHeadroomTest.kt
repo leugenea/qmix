@@ -102,7 +102,9 @@ class HostSessionCoverageHeadroomTest {
     @Test fun ending_room_rejects_reentrant_actions_until_collection_cleanup_completes() {
         val server = MockWebServer().apply { start(); enqueue(response()) }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val invitationCollecting = CountDownLatch(1)
         val collecting = CountDownLatch(1)
+        val collections = AtomicInteger()
         val cleanup = CountDownLatch(1)
         val release = CountDownLatch(1)
         val primaryCalls = AtomicInteger()
@@ -111,17 +113,24 @@ class HostSessionCoverageHeadroomTest {
             roomCollectionScope = scope,
             roomRepositoryFactory = { object : RoomRepository {
                 override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
-                    collecting.countDown()
-                    try { kotlinx.coroutines.awaitCancellation() }
-                    finally { withContext(NonCancellable + Dispatchers.IO) {
-                        cleanup.countDown()
-                        check(release.await(10, TimeUnit.SECONDS))
-                    } }
+                    if (collections.incrementAndGet() == 1) {
+                        // Invitation monitoring ends on entry, without holding cleanup.
+                        invitationCollecting.countDown()
+                        kotlinx.coroutines.awaitCancellation()
+                    } else {
+                        collecting.countDown()
+                        try { kotlinx.coroutines.awaitCancellation() }
+                        finally { withContext(NonCancellable + Dispatchers.IO) {
+                            cleanup.countDown()
+                            check(release.await(10, TimeUnit.SECONDS))
+                        } }
+                    }
                 }
             } }, primaryActionHandler = { primaryCalls.incrementAndGet() })
         runWithTeardown({
             assertTrue(controller.createRoom())
             controller.awaitCreatedForTest()
+            assertTrue(invitationCollecting.await(5, TimeUnit.SECONDS))
             controller.enterRoom()
             assertTrue(collecting.await(5, TimeUnit.SECONDS))
             controller.endRoom()

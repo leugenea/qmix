@@ -41,6 +41,10 @@ class LocalizedHostingScreenTest {
             roomTitle = "Room ABCD",
             playbackError = "Playback error: Network connection interrupted.",
             queueEmpty = "Queue is empty",
+            unavailableTitle = "Room unavailable",
+            unavailableBody = "This room is no longer available.",
+            newRoom = "New room",
+            replacementNotice = "The old room is gone. Here is a new one.",
         )
     }
 
@@ -58,6 +62,10 @@ class LocalizedHostingScreenTest {
             roomTitle = "\u041a\u043e\u043c\u043d\u0430\u0442\u0430 ABCD",
             playbackError = "\u041e\u0448\u0438\u0431\u043a\u0430 \u0432\u043e\u0441\u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0434\u0435\u043d\u0438\u044f: \u0421\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u0441 \u0441\u0435\u0442\u044c\u044e \u043f\u0440\u0435\u0440\u0432\u0430\u043d\u043e.",
             queueEmpty = "\u041e\u0447\u0435\u0440\u0435\u0434\u044c \u043f\u0443\u0441\u0442\u0430",
+            unavailableTitle = "\u041a\u043e\u043c\u043d\u0430\u0442\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
+            unavailableBody = "\u042d\u0442\u0430 \u043a\u043e\u043c\u043d\u0430\u0442\u0430 \u0431\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430.",
+            newRoom = "\u041d\u043e\u0432\u0430\u044f \u043a\u043e\u043c\u043d\u0430\u0442\u0430",
+            replacementNotice = "\u041f\u0440\u0435\u0436\u043d\u044f\u044f \u043a\u043e\u043c\u043d\u0430\u0442\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430. \u0412\u043e\u0442 \u043d\u043e\u0432\u0430\u044f.",
         )
     }
 
@@ -79,6 +87,7 @@ class LocalizedHostingScreenTest {
         assertEquals("\u041a\u043e\u043c\u043d\u0430\u0442\u0430 ABCD", russian.getString(R.string.room_title, "ABCD"))
         assertEquals("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c\u0441\u044f \u043a \u0441\u0435\u0440\u0432\u0435\u0440\u0443.", russian.getString(R.string.error_server_unreachable))
         assertEquals("\u0422\u0440\u0435\u043a, \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439 \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u043c", russian.getString(R.string.server_selected_track))
+        assertEquals("\u042d\u0442\u0430 \u043a\u043e\u043c\u043d\u0430\u0442\u0430 \u0431\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430.", russian.getString(R.string.sync_room_missing))
     }
 
     @Test
@@ -114,6 +123,10 @@ class LocalizedHostingScreenTest {
         roomTitle: String,
         playbackError: String,
         queueEmpty: String,
+        unavailableTitle: String,
+        unavailableBody: String,
+        newRoom: String,
+        replacementNotice: String,
     ) {
         val context = localizedContext(language)
         val state = mutableStateOf<HostingState>(
@@ -165,6 +178,32 @@ class LocalizedHostingScreenTest {
         composeRule.onNodeWithText(roomTitle).assertExists()
         composeRule.onNodeWithText(playbackError).assertExists()
         composeRule.onNodeWithText(queueEmpty).assertExists()
+
+        composeRule.runOnIdle {
+            state.value = HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Missing("ABCD"),
+                replacementError = UserMessage.SERVER_TIMEOUT,
+            )
+        }
+        composeRule.onNodeWithText(unavailableTitle).assertExists()
+        composeRule.onNodeWithText(unavailableBody).assertExists()
+        composeRule.onNodeWithText(timeout).assertExists()
+        composeRule.onNodeWithText(newRoom).assertIsFocused()
+        composeRule.onNodeWithText(playbackError).assertDoesNotExist()
+
+        composeRule.runOnIdle {
+            state.value = HostingState.Invitation(
+                GuestInvite("WXYZ", "https://guest.example/r/WXYZ"), roomReplacementNotice = true,
+            )
+        }
+        composeRule.onNodeWithText(replacementNotice).assertExists()
+        composeRule.onNodeWithContentDescription(
+            if (language == "en") "QR code for https://guest.example/r/WXYZ"
+            else "QR-\u043a\u043e\u0434 \u0434\u043b\u044f https://guest.example/r/WXYZ",
+        ).assertExists()
+        composeRule.onNodeWithText("https://guest.example/r/WXYZ").assertExists()
+        composeRule.onNodeWithText(enter).assertIsFocused()
     }
 
     private fun localizedContext(language: String): Context {

@@ -155,6 +155,51 @@ return never auto-resumes. API 36 TV instrumentation exercises this Home/return
 boundary and the branch-level start → next → completed path with bundled decodable
 WebM/Opus media, local media controls, seeking, media time, and wall time.
 
+### Missing-room lifecycle (qmix#264)
+
+There is **no host heartbeat**: an open TV SSE connection or displayed QR code
+must not extend `QMIX_UNUSED_ROOM_TTL` (45 minutes by default). Rooms that
+never successfully received a track still expire and release their backend
+slot; in-memory rooms can also disappear on backend restart. The foreground
+Invitation QR is monitored with the same read-only SSE plus authoritative REST
+observer as the live room; neither GET nor SSE refreshes server `LastActivity`.
+A definitive `404` on room REST/SSE (or a foreground-return GET) triggers
+recovery. The invitation observer is cancelled on **Enter room**, background,
+or end; the live observer starts after the invitation worker has joined. On
+foreground return the TV checks the old room once before restarting observation.
+A timeout, network outage, or other inconclusive failure keeps the same room
+and reconnects; it does not trigger room creation.
+
+Remember per host session whether any authoritative room snapshot **ever**
+contained a queued or current track, including one since played, skipped, or
+removed; a later empty snapshot does not reset this flag. If no track was ever
+observed, retire the missing session, create one replacement room, and display
+its new code, guest URL, and QR with a short "room expired; here is a new room"
+notice. Automatic replacement returns to the Invitation screen even if the host
+was in LiveRoom; press **Enter room** again. If a track was observed on either
+screen, do **not** silently replace the lost session: switch to the LiveRoom
+missing-state screen (even if the QR was shown), with "room is no longer
+available" and a focused **New room** action that
+creates a room only when the host selects it. In both cases, the old QR/code
+must no longer be offered as a live invitation; guests with that code retain
+the existing guest-side terminal-event/404 behavior.
+
+On confirmed missing, cancel and join the old GET/SSE/reconnect/refresh work,
+queue commands, player reports, and local playback before activating the new
+session. Ignore callbacks from the old room and never send `DELETE` for a
+missing room; that is local teardown, unlike a successful explicit host close.
+If Home is pressed while the old worker is joining, replacement POST is deferred
+until foreground return. If Home is pressed during an already-started replacement
+POST, creation can finish, but the new Invitation has monitoring suspended and
+checks its code once on return. A 404 before that automatic replacement has had
+a successful fresh room read shows the explicit missing state instead of posting
+another replacement; **New room** starts a user-initiated session. If the app is
+backgrounded with an existing room, reconcile on foreground return, with commands
+gated until the fresh result, then take the same missing-room path if it returns
+`404`. If replacement
+creation fails (including rate or capacity limits), present a recoverable
+error/action rather than automatically looping `POST /rooms`.
+
 ## Coverage
 
 The required gate is at least 95% instruction coverage for all bytecode in the

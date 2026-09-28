@@ -101,6 +101,22 @@ class LiveRoomPresentationTest {
     }
 
     @Test
+    fun missing_room_has_no_primary_action_even_with_a_pending_command_or_replacement_error() {
+        val invite = GuestInvite("ABCD", "https://guest.example/r/ABCD")
+        val missing = HostingState.LiveRoom(
+            invite,
+            RoomSyncState.Missing("ABCD"),
+            commandPending = true,
+            replacementError = UserMessage.SERVER_TIMEOUT,
+        )
+
+        assertFalse(missing.isPrimaryActionEnabled)
+        assertEquals(R.string.sync_room_missing, synchronizationMessageResource(missing.synchronization))
+        assertEquals(R.string.error_server_timeout, missing.replacementError?.resourceId())
+        assertEquals(R.string.error_server_unavailable, UserMessage.SERVER_UNAVAILABLE.resourceId())
+    }
+
+    @Test
     fun repository_updates_are_published_and_stale_null_retains_the_last_safe_room() {
         val repository = RecordingRoomRepository()
         val controller = createController(repository)
@@ -116,6 +132,7 @@ class LiveRoomPresentationTest {
             if (sync?.freshness == Freshness.STALE) staleDelivered.countDown()
         }
         createAndEnter(controller)
+        repository.awaitLiveObservationForTest()
         assertTrue(loadingDelivered.await(5, java.util.concurrent.TimeUnit.SECONDS))
         val room = RoomState("ABCD", null, emptyList())
 
@@ -148,7 +165,13 @@ class LiveRoomPresentationTest {
             if (sync is RoomSyncState.Missing) missingDelivered.countDown()
         }
         createAndEnter(controller)
+        repository.awaitLiveObservationForTest()
 
+        val usedRoom = RoomState("ABCD", null, listOf(
+            QueuedTrack("track-1", "https://example/1", "Title", "Artist", 60, "fixture"),
+        ))
+        repository.publish(active(usedRoom))
+        controller.awaitRoomStateForTest { it.synchronization == active(usedRoom) }
         repository.publish(active(null, connection = LiveConnection.RECONNECTING))
         assertTrue(reconnectDelivered.await(5, java.util.concurrent.TimeUnit.SECONDS))
         repository.publish(RoomSyncState.Missing("ABCD"))
@@ -166,6 +189,7 @@ class LiveRoomPresentationTest {
         val repository = RecordingRoomRepository()
         val controller = createController(repository)
         createAndEnter(controller)
+        repository.awaitLiveObservationForTest()
         val observed = mutableListOf<HostingState>()
         controller.collectStatesForTest(observed::add)
 
@@ -185,6 +209,7 @@ class LiveRoomPresentationTest {
         var commands = 0
         val controller = createController(repository, onStartOrNext = { commands++ })
         createAndEnter(controller)
+        repository.awaitLiveObservationForTest()
         val queued = QueuedTrack("track-1", "https://example/1", "Title", "Artist", 0, "fixture")
         repository.publish(active(RoomState("ABCD", null, listOf(queued))))
 
@@ -234,6 +259,7 @@ class LiveRoomPresentationTest {
         val repository = RecordingRoomRepository()
         val controller = createController(repository)
         createAndEnter(controller)
+        repository.awaitLiveObservationForTest()
         val initial = controller.state
 
         repository.publish(
@@ -274,9 +300,11 @@ class LiveRoomPresentationTest {
 
     @Test
     fun replaced_same_code_session_rejects_late_callback_from_old_repository() {
+        val firstInvitation = RecordingRoomRepository()
         val first = RecordingRoomRepository()
+        val secondInvitation = RecordingRoomRepository()
         val second = RecordingRoomRepository()
-        val repositories = ArrayDeque(listOf(first, second))
+        val repositories = ArrayDeque(listOf(firstInvitation, first, secondInvitation, second))
         val controller = HostSessionController(
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
@@ -288,9 +316,11 @@ class LiveRoomPresentationTest {
         )
 
         createAndEnter(controller)
+        first.awaitObservationForTest()
         controller.endRoom()
         assertTrue(controller.awaitSetupForTest())
         createAndEnter(controller)
+        second.awaitObservationForTest()
         val secondInitialState = controller.state
         first.publish(active(RoomState("ABCD", null, emptyList())))
 
@@ -322,6 +352,7 @@ class LiveRoomPresentationTest {
         }
 
         createAndEnter(controller)
+        repository.awaitLiveObservationForTest()
         controller.collectStatesForTest { state -> if (state is HostingState.LiveRoom) error("observer failure") }
         repository.publish(active(RoomState("ABCD", null, emptyList())))
 
@@ -362,16 +393,29 @@ class LiveRoomPresentationTest {
     ): RoomSyncState.Active = RoomSyncState.Active("ABCD", room, freshness, connection)
 
     private class RecordingRoomRepository : RoomRepository {
-        var closed = false
+        @Volatile var closed = false
+        private val observed = java.util.concurrent.CountDownLatch(1)
+        private val liveObserved = java.util.concurrent.CountDownLatch(2)
         private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
             assertEquals("ABCD", roomCode)
+            closed = false
+            observed.countDown()
+            liveObserved.countDown()
             try {
                 for (state in states) emit(state)
             } finally {
                 closed = true
             }
+        }
+
+        fun awaitObservationForTest() {
+            assertTrue("room collection did not start", observed.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        }
+
+        fun awaitLiveObservationForTest() {
+            assertTrue("live room collection did not start", liveObserved.await(5, java.util.concurrent.TimeUnit.SECONDS))
         }
 
         fun publish(state: RoomSyncState) {

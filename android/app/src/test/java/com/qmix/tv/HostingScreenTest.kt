@@ -595,7 +595,7 @@ class HostingScreenTest {
         val state = mutableStateOf<HostingState.LiveRoom>(
             HostingState.LiveRoom(
                 GuestInvite("ABCD", "https://guest.example/r/ABCD"),
-                RoomSyncState.Missing("ABCD"),
+                RoomSyncState.Active("ABCD", null, Freshness.LOADING, LiveConnection.CONNECTING),
             ),
         )
         composeRule.setContent {
@@ -636,6 +636,96 @@ class HostingScreenTest {
         }
         composeRule.onNodeWithText("Start").assertIsNotEnabled()
         composeRule.onNodeWithText("Command pending…").assertExists()
+    }
+
+    @Test
+    fun missing_room_hides_stale_controls_and_invitation_and_focuses_new_room() {
+        val queued = QueuedTrack("old-queue", "https://example/old", "Old queued title", "Artist", 65, "fixture")
+        val state = mutableStateOf(
+            HostingState.LiveRoom(
+                GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                RoomSyncState.Active(
+                    "ABCD",
+                    RoomState("ABCD", CurrentTrack("old", 0, "playing", "Old playing title", "Artist"), listOf(queued)),
+                    Freshness.FRESH,
+                    LiveConnection.CONNECTED,
+                ),
+                playback = LocalPlaybackState("old", LocalPlaybackStatus.PLAYING, isPlaying = true),
+            ),
+        )
+        var replacements = 0
+        val handler = object : LiveRoomHandler {
+            override fun onStartOrNext() = error("stale next")
+            override fun onInvite() = error("stale invite")
+            override fun onNewRoom() { replacements++ }
+            override fun onBack() = LiveRoomBackResult.IGNORED
+        }
+        composeRule.setContent {
+            HostingScreen(state.value, { _, _ -> }, {}, {}, liveRoomHandler = handler)
+        }
+        composeRule.onNodeWithTag("room-next").assertIsFocused()
+        composeRule.runOnIdle {
+            state.value = state.value.copy(
+                synchronization = RoomSyncState.Missing("ABCD"),
+                invitationVisible = true,
+                commandPending = true,
+                replacementError = UserMessage.SERVER_UNAVAILABLE,
+            )
+        }
+
+        composeRule.onNodeWithText("Room unavailable").assertExists()
+        composeRule.onNodeWithText("This room is no longer available.").assertExists()
+        composeRule.onNodeWithText("The server is temporarily unavailable.").assertExists()
+        composeRule.onNodeWithTag("room-next").assertDoesNotExist()
+        composeRule.onNodeWithTag("room-invite").assertDoesNotExist()
+        composeRule.onNodeWithTag("playback-play-pause").assertDoesNotExist()
+        composeRule.onNodeWithTag("queue-list").assertDoesNotExist()
+        composeRule.onNodeWithText("Old playing title").assertDoesNotExist()
+        composeRule.onNodeWithText("Old queued title").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertDoesNotExist()
+        composeRule.onNodeWithText("Local playback: Playing").assertDoesNotExist()
+        composeRule.onNodeWithText("Command pending…").assertDoesNotExist()
+        composeRule.onNodeWithText("New room").assertIsFocused().assertIsEnabled()
+            .performKeyInput { pressKey(Key.Enter) }
+        composeRule.runOnIdle { assertEquals(1, replacements) }
+    }
+
+    @Test
+    fun missing_room_without_replacement_error_still_offers_new_room() {
+        composeRule.setContent {
+            HostingScreen(
+                HostingState.LiveRoom(GuestInvite("ABCD", "https://guest.example/r/ABCD"), RoomSyncState.Missing("ABCD")),
+                { _, _ -> }, {}, {},
+            )
+        }
+        composeRule.onNodeWithText("This room is no longer available.").assertExists()
+        composeRule.onNodeWithText("New room").assertIsFocused()
+        composeRule.onNodeWithText("The server is temporarily unavailable.").assertDoesNotExist()
+    }
+
+    @Test
+    fun replacement_invitation_shows_notice_and_only_new_room_credentials() {
+        val state = mutableStateOf<HostingState>(
+            HostingState.LiveRoom(GuestInvite("ABCD", "https://guest.example/r/ABCD"), RoomSyncState.Missing("ABCD")),
+        )
+        var entries = 0
+        composeRule.setContent {
+            HostingScreen(state.value, { _, _ -> }, {}, { entries++ })
+        }
+        composeRule.runOnIdle {
+            state.value = HostingState.Invitation(
+                GuestInvite("WXYZ", "https://guest.example/r/WXYZ"), roomReplacementNotice = true,
+            )
+        }
+        composeRule.onNodeWithText("The old room is gone. Here is a new one.")
+            .assertExists()
+        composeRule.onNodeWithText("Room code: WXYZ").assertExists()
+        composeRule.onNodeWithText("https://guest.example/r/WXYZ").assertExists()
+        composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/WXYZ").assertExists()
+        composeRule.onNodeWithText("Room code: ABCD").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertDoesNotExist()
+        composeRule.onNodeWithText("Enter room").assertIsFocused().performKeyInput { pressKey(Key.Enter) }
+        composeRule.runOnIdle { assertEquals(1, entries) }
     }
 
     @Test
@@ -819,7 +909,8 @@ class HostingScreenTest {
         composeRule.onNodeWithText("Could not refresh the room.").assertExists()
 
         composeRule.runOnIdle { synchronization.value = RoomSyncState.Missing("ABCD") }
-        composeRule.onNodeWithText("Room not found.").assertExists()
+        composeRule.onNodeWithText("This room is no longer available.").assertExists()
+        composeRule.onNodeWithText("New room").assertIsFocused()
     }
 
     @Test

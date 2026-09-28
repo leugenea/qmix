@@ -41,6 +41,18 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 
 @Composable
+internal fun MissingAwareLiveRoomScreen(
+    state: HostingState.LiveRoom,
+    handler: LiveRoomHandler,
+    onExitLiveRoom: () -> Unit,
+) {
+    if (state.synchronization is RoomSyncState.Missing) {
+        BackHandler { handleLiveRoomBack(handler, onExitLiveRoom) }
+        MissingRoomScreen(state.replacementError, handler::onNewRoom)
+    } else LiveRoomScreen(state, handler, onExitLiveRoom)
+}
+
+@Composable
 internal fun LiveRoomScreen(
     state: HostingState.LiveRoom,
     handler: LiveRoomHandler,
@@ -315,6 +327,29 @@ internal fun LiveRoomScreen(
                 }
             }
         }
+    }
+}
+
+/** A terminal room must not display its old invite, queue, or playback as actionable data. */
+@Composable
+private fun MissingRoomScreen(replacementError: UserMessage?, onNewRoom: () -> Unit) {
+    val newRoomFocus = remember { FocusRequester() }
+    LaunchedEffect(newRoomFocus) { newRoomFocus.requestFocus() }
+    Column(
+        Modifier.fillMaxSize().background(Color(0xFF101218)).padding(48.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(stringResource(R.string.room_unavailable_title), fontSize = 42.sp)
+        Text(stringResource(R.string.sync_room_missing), modifier = Modifier.padding(top = 16.dp))
+        replacementError?.let { error ->
+            Text(stringResource(error.resourceId()), color = Color(0xFFFFDDB3), modifier = Modifier.padding(top = 12.dp))
+        }
+        FocusedButton(
+            text = stringResource(R.string.new_room),
+            enabled = true,
+            focusRequester = newRoomFocus,
+            onClick = onNewRoom,
+        )
     }
 }
 

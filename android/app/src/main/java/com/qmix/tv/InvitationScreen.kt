@@ -30,6 +30,7 @@ internal fun InvitationScreen(
     invite: GuestInvite,
     onAction: () -> Unit,
     @StringRes actionText: Int = R.string.enter_room,
+    roomReplacementNotice: Boolean = false,
 ) {
     val actionFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { actionFocus.requestFocus() }
@@ -49,6 +50,13 @@ internal fun InvitationScreen(
         )
         Spacer(Modifier.width(48.dp))
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (roomReplacementNotice) {
+                Text(
+                    stringResource(R.string.replacement_invitation_notice),
+                    fontSize = 20.sp,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+            }
             Text(stringResource(R.string.join_this_room), fontSize = 32.sp)
             Text(
                 stringResource(R.string.invitation_room_code, invite.code),
