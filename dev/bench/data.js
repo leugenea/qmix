@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790541498828,
+  "lastUpdate": 1790589953431,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -951,6 +951,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go CCN > 10",
             "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 56.095050646861665,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 18,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "17f40ed4a99018b8e9e68d7b364416995d130ad3",
+          "message": "feat: let hosts close rooms with DELETE /rooms/{code} (#258) (#261)",
+          "timestamp": "2026-09-28T13:05:17+03:00",
+          "tree_id": "8c4c6e8cb7eaed5550f622ac29607c43d93fa4cf",
+          "url": "https://github.com/leugenea/qmix/commit/17f40ed4a99018b8e9e68d7b364416995d130ad3"
+        },
+        "date": 1790589952023,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 28.359826945652483,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 12,
             "unit": "functions"
           },
           {
