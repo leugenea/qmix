@@ -71,6 +71,8 @@ class RoomApiClient(
     private val logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.ROOM_API_CREATION),
 ) {
     private companion object {
+        const val ROOMS_SEGMENT = "rooms"
+        const val HOST_TOKEN_HEADER = "X-Host-Token"
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 
@@ -84,7 +86,7 @@ class RoomApiClient(
 
     suspend fun createRoom(): RoomCredentials {
         val request = Request.Builder()
-            .url(backend.newBuilder().addPathSegment("rooms").build())
+            .url(backend.newBuilder().addPathSegment(ROOMS_SEGMENT).build())
             .post(ByteArray(0).toRequestBody(null))
             .build()
         return try {
@@ -113,6 +115,16 @@ class RoomApiClient(
         if (failure.userMessage == UserMessage.ROOM_NOT_FOUND) RoomFetchResult.Missing else RoomFetchResult.Failure
     }
 
+    /** qmix#259: the host-only close has no response body and cannot be replayed. */
+    suspend fun deleteRoom(code: String, hostToken: String) {
+        val request = Request.Builder()
+            .url(backend.newBuilder().addPathSegment(ROOMS_SEGMENT).addPathSegment(code).build())
+            .header(HOST_TOKEN_HEADER, hostToken)
+            .delete()
+            .build()
+        execute(request, 204) { Unit }
+    }
+
     suspend fun reportPlayer(
         roomCode: String,
         hostToken: String,
@@ -127,12 +139,12 @@ class RoomApiClient(
         val request = Request.Builder()
             .url(
                 backend.newBuilder()
-                    .addPathSegment("rooms")
+                    .addPathSegment(ROOMS_SEGMENT)
                     .addPathSegment(roomCode)
                     .addPathSegment("player")
                     .build(),
             )
-            .header("X-Host-Token", hostToken)
+            .header(HOST_TOKEN_HEADER, hostToken)
             .patch(body)
             .build()
         httpClient.newCall(request).awaitDecoded { response ->
@@ -152,7 +164,7 @@ class RoomApiClient(
     }
 
     private fun roomRequest(code: String): Request = Request.Builder().url(
-        backend.newBuilder().addPathSegment("rooms").addPathSegment(code).build(),
+        backend.newBuilder().addPathSegment(ROOMS_SEGMENT).addPathSegment(code).build(),
     ).get().build()
 
     private fun decodeRoom(body: String): RoomState {
@@ -190,13 +202,13 @@ class RoomApiClient(
 
     suspend fun skip(code: String, hostToken: String): CurrentTrack {
         val url = backend.newBuilder()
-            .addPathSegment("rooms")
+            .addPathSegment(ROOMS_SEGMENT)
             .addPathSegment(code)
             .addPathSegment("skip")
             .build()
         val request = Request.Builder()
             .url(url)
-            .header("X-Host-Token", hostToken)
+            .header(HOST_TOKEN_HEADER, hostToken)
             .post(ByteArray(0).toRequestBody(null))
             .build()
         return execute(request, 200) { body ->

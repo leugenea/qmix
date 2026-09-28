@@ -20,8 +20,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -35,6 +37,19 @@ import org.robolectric.annotation.Config
 class HostSessionReviewFindingsTest {
     private val room = RoomState("ABCD", null,
         listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+
+    private fun routeTwoCreations(server: MockWebServer) {
+        val creations = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.method == "DELETE" && request.path == "/rooms/ABCD" ->
+                    MockResponse().setResponseCode(204)
+                request.method == "POST" && request.path == "/rooms" &&
+                    creations.incrementAndGet() <= 2 -> roomResponse()
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+    }
 
     @Test fun default_mutation_context_serializes_concurrent_public_admission_and_end() {
         val server = MockWebServer().apply { start(); enqueue(roomResponse()) }
@@ -333,7 +348,8 @@ class HostSessionReviewFindingsTest {
     }
 
     @Test fun setup_collector_cannot_admit_reentrant_session_before_old_cleanup() {
-        val server = MockWebServer().apply { start(); enqueue(roomResponse()); enqueue(roomResponse()) }
+        val server = MockWebServer().apply { start() }
+        routeTwoCreations(server)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val invitationStarted = CountDownLatch(1)
         val collectionStarted = CountDownLatch(1)
@@ -405,7 +421,10 @@ class HostSessionReviewFindingsTest {
             assertTrue(cleanupCompleted.get())
             assertTrue(controller.state is HostingState.Pending || controller.state is HostingState.Invitation)
             controller.awaitCreatedForTest()
-            assertEquals(2, server.requestCount)
+            val requests = (1..3).map { checkNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+            assertEquals(2, requests.count { it.method == "POST" && it.path == "/rooms" })
+            assertEquals(1, requests.count { it.method == "DELETE" && it.path == "/rooms/ABCD" })
+            assertEquals(3, server.requestCount)
         } finally {
             observer.close()
             allowCleanup.countDown()
@@ -609,7 +628,8 @@ class HostSessionReviewFindingsTest {
     }
 
     @Test fun detached_playback_callback_cannot_modify_replacement_session() {
-        val server = MockWebServer().apply { start(); enqueue(roomResponse()); enqueue(roomResponse()) }
+        val server = MockWebServer().apply { start() }
+        routeTwoCreations(server)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val mutationThread = AtomicReference<Thread>()
         val dispatcher = Executors.newSingleThreadExecutor { task ->
@@ -645,6 +665,9 @@ class HostSessionReviewFindingsTest {
             assertTrue(controller.awaitSetupForTest())
             assertTrue(controller.createRoom())
             controller.awaitCreatedForTest()
+            val requests = (1..3).map { checkNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+            assertEquals(2, requests.count { it.method == "POST" && it.path == "/rooms" })
+            assertEquals(1, requests.count { it.method == "DELETE" && it.path == "/rooms/ABCD" })
             controller.enterRoom()
             assertEquals(2, observers.size)
             val replacement = controller.state

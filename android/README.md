@@ -143,7 +143,22 @@ for a known seekable timeline and clamp through the playback engine. Android
 media Play, Pause, and Play/Pause keys route to the same coordinator without
 intercepting D-pad Left/Right globally. Invite remains a reversible presentation
 state, and Back closes Invite before ending the host session and returning an
-explicit `EXIT_ACTIVITY` result to the UI.
+explicit `EXIT_ACTIVITY` result to the UI. On the initial Invitation, Back
+explicitly ends the room before finishing the Activity; `onDestroy` itself
+only detaches locally and never initiates DELETE.
+
+Back from Invitation or LiveRoom explicitly ends the room (qmix#259),
+closing the backend with one `DELETE /rooms/{code}` and `X-Host-Token` after
+local teardown begins. The request runs on the application-owned IO scope,
+not the cancelled room session; Setup does not await it. It waits for the
+cancelled session's ordinary reports and any final PAUSED player report
+(including one already queued on Home) before DELETE, avoiding a report into
+a closed room. If that report or a cancelled predecessor cannot finish within
+the bounded join, DELETE is skipped rather than raced; DELETE itself has a
+three-second deadline. Errors are logged without credentials and ignored.
+Mere Home/onStop, process/application teardown, **New room** for an already
+missing room, and automatic replacement after a definitive 404 do not send
+DELETE. An expired room or a failed close can remain until server TTL.
 
 Playback is foreground-only. `MainActivity.onStop` immediately pauses local audio,
 invalidates pending queue/retry work, and closes the command gate. Returning starts

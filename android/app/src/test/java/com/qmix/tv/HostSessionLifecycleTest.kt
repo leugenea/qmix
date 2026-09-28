@@ -4,9 +4,16 @@ import android.view.KeyEvent
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertEquals
@@ -16,7 +23,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -101,6 +110,30 @@ class HostSessionLifecycleTest {
     @Test
     fun back_from_the_live_room_finishes_the_activity_and_ends_the_host_session() {
         val server = MockWebServer()
+        val creations = LinkedBlockingQueue<RecordedRequest>()
+        val deletions = LinkedBlockingQueue<RecordedRequest>()
+        val deleteCount = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.method to request.path) {
+                "POST" to "/rooms" -> {
+                    creations.put(request)
+                    MockResponse().setResponseCode(201)
+                        .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""")
+                }
+                "GET" to "/rooms/ABCD" -> MockResponse().setResponseCode(200)
+                    .setBody("""{"code":"ABCD","current":null,"queue":[]}""")
+                "GET" to "/rooms/ABCD/events" -> MockResponse().setResponseCode(200)
+                    .setHeader("Content-Type", "text/event-stream")
+                    .setBodyDelay(10, TimeUnit.SECONDS)
+                    .setBody(":\n\n")
+                "DELETE" to "/rooms/ABCD" -> {
+                    deleteCount.incrementAndGet()
+                    deletions.put(request)
+                    MockResponse().setResponseCode(204)
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
         server.start()
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         lateinit var controller: HostSessionController
@@ -113,10 +146,6 @@ class HostSessionLifecycleTest {
                 observation = controller.collectStatesForTest { state ->
                     if (state is HostingState.Invitation) invitationReady.countDown()
                 }
-                server.enqueue(
-                    MockResponse().setResponseCode(201)
-                        .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
-                )
                 assertTrue(controller.createRoom())
                 if (controller.state is HostingState.HttpWarning) {
                     assertTrue(controller.confirmHttpWarning())
@@ -145,6 +174,21 @@ class HostSessionLifecycleTest {
                 Thread.yield()
             }
             assertTrue(controller.state is HostingState.Setup)
+            val creation = checkNotNull(creations.poll(5, TimeUnit.SECONDS))
+            val deletion = checkNotNull(deletions.poll(5, TimeUnit.SECONDS))
+            assertEquals("POST", creation.method)
+            assertEquals("/rooms", creation.path)
+            assertEquals("DELETE", deletion.method)
+            assertEquals("/rooms/ABCD", deletion.path)
+            assertEquals("host-secret", deletion.getHeader("X-Host-Token"))
+            // The application owns the close job; count only after that scope has settled.
+            val closeScope = QMixApplication::class.java.getDeclaredField("finalNetworkScope")
+                .apply { isAccessible = true }
+                .get(ApplicationProvider.getApplicationContext<QMixApplication>()) as CoroutineScope
+            runBlocking {
+                withTimeout(5_000) { closeScope.coroutineContext[Job]!!.children.toList().joinAll() }
+            }
+            assertEquals(1, deleteCount.get())
         } finally {
             observation?.close()
             scenario.close()

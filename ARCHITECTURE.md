@@ -539,16 +539,25 @@ or 24-hour non-empty lifetime.
   already received by the server; this last report is best effort. An already
   acknowledged pause at the same position is not duplicated; an unacknowledged
   explicit pause is retried once because ordinary reporting is cancelled. Completed,
-  error, and idle selections do not send a final pause. Room end detaches the
-  host session but does not delete the backend room, so the final report remains
-  meaningful after session cancellation; a concurrently skipped/expired room
-  rejects it without a retry. GET/SSE echoes for the same
+  error, and idle selections do not send a final pause. On explicit host end of
+  an existing Invitation or LiveRoom (qmix#259), the TV sends one host-authenticated
+  `DELETE /rooms/{code}` on the application-owned IO scope. It joins the
+  cancelled room session's ordinary reports and any final PAUSED report from
+  coordinator close or an earlier foreground loss before attempting DELETE.
+  The join is best effort and bounded to 2.5 seconds: if a session report,
+  final PAUSED, or its cancelled predecessor is still in flight, DELETE is
+  skipped and the room is left to server TTL rather than risking a late
+  report into a closed room. DELETE has its own
+  three-second deadline; failure is logged by safe category only and never
+  delays local teardown or the Setup transition. No DELETE is sent for
+  foreground loss alone, process/application teardown, an already-missing
+  room's **New room** action, or automatic replacement after a definitive
+  `404`. A concurrently expired room may reject DELETE; there is no retry.
+  GET/SSE echoes for the same
   `track_id` update presentation only and never command Media3. During network
   loss the server deliberately retains the last accepted state and position;
   local playback continues and marks reporting unsynchronized until a later
-  accepted report. The existing Android TV room-end flow detaches the local
-  session without sending DELETE; host-side automatic close is separate qmix#259
-  and is not part of qmix#258.
+  accepted report.
 - State loss on backend restart is acceptable because MVP rooms are ephemeral.
 
 ## 9. Deployment

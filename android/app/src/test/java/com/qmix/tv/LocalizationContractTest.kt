@@ -296,6 +296,7 @@ class LocalizationContractTest {
                 "playback/lifecycle" to 1,
                 "session-state" to 1,
                 "create-room" to 1,
+                "delete-room" to 1,
                 "observer-notification" to 1,
                 "sse-connection" to 1,
                 "reconnect" to 1,
@@ -337,7 +338,7 @@ class LocalizationContractTest {
             addInventory(
                 "RoomApiClient.kt",
                 "identifiers and API fields",
-                "rooms" to 4,
+                "rooms" to 1,
                 "code" to 2,
                 "host_token" to 1,
                 "url" to 2,
@@ -353,7 +354,7 @@ class LocalizationContractTest {
                 "resolved_by" to 1,
                 "skip" to 1,
                 "player" to 1,
-                "X-Host-Token" to 2,
+                "X-Host-Token" to 1,
             )
             addInventory(
                 "RoomApiClient.kt",

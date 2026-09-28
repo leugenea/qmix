@@ -52,6 +52,8 @@ class PlayerStatePublisher(
     private var pending: PlayerReport? = null
     private var reportJob: Job? = null
     private var finalPauseJob: Job? = null
+    // Retain the actual cancelled jobs: a final PAUSED may time out before they settle.
+    @Volatile private var finalPausePredecessors: Set<Job> = emptySet()
     private var periodicJob: Job? = null
     private var playingProgressEnabled = false
     private var synchronized = true
@@ -152,6 +154,9 @@ class PlayerStatePublisher(
         ) return@run
         val previous = reportJob
         val priorPause = finalPauseJob
+        if (previous != null) {
+            finalPausePredecessors = finalPausePredecessors.filterNot(Job::isCompleted).toSet() + previous
+        }
         setForeground(false)
         val job = finalReportScope.launch(start = CoroutineStart.LAZY) {
             try {
@@ -167,6 +172,12 @@ class PlayerStatePublisher(
         finalPauseJob = job
         job.start()
     }
+
+    /** The process-owned final PAUSED Job survives the session's cancellation. */
+    fun finalPauseCompletion(): Job? = mutationContext.run { finalPauseJob }
+
+    /** A timed-out final pause must not authorize DELETE over a still-running old report. */
+    fun canCloseRoomAfterFinalPause(): Boolean = finalPausePredecessors.all(Job::isCompleted)
 
     private fun ensurePeriodic(expectedSelection: Selection) {
         if (periodicJob?.isActive == true) return

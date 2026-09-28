@@ -857,9 +857,38 @@ class PlayerStatePublisherTest {
         assertEquals(listOf(PlayerReportState.PLAYING), reporter.states())
         advanceTimeBy(2_000)
         runCurrent()
+        assertTrue("final PAUSED deadline completed", publisher.finalPauseCompletion()?.isCompleted == true)
+        assertFalse("a cancelled prior report is still in flight", publisher.canCloseRoomAfterFinalPause())
         reporter.complete(0, PlayerReportResult.ACCEPTED)
         runCurrent()
+        assertTrue("settled predecessor permits a later explicit end", publisher.canCloseRoomAfterFinalPause())
         assertEquals(listOf(PlayerReportState.PLAYING), reporter.states())
+        publisher.close()
+    }
+
+    @Test
+    fun completed_final_pause_predecessors_are_pruned_across_foreground_cycles() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        val predecessors = PlayerStatePublisher::class.java.getDeclaredField("finalPausePredecessors")
+            .apply { isAccessible = true }
+        publisher.selectTrack("one")
+
+        repeat(12) { cycle ->
+            publisher.update(PlayerReport("one", PlayerReportState.PLAYING, cycle), immediate = true)
+            runCurrent()
+            publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, cycle))
+            runCurrent()
+            assertTrue(reporter.calls[cycle * 2].canceled)
+            reporter.complete(cycle * 2 + 1, PlayerReportResult.ACCEPTED)
+            runCurrent()
+            assertTrue(publisher.canCloseRoomAfterFinalPause())
+            assertEquals("only the most recent predecessor is retained", 1,
+                (predecessors.get(publisher) as Set<*>).size)
+            publisher.setForeground(true)
+            publisher.reconciled("one")
+        }
+        assertEquals(24, reporter.calls.size)
         publisher.close()
     }
 

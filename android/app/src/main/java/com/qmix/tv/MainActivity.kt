@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
                 onSettingsChanged = controller::updateSettings,
                 onCreate = { controller.createRoom() },
                 onEnterRoom = controller::enterRoom,
+                onEndInvitation = { controller.endRoom(); finish() },
                 onConfirmHttpWarning = { controller.confirmHttpWarning() },
                 onCancelHttpWarning = controller::cancelHttpWarning,
                 liveRoomHandler = controller,
@@ -59,7 +60,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         if (::controller.isInitialized && shouldEndHostSession(isFinishing, isChangingConfigurations)) {
-            controller.endRoom()
+            controller.abandonRoom()
         }
         super.onDestroy()
     }

@@ -99,6 +99,37 @@ class RoomApiClientTest {
         assertEquals(0L, request.bodySize)
     }
 
+    /** qmix#259: closing is host-only, bodyless, and never follows a redirect. */
+    @Test
+    fun deleteRoom_sends_host_token_once_and_accepts_only_204() {
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        runBlocking { api.deleteRoom("AB CD", "host-secret") }
+
+        val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("DELETE", request.method)
+        assertEquals("/rooms/AB%20CD", request.path)
+        assertEquals("host-secret", request.headers["X-Host-Token"])
+        assertEquals(0L, request.bodySize)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun deleteRoom_classifies_missing_forbidden_and_server_errors_without_retry() {
+        listOf(
+            404 to UserMessage.ROOM_NOT_FOUND,
+            403 to UserMessage.HOST_ACCESS_DENIED,
+            503 to UserMessage.SERVER_UNAVAILABLE,
+        ).forEach { (status, message) ->
+            server.enqueue(MockResponse().setResponseCode(status))
+            val error = assertThrows(RoomApiException::class.java) {
+                runBlocking { api.deleteRoom("ABCD", "host-secret") }
+            }
+            assertEquals(message, error.userMessage)
+        }
+        assertEquals(3, server.requestCount)
+    }
+
     @Test
     fun reportPlayer_patches_exact_bounded_schema_with_host_token() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
