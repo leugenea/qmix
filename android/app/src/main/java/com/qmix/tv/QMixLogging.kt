@@ -28,6 +28,7 @@ enum class QMixLogComponent(val label: String) {
 enum class QMixLogOperation(val label: String) {
     SESSION_STATE("session-state"),
     CREATE_ROOM("create-room"),
+    DELETE_ROOM("delete-room"),
     OBSERVER_NOTIFICATION("observer-notification"),
     SSE_CONNECTION("sse-connection"),
     RECONNECT("reconnect"),

@@ -24,6 +24,7 @@ internal fun currentPlaybackStreamUrl(backendUrl: String, roomCode: String): Str
 class QMixApplication : Application() {
     // Process-owned parent for #178, #180, #181, and #182; session coordinators own child Jobs.
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val finalNetworkScope = CoroutineScope(applicationScope.coroutineContext + Dispatchers.IO)
     private val queueMutationContext = QueueMutationContext(Dispatchers.Main.immediate) {
         Looper.myLooper() === Looper.getMainLooper()
     }
@@ -70,6 +71,7 @@ class QMixApplication : Application() {
                 )
             },
             roomCollectionScope = applicationScope,
+            roomCloseScope = finalNetworkScope,
             roomCollectionContext = Dispatchers.IO,
             foregroundReconcilerFactory = { backendUrl ->
                 RoomApiClient(
@@ -105,7 +107,7 @@ class QMixApplication : Application() {
                             reportPlayer = api::reportPlayer,
                             parentScope = sessionScope,
                             mutationContext = queueMutationContext,
-                            finalReportScope = CoroutineScope(applicationScope.coroutineContext + Dispatchers.IO),
+                            finalReportScope = finalNetworkScope,
                             listener = listener,
                         ) },
                     )

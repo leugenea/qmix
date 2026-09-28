@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 
 sealed interface HostingState {
@@ -71,6 +72,10 @@ typealias PlaybackCoordinatorFactory = (
     sessionScope: CoroutineScope,
 ) -> AuthoritativePlaybackCoordinator
 
+fun interface RoomCloseCommand {
+    suspend fun close(roomCode: String, hostToken: String)
+}
+
 interface LiveRoomHandler {
     fun onStartOrNext()
     fun onPlayPause() = Unit
@@ -116,8 +121,13 @@ class HostSessionController(
     private val primaryActionHandler: () -> Unit = {},
     private val roomApiLogger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.ROOM_API_CREATION),
     private val foregroundRecoveryContext: CoroutineContext = roomCollectionContext,
+    roomCloseScope: CoroutineScope? = null,
+    private val roomCloseCommandFactory: (String) -> RoomCloseCommand = { backend ->
+        RoomCloseCommand(RoomApiClient(httpClient, backend, roomApiLogger)::deleteRoom)
+    },
 ) : LiveRoomHandler {
     private val ownerScope = roomCollectionScope ?: CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val closeScope = roomCloseScope ?: CoroutineScope(ownerScope.coroutineContext + Dispatchers.IO)
     private val initialSettings = settingsPersistence.load()
     private var setupState = HostingState.Setup(initialSettings.backendUrl, initialSettings.guestOrigin)
     private val mutableStates = MutableStateFlow<HostingState>(setupState)
@@ -695,7 +705,7 @@ class HostSessionController(
         if (endingRoom) return@run
         val current = state as? HostingState.LiveRoom ?: return@run
         if (current.synchronization !is RoomSyncState.Missing) return@run
-        endRoomOnMutationContext(current.invite)
+        endRoomOnMutationContext(current.invite, suppressBackendClose = true)
     }
     override fun onBack(): LiveRoomBackResult = queueMutationContext.run {
         if (endingRoom) return@run LiveRoomBackResult.EXIT_ACTIVITY
@@ -710,11 +720,17 @@ class HostSessionController(
     }
 
     fun endRoom(): Unit = queueMutationContext.run { endRoomOnMutationContext() }
+    /** Activity destruction is not an explicit host end (for example, task removal). */
+    fun abandonRoom(): Unit = queueMutationContext.run {
+        endRoomOnMutationContext(suppressBackendClose = true)
+    }
 
     private fun endRoomOnMutationContext(
         replacementInvite: GuestInvite? = null, automaticReplacement: Boolean = false,
+        suppressBackendClose: Boolean = false,
     ) {
         if (endingRoom) return
+        val missing = suppressBackendClose || (state as? HostingState.LiveRoom)?.synchronization is RoomSyncState.Missing
         endingRoom = true
         deferredReplacement = null
         val detached = session
@@ -723,6 +739,10 @@ class HostSessionController(
         detached?.job?.cancel()
         runCatching { detached?.queue?.close() }
         runCatching { detached?.playback?.close() }
+        // #259: only an explicit end of an existing Invitation/LiveRoom closes the backend.
+        // Joining the process-owned final PAUSED Job precedes DELETE; the Setup finalizer
+        // below never waits for either network operation.
+        if (!automaticReplacement && !missing) scheduleBackendClose(detached)
         // Never wait on a child in its reducer or publication callback. This sibling finalizer
         // waits for the entire detached tree before admitting a replacement creation.
         ownerScope.launch(Dispatchers.IO) {
@@ -736,6 +756,39 @@ class HostSessionController(
                         replacementInvite, automaticReplacement,
                     ) else deferredReplacement = replacementInvite to automaticReplacement
                 }
+            }
+        }
+    }
+
+    private fun scheduleBackendClose(detached: HostSession?) {
+        val credentials = detached?.credentials ?: return
+        val backend = detached.backendUrl ?: return
+        closeBackendRoom(backend, credentials, detached.job, detached.playback)
+    }
+
+    private fun closeBackendRoom(
+        backend: String, credentials: RoomCredentials, sessionJob: Job,
+        playback: AuthoritativePlaybackCoordinator?,
+    ) {
+        val finalPause = playback?.finalPauseCompletion()
+        closeScope.launch(Dispatchers.IO) {
+            try {
+                // Cancelled session reports and any process-owned final PAUSED must settle
+                // before DELETE. If either ignores cancellation, leave the room to TTL.
+                withTimeout(2_500L) {
+                    sessionJob.join()
+                    finalPause?.join()
+                }
+                if (playback?.canCloseRoomAfterFinalPause() == false) {
+                    roomApiLogger.warn(QMixLogOperation.DELETE_ROOM, QMixLogCause.NETWORK)
+                    return@launch
+                }
+                withTimeout(3_000L) {
+                    roomCloseCommandFactory(backend).close(credentials.code, credentials.hostToken)
+                }
+            } catch (failure: Exception) {
+                roomApiLogger.warn(QMixLogOperation.DELETE_ROOM,
+                    if (failure is RoomApiException) failure.logCause else QMixLogCause.NETWORK)
             }
         }
     }

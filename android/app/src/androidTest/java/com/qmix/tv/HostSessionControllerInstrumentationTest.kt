@@ -21,8 +21,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -50,6 +52,23 @@ class HostSessionControllerInstrumentationTest {
             roomScope.cancel()
         } finally {
             try { mutationLane.close() } finally { server.shutdown() }
+        }
+    }
+
+    private fun routeCreations(vararg tokens: String) {
+        val creations = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.method == "DELETE" && request.path == "/rooms/ABCD" ->
+                    MockResponse().setResponseCode(204)
+                request.method == "POST" && request.path == "/rooms" -> {
+                    val token = tokens.getOrNull(creations.getAndIncrement())
+                    if (token == null) MockResponse().setResponseCode(404)
+                    else MockResponse().setResponseCode(201)
+                        .setBody("""{"code":"ABCD","host_token":"$token","url":"/r/ABCD"}""")
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
         }
     }
 
@@ -326,14 +345,7 @@ class HostSessionControllerInstrumentationTest {
 
     @Test
     fun stale_room_updates_retain_data_and_session_generation_rejects_late_updates() {
-        server.enqueue(
-            MockResponse().setResponseCode(201)
-                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
-        )
-        server.enqueue(
-            MockResponse().setResponseCode(201)
-                .setBody("""{"code":"ABCD","host_token":"replacement-secret","url":"/r/ABCD"}"""),
-        )
+        routeCreations("host-secret", "replacement-secret")
         val firstInvitationRepository = RecordingRoomRepository()
         val firstRepository = RecordingRoomRepository()
         val secondInvitationRepository = RecordingRoomRepository()
@@ -383,6 +395,9 @@ class HostSessionControllerInstrumentationTest {
         controller.awaitSetupForTest()
         assertTrue(controller.createRoom())
         controller.awaitCreatedForTest()
+        val requests = (1..3).map { checkNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+        assertEquals(2, requests.count { it.method == "POST" && it.path == "/rooms" })
+        assertEquals(1, requests.count { it.method == "DELETE" && it.path == "/rooms/ABCD" })
         secondInvitationRepository.awaitObservationForTest()
         controller.enterRoom()
         secondRepository.awaitObservationForTest()
@@ -814,10 +829,7 @@ class HostSessionControllerInstrumentationTest {
 
     @Test
     fun ending_session_inside_coordinator_factories_discards_handles_before_collection_starts() {
-        repeat(2) {
-            server.enqueue(MockResponse().setResponseCode(201)
-                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
-        }
+        routeCreations("host-secret", "host-secret")
         val repository = RecordingRoomRepository()
         var queueConstructions = 0
         var playbackConstructions = 0
@@ -879,6 +891,9 @@ class HostSessionControllerInstrumentationTest {
         assertEquals(2, queueConstructions)
         assertEquals(1, playbackConstructions)
         assertEquals(1, playbackPauses)
+        val requests = (1..4).map { checkNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+        assertEquals(2, requests.count { it.method == "POST" && it.path == "/rooms" })
+        assertEquals(2, requests.count { it.method == "DELETE" && it.path == "/rooms/ABCD" })
     }
 
     private class QueuedCoroutineDispatcher : kotlinx.coroutines.CoroutineDispatcher() {

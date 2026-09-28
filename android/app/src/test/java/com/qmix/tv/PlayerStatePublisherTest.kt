@@ -857,8 +857,11 @@ class PlayerStatePublisherTest {
         assertEquals(listOf(PlayerReportState.PLAYING), reporter.states())
         advanceTimeBy(2_000)
         runCurrent()
+        assertTrue("final PAUSED deadline completed", publisher.finalPauseCompletion()?.isCompleted == true)
+        assertFalse("a cancelled prior report is still in flight", publisher.canCloseRoomAfterFinalPause())
         reporter.complete(0, PlayerReportResult.ACCEPTED)
         runCurrent()
+        assertTrue("settled predecessor permits a later explicit end", publisher.canCloseRoomAfterFinalPause())
         assertEquals(listOf(PlayerReportState.PLAYING), reporter.states())
         publisher.close()
     }

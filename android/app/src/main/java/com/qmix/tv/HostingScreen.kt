@@ -1,5 +1,6 @@
 package com.qmix.tv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.tv.material3.MaterialTheme
 
@@ -9,6 +10,7 @@ internal fun HostingScreen(
     onSettingsChanged: (String, String) -> Unit,
     onCreate: () -> Unit,
     onEnterRoom: () -> Unit,
+    onEndInvitation: () -> Unit = {},
     onConfirmHttpWarning: () -> Unit = {},
     onCancelHttpWarning: () -> Unit = {},
     liveRoomHandler: LiveRoomHandler = NoOpLiveRoomHandler,
@@ -33,11 +35,14 @@ internal fun HostingScreen(
                 onSettingsChanged,
                 onCreate,
             )
-            is HostingState.Invitation -> InvitationScreen(
-                state.invite,
-                onEnterRoom,
-                roomReplacementNotice = state.roomReplacementNotice,
-            )
+            is HostingState.Invitation -> {
+                BackHandler(onBack = onEndInvitation)
+                InvitationScreen(
+                    state.invite,
+                    onEnterRoom,
+                    roomReplacementNotice = state.roomReplacementNotice,
+                )
+            }
             is HostingState.LiveRoom -> MissingAwareLiveRoomScreen(state, liveRoomHandler, onExitLiveRoom)
         }
     }

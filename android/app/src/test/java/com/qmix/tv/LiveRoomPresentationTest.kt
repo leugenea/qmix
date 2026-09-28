@@ -10,8 +10,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -300,6 +302,17 @@ class LiveRoomPresentationTest {
 
     @Test
     fun replaced_same_code_session_rejects_late_callback_from_old_repository() {
+        val creations = java.util.concurrent.atomic.AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.method == "DELETE" && request.path == "/rooms/ABCD" ->
+                    MockResponse().setResponseCode(204)
+                request.method == "POST" && request.path == "/rooms" &&
+                    creations.incrementAndGet() <= 2 -> MockResponse().setResponseCode(201)
+                        .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""")
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
         val firstInvitation = RecordingRoomRepository()
         val first = RecordingRoomRepository()
         val secondInvitation = RecordingRoomRepository()
@@ -315,11 +328,14 @@ class LiveRoomPresentationTest {
             roomCollectionContext = Dispatchers.Unconfined,
         )
 
-        createAndEnter(controller)
+        createAndEnter(controller, enqueueCreation = false)
         first.awaitObservationForTest()
         controller.endRoom()
         assertTrue(controller.awaitSetupForTest())
-        createAndEnter(controller)
+        createAndEnter(controller, enqueueCreation = false)
+        val requests = (1..3).map { checkNotNull(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)) }
+        assertEquals(2, requests.count { it.method == "POST" && it.path == "/rooms" })
+        assertEquals(1, requests.count { it.method == "DELETE" && it.path == "/rooms/ABCD" })
         second.awaitObservationForTest()
         val secondInitialState = controller.state
         first.publish(active(RoomState("ABCD", null, emptyList())))
@@ -376,8 +392,8 @@ class LiveRoomPresentationTest {
 
     )
 
-    private fun createAndEnter(controller: HostSessionController) {
-        server.enqueue(
+    private fun createAndEnter(controller: HostSessionController, enqueueCreation: Boolean = true) {
+        if (enqueueCreation) server.enqueue(
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
         )

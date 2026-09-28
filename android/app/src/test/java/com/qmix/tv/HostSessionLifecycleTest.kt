@@ -117,6 +117,7 @@ class HostSessionLifecycleTest {
                     MockResponse().setResponseCode(201)
                         .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
                 )
+                server.enqueue(MockResponse().setResponseCode(204))
                 assertTrue(controller.createRoom())
                 if (controller.state is HostingState.HttpWarning) {
                     assertTrue(controller.confirmHttpWarning())
@@ -145,6 +146,13 @@ class HostSessionLifecycleTest {
                 Thread.yield()
             }
             assertTrue(controller.state is HostingState.Setup)
+            val creation = checkNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            val deletion = checkNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            assertEquals("POST", creation.method)
+            assertEquals("/rooms", creation.path)
+            assertEquals("DELETE", deletion.method)
+            assertEquals("/rooms/ABCD", deletion.path)
+            assertEquals(2, server.requestCount)
         } finally {
             observation?.close()
             scenario.close()

@@ -113,6 +113,16 @@ class RoomApiClient(
         if (failure.userMessage == UserMessage.ROOM_NOT_FOUND) RoomFetchResult.Missing else RoomFetchResult.Failure
     }
 
+    /** qmix#259: the host-only close has no response body and cannot be replayed. */
+    suspend fun deleteRoom(code: String, hostToken: String) {
+        val request = Request.Builder()
+            .url(backend.newBuilder().addPathSegment("rooms").addPathSegment(code).build())
+            .header("X-Host-Token", hostToken)
+            .delete()
+            .build()
+        execute(request, 204) { Unit }
+    }
+
     suspend fun reportPlayer(
         roomCode: String,
         hostToken: String,

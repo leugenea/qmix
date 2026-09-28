@@ -454,13 +454,17 @@ class HostRoomMissingRecoveryTest {
 
     @Test fun ending_invitation_cancels_its_observer_before_setup() = withHost { host ->
         host.startInvitation()
+        host.server.enqueue(MockResponse().setResponseCode(204))
         host.controller.endRoom()
         host.controller.awaitSetupForTest()
         host.repository.awaitUnsubscribed("ABCD", generation = 1)
         assertTrue(host.repository.oldCleanupDone.get())
         assertEquals(1, host.repository.observationCount("ABCD"))
         assertTrue(host.controller.state is HostingState.Setup)
-        assertEquals(1, host.server.requestCount)
+        val requests = (1..2).map { checkNotNull(host.server.takeRequest(5, TimeUnit.SECONDS)) }
+        assertEquals(1, requests.count { it.method == "POST" && it.path == "/rooms" })
+        assertEquals(1, requests.count { it.method == "DELETE" && it.path == "/rooms/ABCD" })
+        assertEquals(2, host.server.requestCount)
     }
 
     private fun emptyRoom() = RoomState("ABCD", null, emptyList())
@@ -491,7 +495,7 @@ class HostRoomMissingRecoveryTest {
             body(host)
         } finally {
             repository.releaseOldCleanup.complete(Unit)
-            controller.endRoom()
+            controller.abandonRoom()
             controller.awaitSetupForTest()
             scope.cancel()
             mutation.close()

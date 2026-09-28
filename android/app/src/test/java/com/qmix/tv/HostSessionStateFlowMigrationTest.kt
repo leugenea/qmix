@@ -12,8 +12,10 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -87,10 +89,21 @@ class HostSessionStateFlowMigrationTest {
         val server = MockWebServer()
         server.start()
         try {
-            server.enqueue(MockResponse().setResponseCode(201)
-                .setBody("""{"code":"ABCD","host_token":"first","url":"/r/ABCD"}"""))
-            server.enqueue(MockResponse().setResponseCode(201)
-                .setBody("""{"code":"WXYZ","host_token":"second","url":"/r/WXYZ"}"""))
+            val creations = java.util.concurrent.atomic.AtomicInteger()
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse = when {
+                    request.method == "DELETE" && request.path == "/rooms/ABCD" ->
+                        MockResponse().setResponseCode(204)
+                    request.method == "DELETE" && request.path == "/rooms/WXYZ" ->
+                        MockResponse().setResponseCode(204)
+                    request.method == "POST" && request.path == "/rooms" -> {
+                        val code = if (creations.getAndIncrement() == 0) "ABCD" else "WXYZ"
+                        MockResponse().setResponseCode(201)
+                            .setBody("""{"code":"$code","host_token":"host","url":"/r/$code"}""")
+                    }
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
             val controller = HostSessionController(
                 OkHttpClient(), initialBackendUrl = server.url("/").toString(),
                 initialGuestOrigin = "https://guest.example", roomCollectionScope = backgroundScope,
@@ -112,7 +125,12 @@ class HostSessionStateFlowMigrationTest {
                 }
             }
             assertEquals("WXYZ", (second as HostingState.Invitation).invite.code)
-            assertEquals(2, server.requestCount)
+            val requests = (1..3).map {
+                checkNotNull(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS))
+            }
+            assertEquals(2, requests.count { it.method == "POST" && it.path == "/rooms" })
+            assertEquals(1, requests.count { it.method == "DELETE" && it.path == "/rooms/ABCD" })
+            assertEquals(3, server.requestCount)
             controller.endRoom()
         } finally {
             server.shutdown()
