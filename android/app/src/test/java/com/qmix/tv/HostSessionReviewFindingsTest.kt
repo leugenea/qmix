@@ -526,6 +526,7 @@ class HostSessionReviewFindingsTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val firstCollection = CountDownLatch(1)
         val nextCollection = CountDownLatch(1)
+        val cleanupArmed = CountDownLatch(1)
         val cleanup = CountDownLatch(1)
         val release = CountDownLatch(1)
         val secondRecovery = CountDownLatch(1)
@@ -544,8 +545,10 @@ class HostSessionReviewFindingsTest {
                         2 -> { // Live collector; foreground loss must await its cleanup.
                             nextCollection.countDown()
                             emit(RoomSyncState.Active(roomCode, room, Freshness.FRESH, LiveConnection.CONNECTED))
-                            try { kotlinx.coroutines.awaitCancellation() }
-                            finally { withContext(NonCancellable + Dispatchers.IO) {
+                            try {
+                                cleanupArmed.countDown()
+                                kotlinx.coroutines.awaitCancellation()
+                            } finally { withContext(NonCancellable + Dispatchers.IO) {
                                 cleanup.countDown()
                                 check(release.await(30, TimeUnit.SECONDS))
                             } }
@@ -568,6 +571,8 @@ class HostSessionReviewFindingsTest {
             assertTrue(nextCollection.await(5, TimeUnit.SECONDS))
             controller.awaitRoomStateForTest { it.synchronization ==
                 RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED) }
+            val armed = cleanupArmed.await(5, TimeUnit.SECONDS)
+            assertTrue("live collection did not arm cleanup before stop; last observed state: ${controller.state}", armed)
             controller.onHostStopped()
             controller.onHostStarted()
             assertTrue(cleanup.await(5, TimeUnit.SECONDS))
