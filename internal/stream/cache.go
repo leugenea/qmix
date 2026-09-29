@@ -439,8 +439,8 @@ func (cl *call) canPublishUnownedFresh(s *keyState, current *entry) bool {
 }
 
 func (c *Cache) finishFreshLocked(key string, s *keyState, cl *call, current *entry, val interface{}, err error) {
-	if s.owner == cl.stale && cl.stale != nil && s.epoch == cl.epoch {
-		if err == nil && current == nil {
+	if s.owner == cl.stale && cl.stale != nil {
+		if err == nil && current == nil && s.epoch == cl.epoch {
 			cl.result = c.publish(s, key, val)
 		}
 		s.owner = nil
