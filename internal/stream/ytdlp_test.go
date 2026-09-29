@@ -290,33 +290,36 @@ func TestYtdlpConcurrentResolve(t *testing.T) {
 // detached from its initiating request while every caller can stop waiting.
 func TestYtdlpLeaderCancellationDoesNotPoisonWaiter(t *testing.T) {
 	r := &blockingRunner{started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { closeIfOpen(r.release) })
 	b := &YTDLP{Runner: r, CacheTTL: time.Minute}
 	track := &Track{ID: "1", Title: "Some Song", Artist: "Some Artist"}
 
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	t.Cleanup(cancelLeader)
 	leaderDone := make(chan error, 1)
 	go func() {
 		_, err := b.resolveURL(leaderCtx, track)
 		leaderDone <- err
 	}()
-	<-r.started
+	awaitDisplaced(t, r.started, "leader search")
 
+	waiterCtx := observeCacheWait(context.Background())
 	waiterDone := make(chan error, 1)
 	go func() {
-		url, err := b.resolveURL(context.Background(), track)
+		url, err := b.resolveURL(waiterCtx, track)
 		if err == nil && url != "https://media.example/audio.webm" {
 			err = fmt.Errorf("url = %q, want fixture URL", url)
 		}
 		waiterDone <- err
 	}()
-	waitForCacheWaiters(t, b.cacheRef(), cacheKey(track), 2)
+	awaitDisplaced(t, waiterCtx.waiting, "joined stream waiter")
 	cancelLeader()
-	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
+	if err := awaitDisplaced(t, leaderDone, "canceled leader"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("leader error = %v, want context.Canceled", err)
 	}
 
-	close(r.release)
-	if err := <-waiterDone; err != nil {
+	closeIfOpen(r.release)
+	if err := awaitDisplaced(t, waiterDone, "surviving stream waiter"); err != nil {
 		t.Fatalf("waiter error = %v", err)
 	}
 	if calls := r.calls.Load(); calls != 1 {
