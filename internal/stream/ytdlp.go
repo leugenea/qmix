@@ -183,15 +183,6 @@ func directSource(t *Track) (string, bool) {
 	return t.URL, t.ResolvedBy == "youtube" && strings.TrimSpace(t.URL) != ""
 }
 
-// resolveURL finds the direct audio URL for track, honoring the URL cache.
-func (b *YTDLP) resolveURL(ctx context.Context, t *Track) (string, error) {
-	u, _, _, release, err := b.resolveSource(ctx, t)
-	if release != nil {
-		release()
-	}
-	return u, err
-}
-
 // resolveSource carries the selected cache and exact generation used by a
 // subsequent GET, including its status rejection and retry.
 func (b *YTDLP) resolveSource(ctx context.Context, t *Track) (string, *Cache, *entry, func(), error) {
