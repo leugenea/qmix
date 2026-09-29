@@ -235,10 +235,12 @@ func TestYtdlpCanceledSearchLeavesQueueWithoutLeak(t *testing.T) {
 func TestYtdlpSingleflightCancelDoesNotLeakCapacitySlot(t *testing.T) {
 	l := ytdlpcap.New(1, 8)
 	r := newGateSearchRunner(4)
+	t.Cleanup(r.releaseAll)
 	b := &YTDLP{Runner: r, CacheTTL: time.Minute, Limiter: l}
 	track := &Track{ID: "1", Title: "Shared Song", Artist: "Shared Artist"}
 
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	t.Cleanup(cancelLeader)
 	leaderDone := make(chan error, 1)
 	go func() {
 		_, err := b.resolveURL(leaderCtx, track)
@@ -247,12 +249,14 @@ func TestYtdlpSingleflightCancelDoesNotLeakCapacitySlot(t *testing.T) {
 	capReceive(t, r.entered) // the shared load now holds the single slot
 
 	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+	t.Cleanup(cancelWaiter)
+	joinedCtx := observeCacheWait(waiterCtx)
 	waiterDone := make(chan error, 1)
 	go func() {
-		_, err := b.resolveURL(waiterCtx, track)
+		_, err := b.resolveURL(joinedCtx, track)
 		waiterDone <- err
 	}()
-	waitForCacheWaiters(t, b.cacheRef(), cacheKey(track), 2)
+	capReceive(t, joinedCtx.waiting)
 
 	// The final waiter leaving cancels the shared load; its capacity slot
 	// must come back. With only the leader left, canceling it drops the
@@ -266,19 +270,8 @@ func TestYtdlpSingleflightCancelDoesNotLeakCapacitySlot(t *testing.T) {
 		t.Fatalf("leader error = %v, want context.Canceled", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		runningCount, queuedCount := l.Stats()
-		if runningCount == 0 && queuedCount == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("shared load leaked its capacity slot: running %d, queued %d", runningCount, queuedCount)
-		}
-		time.Sleep(time.Millisecond)
-	}
-
-	// Subsequent acquires succeed: no slot was lost with the canceled load.
+	// A subsequent lookup must reach the runner through the one-slot limiter;
+	// a leaked slot leaves it queued and the bounded entry signal times out.
 	next := make(chan error, 1)
 	go func() {
 		url, err := b.resolveURL(context.Background(), &Track{ID: "2", Title: "Next Song"})
