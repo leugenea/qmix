@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -178,6 +179,56 @@ func TestPlayerReportStatusAndExactBodyContracts(t *testing.T) {
 			}
 			if *before.Current != *after.Current {
 				t.Fatalf("rejected report mutated current: before=%+v after=%+v", before.Current, after.Current)
+			}
+		})
+	}
+}
+
+// Pin the decoder's exact JSON and error classification before qmix#268 changes
+// its internal structure. These cases supplement the HTTP and SSE contract tests.
+func TestDecodePlayerRequestCharacterization(t *testing.T) {
+	const valid = `{"track_id":"track","state":"playing","pos_sec":0}`
+	tests := []struct {
+		name string
+		body string
+		want playerReport
+		err  error
+	}{
+		{"valid reordered fields and whitespace", " \n" + `{"pos_sec":12,"state":"paused","track_id":"  track  "}` + " \t\n", playerReport{TrackID: "  track  ", State: "paused", PosSec: 12}, nil},
+		{"valid error state", `{"track_id":"track","state":"error","pos_sec":0}`, playerReport{TrackID: "track", State: "error"}, nil},
+		{"valid ended state", `{"track_id":"track","state":"ended","pos_sec":3}`, playerReport{TrackID: "track", State: "ended", PosSec: 3}, nil},
+		{"non-object root", `[]`, playerReport{}, errInvalidPlayerJSON},
+		{"missing track", `{"state":"playing","pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"missing state", `{"track_id":"track","pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"missing position", `{"track_id":"track","state":"playing"}`, playerReport{}, errInvalidPlayerJSON},
+		{"unknown key before missing value", `{"track_id":"track","state":"playing","detail":"secret"}`, playerReport{}, errInvalidPlayerJSON},
+		{"duplicate track key", `{"track_id":"track","track_id":"other","state":"playing","pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"escaped duplicate key", `{"track_id":"track","track\u005fid":"other","state":"playing","pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"duplicate state key", `{"track_id":"track","state":"playing","state":"paused","pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"duplicate position key", `{"track_id":"track","state":"playing","pos_sec":0,"pos_sec":1}`, playerReport{}, errInvalidPlayerJSON},
+		{"null track", `{"track_id":null,"state":"playing","pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"null state", `{"track_id":"track","state":null,"pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"null position", `{"track_id":"track","state":"playing","pos_sec":null}`, playerReport{}, errInvalidPlayerJSON},
+		{"blank track", `{"track_id":" \t ","state":"playing","pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"numeric track", `{"track_id":1,"state":"playing","pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"object state", `{"track_id":"track","state":{},"pos_sec":0}`, playerReport{}, errInvalidPlayerJSON},
+		{"fractional position", `{"track_id":"track","state":"playing","pos_sec":1.5}`, playerReport{}, errInvalidPlayerJSON},
+		{"string position", `{"track_id":"track","state":"playing","pos_sec":"1"}`, playerReport{}, errInvalidPlayerJSON},
+		{"invalid state", `{"track_id":"track","state":"buffering","pos_sec":0}`, playerReport{}, errInvalidPlayerState},
+		{"negative position", `{"track_id":"track","state":"playing","pos_sec":-1}`, playerReport{}, errInvalidPlayerPosition},
+		{"invalid state precedes negative position", `{"track_id":"track","state":"buffering","pos_sec":-1}`, playerReport{}, errInvalidPlayerState},
+		{"unknown key precedes invalid state", `{"track_id":"track","state":"buffering","pos_sec":0,"detail":"secret"}`, playerReport{}, errInvalidPlayerJSON},
+		{"truncated object", `{"track_id":"track","state":"playing","pos_sec":0`, playerReport{}, errInvalidPlayerJSON},
+		{"second JSON value", valid + `{}`, playerReport{}, errInvalidPlayerJSON},
+		{"invalid trailing bytes", valid + `!`, playerReport{}, errInvalidPlayerJSON},
+		{"oversized trailing whitespace", valid + strings.Repeat(" ", int(maxPlayerBodyBytes)), playerReport{}, errRequestTooLarge},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPatch, "/rooms/track/player", strings.NewReader(tc.body))
+			got, err := decodePlayerRequest(httptest.NewRecorder(), request)
+			if !errors.Is(err, tc.err) || got != tc.want {
+				t.Fatalf("decodePlayerRequest() = (%+v, %v), want (%+v, %v)", got, err, tc.want, tc.err)
 			}
 		})
 	}
