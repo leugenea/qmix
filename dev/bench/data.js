@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790703379474,
+  "lastUpdate": 1790705524170,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1810,6 +1810,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go erosion",
             "value": 23.105760444663986,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 28.388400928941188,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c2deb81d5249e7e65579fe045bd114f009855333",
+          "message": "refactor(stream): remove test-only SetCache hook (#291) (#299)",
+          "timestamp": "2026-09-29T21:11:15+03:00",
+          "tree_id": "d11eca4af6d3162847d4a0729e651eb6c1080a85",
+          "url": "https://github.com/leugenea/qmix/commit/c2deb81d5249e7e65579fe045bd114f009855333"
+        },
+        "date": 1790705523188,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.117684912183755,
             "unit": "%"
           },
           {
