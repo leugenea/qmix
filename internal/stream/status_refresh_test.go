@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,7 +47,7 @@ func TestYtdlpRepeatedInvalidStatusReturnsSafe502(t *testing.T) {
 				t.Errorf("upstream GET %d fetched %s, want %s", n, req.URL, want)
 			}
 		}
-		if n == 3 {
+		if n == 3 || n == 4 {
 			if req.URL.String() != "https://media.example/recovered" {
 				t.Errorf("recovery fetched %s", req.URL)
 			}
@@ -94,6 +93,10 @@ func TestYtdlpRepeatedInvalidStatusReturnsSafe502(t *testing.T) {
 	recovered := serveProxy(t, backend, track, "bytes=30-")
 	if recovered.Code != 200 || recovered.Body.String() != "audio" || hits.Load() != 3 || runner.calls.Load() != 3 {
 		t.Fatalf("recovery: status %d, body %q, hits %d, searches %d", recovered.Code, recovered.Body.String(), hits.Load(), runner.calls.Load())
+	}
+	reused := serveProxy(t, backend, track, "bytes=30-")
+	if reused.Code != 200 || reused.Body.String() != "audio" || hits.Load() != 4 || runner.calls.Load() != 3 {
+		t.Fatalf("reuse: status %d, body %q, hits %d, searches %d; want cached recovery", reused.Code, reused.Body.String(), hits.Load(), runner.calls.Load())
 	}
 }
 
@@ -237,52 +240,6 @@ func TestYtdlpTransportFailureDoesNotRefresh(t *testing.T) {
 	}
 }
 
-// The old GET is parked until a newer URL has been cached. Its late failure
-// cannot delete that URL; the forced retry is held to inspect the cache.
-func TestYtdlpLateInvalidStatusPreservesNewerCacheValue(t *testing.T) {
-	oldEntered, releaseOld := make(chan struct{}), make(chan struct{})
-	retryEntered, releaseRetry := make(chan struct{}), make(chan struct{})
-	defer closeIfOpen(releaseOld)
-	defer closeIfOpen(releaseRetry)
-	runner := &gatedSequenceRunner{urls: []string{"https://media.example/old", "https://media.example/new", "https://media.example/retry"}, gateCall: 3, entered: retryEntered, release: releaseRetry}
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path == "/old" {
-			close(oldEntered)
-			<-releaseOld
-		}
-		return &http.Response{StatusCode: 403, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("bad")), Request: req}, nil
-	})}
-	backend := &YTDLP{Runner: runner, Client: client, CacheTTL: time.Minute}
-	track := testTrack()
-	result := make(chan error, 1)
-	go func() { _, err := backend.Stream(context.Background(), track, ""); result <- err }()
-	awaitDisplaced(t, oldEntered, "old GET")
-	cache := backend.cacheRef()
-	// Expire the original entry so a subsequent ordinary lookup can publish
-	// the newer generation without first reserving a status-refresh owner.
-	cache.mu.Lock()
-	cache.state(cacheKey(track)).entry.expiry = time.Time{}
-	cache.mu.Unlock()
-	if _, err := backend.resolveURL(context.Background(), track); err != nil {
-		t.Fatal(err)
-	}
-	close(releaseOld)
-	awaitDisplaced(t, retryEntered, "late failure's retry lookup")
-	if v, ok := cache.Get(cacheKey(track)); !ok || v != "https://media.example/new" {
-		t.Fatalf("late failure erased newer URL: %v, %v", v, ok)
-	}
-	close(releaseRetry)
-	if err := awaitDisplaced(t, result, "late failure result"); !errors.Is(err, ErrService) {
-		t.Fatalf("retry error = %v", err)
-	}
-	if runner.calls.Load() != 3 {
-		t.Fatalf("searches = %d, want 3", runner.calls.Load())
-	}
-	if v, ok := cache.Get(cacheKey(track)); !ok || v != "https://media.example/new" {
-		t.Fatalf("late failed attempt erased newer cached URL: %v, %v", v, ok)
-	}
-}
-
 type gatedSequenceRunner struct {
 	urls             []string
 	calls            atomic.Int32
@@ -332,12 +289,10 @@ func TestYtdlpConcurrentInvalidStatusesShareRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	results := make(chan error, 2)
-	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
+	observed := []*cacheWaitContext{observeCacheWait(context.Background()), observeCacheWait(context.Background())}
+	for _, ctx := range observed {
 		go func() {
-			defer wg.Done()
-			res, err := backend.Stream(context.Background(), track, "")
+			res, err := backend.Stream(ctx, track, "")
 			if err == nil {
 				res.Body.Close()
 			}
@@ -348,11 +303,12 @@ func TestYtdlpConcurrentInvalidStatusesShareRefresh(t *testing.T) {
 	awaitDisplaced(t, firstTwo, "second invalid GET")
 	close(releaseFirstTwo)
 	awaitDisplaced(t, refreshEntered, "shared status lookup")
-	waitForCacheWaiters(t, backend.cacheRef(), cacheKey(track), 2)
+	for _, ctx := range observed {
+		awaitDisplaced(t, ctx.waiting, "joined status refresh")
+	}
 	close(releaseRefresh)
-	wg.Wait()
 	for i := 0; i < 2; i++ {
-		if err := <-results; err != nil {
+		if err := awaitDisplaced(t, results, "status result"); err != nil {
 			t.Fatal(err)
 		}
 	}

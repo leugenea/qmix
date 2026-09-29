@@ -16,11 +16,29 @@ import (
 // generation owns a parked status lookup. Its own response is usable, but it
 // cannot become the URL served to another request or replace the newer result.
 func TestStatusLaterRefreshPublicationIsObservable(t *testing.T) {
-	f := newStatusOrderingFixture(t, false)
+	for _, newerFirst := range []bool{false, true} {
+		name := "older_lookup_first"
+		if newerFirst {
+			name = "newer_lookup_first"
+		}
+		t.Run(name, func(t *testing.T) { testStatusRefreshPublicationOrder(t, newerFirst) })
+	}
+}
+
+func testStatusRefreshPublicationOrder(t *testing.T, newerFirst bool) {
+	t.Helper()
+	f := newStatusOrderingFixtureInOrder(t, false, newerFirst)
 	f.startOlderAndPublishNewer(t)
-	f.startOlderRefresh(t)
-	newerDone := f.startRequest()
-	awaitDisplaced(t, f.newerLookup, "newer generation's status lookup")
+	var newerDone <-chan proxyOutcome
+	if newerFirst {
+		newerDone = f.startRequest()
+		awaitDisplaced(t, f.newerLookup, "newer generation's status lookup before old GET fails")
+		f.startOlderRefresh(t)
+	} else {
+		f.startOlderRefresh(t)
+		newerDone = f.startRequest()
+		awaitDisplaced(t, f.newerLookup, "newer generation's status lookup")
+	}
 	closeIfOpen(f.releaseOlderLookup)
 	requireProxyOutcome(t, awaitDisplaced(t, f.oldDone, "older completed proxy response"), http.StatusPartialContent, "ol", "bytes 1-2/5")
 
@@ -106,6 +124,11 @@ type statusOrderingFixture struct {
 }
 
 func newStatusOrderingFixture(t *testing.T, terminal bool) *statusOrderingFixture {
+	return newStatusOrderingFixtureInOrder(t, terminal, false)
+}
+
+func newStatusOrderingFixtureInOrder(t *testing.T, terminal, newerFirst bool) *statusOrderingFixture {
+	t.Helper()
 	f := &statusOrderingFixture{
 		track: testTrack(), oldDone: make(chan proxyOutcome, 1), oldGET: make(chan struct{}),
 		olderLookup: make(chan struct{}), newerLookup: make(chan struct{}),
@@ -117,19 +140,23 @@ func newStatusOrderingFixture(t *testing.T, terminal bool) *statusOrderingFixtur
 		closeIfOpen(f.releaseOlderLookup)
 		closeIfOpen(f.releaseNewerLookup)
 	})
+	olderCall, newerCall := 3, 4
+	if newerFirst {
+		olderCall, newerCall = newerCall, olderCall
+	}
 	f.runner = &lookupSequence{onCall: func(ctx context.Context, n int) (string, error) {
 		switch n {
 		case 1:
 			return statusOrderOld, nil
 		case 2:
 			return statusOrderNewer, nil
-		case 3:
+		case olderCall:
 			close(f.olderLookup)
 			if err := waitCacheGate(f.releaseOlderLookup, "older status lookup"); err != nil {
 				return "", err
 			}
 			return statusOrderOlderRefresh, nil
-		case 4:
+		case newerCall:
 			close(f.newerLookup)
 			if !terminal {
 				if err := waitCacheGate(f.releaseNewerLookup, "newer status lookup"); err != nil {

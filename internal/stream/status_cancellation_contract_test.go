@@ -16,18 +16,23 @@ import (
 // admission must not evict the still-current URL or start a retry lookup.
 func TestStatusCanceledBeforeAdmissionKeepsCurrentURL(t *testing.T) {
 	const old = "https://media.example/old"
+	const recovered = "https://media.example/recovered"
+	const ttl = 140 * time.Millisecond
 	badEntered, releaseBad := make(chan struct{}), make(chan struct{})
 	t.Cleanup(func() { closeIfOpen(releaseBad) })
 	var reject atomic.Bool
 	var hits atomic.Int32
 	runner := &lookupSequence{onCall: func(_ context.Context, n int) (string, error) {
-		if n != 1 {
-			return "", fmt.Errorf("unexpected search %d", n)
+		switch n {
+		case 1:
+			return old, nil
+		case 2:
+			return recovered, nil
 		}
-		return old, nil
+		return "", fmt.Errorf("unexpected search %d", n)
 	}}
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.String() != old {
+		if req.URL.String() != old && req.URL.String() != recovered {
 			return nil, fmt.Errorf("unexpected media URL %s", req.URL)
 		}
 		hits.Add(1)
@@ -40,11 +45,9 @@ func TestStatusCanceledBeforeAdmissionKeepsCurrentURL(t *testing.T) {
 		}
 		return statusContractResponse(req, http.StatusOK), nil
 	})}
-	backend := &YTDLP{Runner: runner, Client: client, CacheTTL: time.Minute}
+	backend := &YTDLP{Runner: runner, Client: client, CacheTTL: ttl}
 	track := testTrack()
-	if got := awaitDisplaced(t, startCacheLookup(backend, context.Background(), track), "primed URL"); got.err != nil || got.url != old {
-		t.Fatalf("prime = (%q, %v), want old URL", got.url, got.err)
-	}
+	requireStatusURL(t, awaitDisplaced(t, startCacheLookup(backend, context.Background(), track), "primed URL"), old)
 	reject.Store(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -56,11 +59,18 @@ func TestStatusCanceledBeforeAdmissionKeepsCurrentURL(t *testing.T) {
 		t.Fatalf("canceled status = (%q, %v), want context.Canceled", got.url, got.err)
 	}
 	reject.Store(false)
-	if got := awaitDisplaced(t, startCacheLookup(backend, context.Background(), track), "unchanged cached URL"); got.err != nil || got.url != old {
-		t.Fatalf("cache after canceled status = (%q, %v), want old URL", got.url, got.err)
-	}
+	requireStatusURL(t, awaitDisplaced(t, startCacheLookup(backend, context.Background(), track), "unchanged cached URL"), old)
 	if runner.calls.Load() != 1 || hits.Load() != 3 {
 		t.Fatalf("searches %d, media GETs %d; want 1 and 3", runner.calls.Load(), hits.Load())
+	}
+	timer := time.NewTimer(ttl + 30*time.Millisecond)
+	defer timer.Stop()
+	awaitDisplaced(t, timer.C, "expiry after canceled status admission")
+	for i := 0; i < 2; i++ {
+		requireStatusURL(t, awaitDisplaced(t, startCacheLookup(backend, context.Background(), track), "post-expiry recovery and reuse"), recovered)
+	}
+	if runner.calls.Load() != 2 || hits.Load() != 5 {
+		t.Fatalf("post-expiry searches %d, media GETs %d; want 2 and 5", runner.calls.Load(), hits.Load())
 	}
 }
 
@@ -131,11 +141,18 @@ func TestStatusSharedRefreshSurvivesOneCancellation(t *testing.T) {
 			if runner.calls.Load() != 2 {
 				t.Fatalf("searches while survivor waits = %d, want 2", runner.calls.Load())
 			}
+			probe := observeCacheWait(context.Background())
+			ordinary := startCacheLookup(backend, probe, track)
+			awaitCacheLookupWaiting(t, probe, ordinary, "ordinary probe after shared waiter cancellation")
+			if runner.calls.Load() != 2 || hits.Load() != 3 {
+				t.Fatalf("intermediate searches %d, GETs %d; want 2 and 3 with no stale exposure", runner.calls.Load(), hits.Load())
+			}
 			closeIfOpen(releaseRefresh)
 			requireStatusURL(t, awaitDisplaced(t, survivor, "surviving status waiter"), fresh)
+			requireStatusURL(t, awaitDisplaced(t, ordinary, "ordinary probe's survivor URL"), fresh)
 			requireStatusURL(t, awaitDisplaced(t, startCacheLookup(backend, context.Background(), track), "reused survivor URL"), fresh)
-			if runner.calls.Load() != 2 || hits.Load() != 5 {
-				t.Fatalf("searches %d, media GETs %d; want 2 and 5", runner.calls.Load(), hits.Load())
+			if runner.calls.Load() != 2 || hits.Load() != 6 {
+				t.Fatalf("searches %d, media GETs %d; want 2 and 6", runner.calls.Load(), hits.Load())
 			}
 		})
 	}

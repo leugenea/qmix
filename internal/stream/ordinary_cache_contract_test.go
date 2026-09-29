@@ -332,9 +332,8 @@ func TestOrdinaryCacheLastWaiterCancelsRunner(t *testing.T) {
 // qmix#287 / qmix#89: an abandoned runner may ignore cancellation and
 // succeed late. A new caller must start a replacement search, and a third
 // caller must wait for that replacement rather than receiving the old URL.
-// oldReturned signals runner return, not completion of Cache.load; the
-// retained TestCacheAbandonedLoadCannotOverwriteReplacement checks that
-// stricter completion boundary before asserting replacement identity.
+// The private done barrier proves cache completion, not merely runner return,
+// before the public third-waiter and replacement-reuse assertions.
 func TestOrdinaryCacheAbandonedSuccessIsNotPublished(t *testing.T) {
 	oldStarted, oldRelease, oldReturned := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	newStarted, newRelease := make(chan struct{}), make(chan struct{})
@@ -363,6 +362,7 @@ func TestOrdinaryCacheAbandonedSuccessIsNotPublished(t *testing.T) {
 	t.Cleanup(cancelOld)
 	first := startCacheLookup(b, oldCtx, testTrack())
 	awaitDisplaced(t, oldStarted, "abandoned runner entry")
+	oldDone := cacheFlightDone(t, b, testTrack())
 	cancelOld()
 	if got := awaitDisplaced(t, first, "abandoned caller cancellation"); !errors.Is(got.err, context.Canceled) {
 		t.Fatalf("abandoned caller error = %v, want context.Canceled", got.err)
@@ -372,9 +372,10 @@ func TestOrdinaryCacheAbandonedSuccessIsNotPublished(t *testing.T) {
 	awaitDisplaced(t, newStarted, "independent replacement runner")
 	closeIfOpen(oldRelease)
 	awaitDisplaced(t, oldReturned, "late success of abandoned runner")
+	awaitDisplaced(t, oldDone, "cache completion of abandoned success")
 	observer := observeCacheWait(context.Background())
 	joined := startCacheLookup(b, observer, testTrack())
-	awaitDisplaced(t, observer.waiting, "new caller waiting for replacement, not stale URL")
+	awaitCacheLookupWaiting(t, observer, joined, "new caller waiting for replacement, not stale URL")
 	closeIfOpen(newRelease)
 	for _, ch := range []<-chan cacheLookup{replacement, joined} {
 		got := awaitDisplaced(t, ch, "replacement result after late abandoned success")
@@ -385,5 +386,26 @@ func TestOrdinaryCacheAbandonedSuccessIsNotPublished(t *testing.T) {
 	cached := awaitDisplaced(t, startCacheLookup(b, context.Background(), testTrack()), "cached replacement after abandoned success")
 	if cached.err != nil || cached.url != "https://media.example/replacement" || calls.Load() != 2 {
 		t.Fatalf("cached URL = (%q, %v), searches %d, want replacement and two searches", cached.url, cached.err, calls.Load())
+	}
+}
+
+// qmix#292: an initially canceled ordinary Stream must reach neither yt-dlp
+// nor the media transport, even on an empty cache.
+func TestOrdinaryCachePreCanceledStreamStartsNoWork(t *testing.T) {
+	var searches, gets atomic.Int32
+	b := &YTDLP{CacheTTL: time.Minute,
+		Runner: cacheContractRunner(func(context.Context, string) ([]byte, error) {
+			searches.Add(1)
+			return cacheFixture("https://media.example/unexpected"), nil
+		}),
+		Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gets.Add(1)
+			return statusContractResponse(req, http.StatusOK), nil
+		})}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got := awaitDisplaced(t, startCacheLookup(b, ctx, testTrack()), "initially canceled ordinary Stream")
+	if !errors.Is(got.err, context.Canceled) || searches.Load() != 0 || gets.Load() != 0 {
+		t.Fatalf("pre-canceled Stream = %+v; searches %d, GETs %d; want canceled without work", got, searches.Load(), gets.Load())
 	}
 }
