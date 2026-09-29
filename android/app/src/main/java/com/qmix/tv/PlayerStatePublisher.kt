@@ -51,9 +51,7 @@ class PlayerStatePublisher(
     private var acceptedPause: PlayerReport? = null
     private var pending: PlayerReport? = null
     private var reportJob: Job? = null
-    private var finalPauseJob: Job? = null
-    // Retain the actual cancelled jobs: a final PAUSED may time out before they settle.
-    @Volatile private var finalPausePredecessors: Set<Job> = emptySet()
+    private var foregroundPauseJob: Job? = null
     private var periodicJob: Job? = null
     private var playingProgressEnabled = false
     private var synchronized = true
@@ -146,38 +144,35 @@ class PlayerStatePublisher(
      * Wait for the cancelled in-flight report: the backend has no per-track sequence numbers.
      * A timeout while an older request ignores cancellation drops the pause. Cancellation
      * cannot prove ordering for a request the backend already received; this is best effort.
-     * No callbacks or retries are emitted.
+     * Even after the pause deadline, keep the recovery barrier until predecessors settle;
+     * local teardown never joins it. No callbacks or retries are emitted.
      */
     fun reportFinalPause(report: PlayerReport, alreadyPaused: Boolean = false): Unit = mutationContext.run {
         if (report.state != PlayerReportState.PAUSED || report.trackId != selection?.trackId ||
             !foreground || (alreadyPaused && acceptedPause == report)
         ) return@run
         val previous = reportJob
-        val priorPause = finalPauseJob
-        if (previous != null) {
-            finalPausePredecessors = finalPausePredecessors.filterNot(Job::isCompleted).toSet() + previous
-        }
+        val priorPause = foregroundPauseJob
         setForeground(false)
         val job = finalReportScope.launch(start = CoroutineStart.LAZY) {
             try {
                 withTimeout(FINAL_PAUSE_TIMEOUT_MILLIS) {
-                    priorPause?.join()
                     previous?.join()
+                    priorPause?.join()
                     reportPlayer(roomCode, hostToken, report)
                 }
             } catch (_: Exception) {
                 // Network failures, cancellation, and the deadline cannot block local teardown.
+            } finally {
+                // A timed-out attempt must not free a newer report to overtake a prior
+                // PAUSED (or a recovered report) still ignoring cancellation.
+                previous?.join()
+                priorPause?.join()
             }
         }
-        finalPauseJob = job
+        foregroundPauseJob = job
         job.start()
     }
-
-    /** The process-owned final PAUSED Job survives the session's cancellation. */
-    fun finalPauseCompletion(): Job? = mutationContext.run { finalPauseJob }
-
-    /** A timed-out final pause must not authorize DELETE over a still-running old report. */
-    fun canCloseRoomAfterFinalPause(): Boolean = finalPausePredecessors.all(Job::isCompleted)
 
     private fun ensurePeriodic(expectedSelection: Selection) {
         if (periodicJob?.isActive == true) return
@@ -203,12 +198,15 @@ class PlayerStatePublisher(
 
     private fun send(report: PlayerReport, expectedSelection: Selection) {
         check(reportJob == null)
+        // Capture at admission: a later foreground loss may chain behind this Job.
+        // Reading the mutable field inside launch could make the two Jobs join each other.
+        val precedingPause = foregroundPauseJob
         val job = scope.launch(start = CoroutineStart.LAZY) {
             val activeJob = requireNotNull(coroutineContext[Job])
             var completedResult: PlayerReportResult? = null
             try {
                 val result = try {
-                    finalPauseJob?.join()
+                    precedingPause?.join()
                     reportPlayer(roomCode, hostToken, report)
                 } catch (canceled: CancellationException) {
                     throw canceled

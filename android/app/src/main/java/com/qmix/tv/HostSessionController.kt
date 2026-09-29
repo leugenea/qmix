@@ -739,9 +739,8 @@ class HostSessionController(
         detached?.job?.cancel()
         runCatching { detached?.queue?.close() }
         runCatching { detached?.playback?.close() }
-        // #259: only an explicit end of an existing Invitation/LiveRoom closes the backend.
-        // Joining the process-owned final PAUSED Job precedes DELETE; the Setup finalizer
-        // below never waits for either network operation.
+        // #259/#278: only an explicit end of an existing Invitation/LiveRoom closes the
+        // backend. DELETE does not wait for cancelled reports; Setup does not wait for DELETE.
         if (!automaticReplacement && !missing) scheduleBackendClose(detached)
         // Never wait on a child in its reducer or publication callback. This sibling finalizer
         // waits for the entire detached tree before admitting a replacement creation.
@@ -763,26 +762,12 @@ class HostSessionController(
     private fun scheduleBackendClose(detached: HostSession?) {
         val credentials = detached?.credentials ?: return
         val backend = detached.backendUrl ?: return
-        closeBackendRoom(backend, credentials, detached.job, detached.playback)
+        closeBackendRoom(backend, credentials)
     }
 
-    private fun closeBackendRoom(
-        backend: String, credentials: RoomCredentials, sessionJob: Job,
-        playback: AuthoritativePlaybackCoordinator?,
-    ) {
-        val finalPause = playback?.finalPauseCompletion()
+    private fun closeBackendRoom(backend: String, credentials: RoomCredentials) {
         closeScope.launch(Dispatchers.IO) {
             try {
-                // Cancelled session reports and any process-owned final PAUSED must settle
-                // before DELETE. If either ignores cancellation, leave the room to TTL.
-                withTimeout(2_500L) {
-                    sessionJob.join()
-                    finalPause?.join()
-                }
-                if (playback?.canCloseRoomAfterFinalPause() == false) {
-                    roomApiLogger.warn(QMixLogOperation.DELETE_ROOM, QMixLogCause.NETWORK)
-                    return@launch
-                }
                 withTimeout(3_000L) {
                     roomCloseCommandFactory(backend).close(credentials.code, credentials.hostToken)
                 }
