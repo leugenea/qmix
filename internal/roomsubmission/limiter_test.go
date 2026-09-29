@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/leugenea/qmix/internal/ratelimit"
 )
 
 func TestLimiterBurstRefillAndRetry(t *testing.T) {
@@ -67,9 +69,9 @@ func TestLimiterInvalidDirectConfigurationFailsClosed(t *testing.T) {
 		burst int
 	}{
 		{name: "zero rate", rate: 0, burst: 1},
-		{name: "rate above maximum", rate: MaxRatePerMinute + 1, burst: 1},
+		{name: "rate above maximum", rate: ratelimit.MaxRatePerMinute + 1, burst: 1},
 		{name: "zero burst", rate: 1, burst: 0},
-		{name: "burst above maximum", rate: 1, burst: MaxBurst + 1},
+		{name: "burst above maximum", rate: 1, burst: ratelimit.MaxBurst + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			denial := NewLimiter(tc.rate, tc.burst, nil).Allow()
@@ -85,7 +87,7 @@ func TestLimiterNilAndInvalidValuesFailClosed(t *testing.T) {
 	for name, limiter := range map[string]*Limiter{
 		"nil":           nil,
 		"zero":          {},
-		"missing clock": {ratePerSecond: 1, burst: 1, tokens: 1},
+		"missing clock": {bucket: ratelimit.NewBucketAt(1, 1, time.Time{}, nil)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			denial := limiter.Allow()

@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/leugenea/qmix/internal/ratelimit"
 )
 
 type fakeClock struct{ now time.Time }
@@ -51,8 +53,8 @@ func TestLimiterRejectsUnsafeConfigurationInsteadOfLosingTokens(t *testing.T) {
 }
 
 func TestLimiterEnforcesMaximumSafeBurstExactly(t *testing.T) {
-	limiter := NewLimiter(1, MaxBurst, 1, func() time.Time { return time.Unix(100, 0) })
-	for request := 1; request <= MaxBurst; request++ {
+	limiter := NewLimiter(1, ratelimit.MaxBurst, 1, func() time.Time { return time.Unix(100, 0) })
+	for request := 1; request <= ratelimit.MaxBurst; request++ {
 		if err := limiter.Allow("198.51.100.1"); err != nil {
 			t.Fatalf("request %d rejected within maximum safe burst", request)
 		}
