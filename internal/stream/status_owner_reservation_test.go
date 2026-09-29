@@ -4,130 +4,147 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// An expired entry's old GET may fail while two ordinary misses share a
-// displaced lookup. Their subsequent failures can straddle the old refresh's
-// failure: the second reject reserves ownership of the first caller's already
-// running (older-epoch) refresh.
+// qmix#270/#292: two ordinary misses share a lookup displaced by an old
+// GET's failure. Their invalid statuses straddle the old refresh failure.
+// Neither a late join nor a displaced result may strand the key uncacheable.
 func TestOwnerReservationReleasedAfterJoiningOlderRefresh(t *testing.T) {
-	const key = "track"
-	c := NewCache(time.Minute)
-	if _, err := c.Do(key, func() (interface{}, error) { return "e1", nil }); err != nil {
-		t.Fatal(err)
-	}
-	e1 := c.GetEntry(key)
-
+	const (
+		old       = "https://media.example/old"
+		transient = "https://media.example/transient"
+		refresh   = "https://media.example/refresh"
+		recovered = "https://media.example/recovered"
+	)
 	oldGET, releaseOld := make(chan struct{}), make(chan struct{})
-	f1Started, releaseF1 := make(chan struct{}), make(chan struct{})
-	f2Started, releaseF2 := make(chan struct{}), make(chan struct{})
-	f3Started, releaseF3 := make(chan struct{}), make(chan struct{})
+	ordinary, releaseOrdinary := make(chan struct{}), make(chan struct{})
+	oldRefresh, releaseOldRefresh := make(chan struct{}), make(chan struct{})
+	trGET := make(chan struct{}, 2)
 	releaseA, releaseB := make(chan struct{}), make(chan struct{})
-	defer closeIfOpen(releaseOld)
-	defer closeIfOpen(releaseF1)
-	defer closeIfOpen(releaseF2)
-	defer closeIfOpen(releaseF3)
-	defer closeIfOpen(releaseA)
-	defer closeIfOpen(releaseB)
-
-	oldDone := make(chan error, 1)
-	go func() {
-		close(oldGET) // Old GET has begun with e1, before its expiry.
-		<-releaseOld
-		_, err := c.DoContextRejected(context.Background(), key, e1, func(context.Context) (interface{}, error) {
-			close(f2Started)
-			<-releaseF2
-			return nil, errors.New("old refresh failed")
-		})
-		oldDone <- err
-	}()
-	awaitDisplaced(t, oldGET, "old e1 GET")
-	c.mu.Lock()
-	c.state(key).entry.expiry = time.Time{}
-	c.mu.Unlock()
-
-	type outcome struct {
-		e   *entry
-		err error
-	}
-	firstA, firstB := make(chan outcome, 1), make(chan outcome, 1)
-	doneA, doneB := make(chan outcome, 1), make(chan outcome, 1)
-	go func() {
-		tr, err := c.DoContextEntry(context.Background(), key, func(context.Context) (interface{}, error) {
-			close(f1Started)
-			<-releaseF1
-			return "tr", nil
-		})
-		firstA <- outcome{tr, err}
-		<-releaseA // A's GET of tr fails before F2 finishes.
-		if err != nil {
-			doneA <- outcome{nil, err}
-			return
+	newRefresh, releaseNewRefresh := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		for _, gate := range []chan struct{}{releaseOld, releaseOrdinary, releaseOldRefresh, releaseA, releaseB, releaseNewRefresh} {
+			closeIfOpen(gate)
 		}
-		e, err := c.DoContextRejected(context.Background(), key, tr, func(context.Context) (interface{}, error) {
-			close(f3Started)
-			<-releaseF3
-			return "f3", nil
-		})
-		doneA <- outcome{e, err}
-	}()
-	awaitDisplaced(t, f1Started, "ordinary F1")
-	go func() {
-		tr, err := c.DoContextEntry(context.Background(), key, func(context.Context) (interface{}, error) {
-			return nil, fmt.Errorf("B unexpectedly started an ordinary lookup")
-		})
-		firstB <- outcome{tr, err}
-		<-releaseB // B's GET of tr fails after F2 clears e1's owner.
-		if err != nil {
-			doneB <- outcome{nil, err}
-			return
+	})
+	var transientHits atomic.Int32
+	statusWait := &phaseWaitContext{waiting: make(chan struct{})}
+	runner := &lookupSequence{onCall: func(ctx context.Context, n int) (string, error) {
+		switch n {
+		case 1:
+			return old, nil
+		case 2:
+			close(ordinary)
+			if err := waitCacheGate(releaseOrdinary, "ordinary lookup release"); err != nil {
+				return "", err
+			}
+			return transient, nil
+		case 3:
+			close(oldRefresh)
+			if err := waitCacheGate(releaseOldRefresh, "old refresh release"); err != nil {
+				return "", err
+			}
+			return "", errors.New("old refresh failed")
+		case 4:
+			close(newRefresh)
+			if err := waitCacheGate(releaseNewRefresh, "new refresh release"); err != nil {
+				return "", err
+			}
+			return refresh, nil
+		case 5:
+			return recovered, nil
 		}
-		e, err := c.DoContextRejected(context.Background(), key, tr, func(context.Context) (interface{}, error) {
-			return nil, fmt.Errorf("B unexpectedly started a second refresh")
-		})
-		doneB <- outcome{e, err}
-	}()
-	waitForCacheWaiters(t, c, key, 2)
-
-	close(releaseOld)
-	awaitDisplaced(t, f2Started, "old e1 refresh F2")
-	close(releaseF1)
-	a, b := awaitDisplaced(t, firstA, "A's transient result"), awaitDisplaced(t, firstB, "B's transient result")
-	if a.err != nil || b.err != nil || a.e == nil || a.e != b.e || !a.e.transient {
-		t.Fatalf("F1 should serve the same displaced transient to A/B: A=%+v B=%+v", a, b)
+		return "", fmt.Errorf("unexpected lookup %d", n)
+	}}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.String() {
+		case old:
+			close(oldGET)
+			if err := waitCacheGate(releaseOld, "old media release"); err != nil {
+				return nil, err
+			}
+			return statusContractResponse(req, http.StatusForbidden), nil
+		case transient:
+			transientHits.Add(1)
+			trGET <- struct{}{}
+			gate := releaseA
+			isB := req.Context() == statusWait
+			if isB {
+				gate = releaseB
+			}
+			if err := waitCacheGate(gate, "transient media release"); err != nil {
+				return nil, err
+			}
+			if isB {
+				statusWait.phase.Store(true)
+			}
+			return statusContractResponse(req, http.StatusForbidden), nil
+		case refresh, recovered:
+			return statusContractResponse(req, http.StatusOK), nil
+		}
+		return nil, fmt.Errorf("unexpected media URL %s", req.URL)
+	})}
+	b := &YTDLP{Runner: runner, Client: client, CacheTTL: 100 * time.Millisecond}
+	track := testTrack()
+	first := startCacheLookup(b, context.Background(), track)
+	awaitDisplaced(t, oldGET, "old GET")
+	// Expire through the configured public TTL while the GET remains parked.
+	timer := time.NewTimer(130 * time.Millisecond)
+	defer timer.Stop()
+	awaitDisplaced(t, timer.C, "old cache TTL")
+	a, second := startCacheLookup(b, context.Background(), track), observeCacheWait(context.Background())
+	awaitDisplaced(t, ordinary, "ordinary flight")
+	statusWait.Context = second
+	bb := startCacheLookup(b, statusWait, track)
+	awaitDisplaced(t, second.waiting, "second ordinary waiter admitted")
+	closeIfOpen(releaseOld)
+	awaitDisplaced(t, oldRefresh, "old status refresh")
+	closeIfOpen(releaseOrdinary)
+	awaitDisplaced(t, trGET, "first transient GET")
+	awaitDisplaced(t, trGET, "second transient GET")
+	closeIfOpen(releaseA)
+	awaitDisplaced(t, newRefresh, "transient status refresh")
+	closeIfOpen(releaseOldRefresh)
+	if got := awaitDisplaced(t, first, "old failed refresh"); !errors.Is(got.err, ErrService) {
+		t.Fatalf("old request = %+v, want service failure", got)
 	}
-	close(releaseA)
-	awaitDisplaced(t, f3Started, "A's F3 refresh")
-	close(releaseF2)
-	if err := awaitDisplaced(t, oldDone, "failed F2"); err == nil {
-		t.Fatal("F2 unexpectedly succeeded")
-	}
-	close(releaseB)
-	waitForCacheWaiters(t, c, key, 2) // B reserved tr but joined A's older F3.
-	close(releaseF3)
-	for label, ch := range map[string]<-chan outcome{"A": doneA, "B": doneB} {
-		got := awaitDisplaced(t, ch, label+"'s F3 result")
-		if got.err != nil || got.e == nil || got.e.value != "f3" {
-			t.Fatalf("%s's F3 result = %+v", label, got)
+	closeIfOpen(releaseB)
+	// The second reject may join the existing lookup, but cannot strand future
+	// publication when that lookup completes.
+	awaitDisplaced(t, statusWait.waiting, "second rejected status attached to refresh")
+	closeIfOpen(releaseNewRefresh)
+	for i, done := range []<-chan cacheLookup{a, bb} {
+		got := awaitDisplaced(t, done, "transient request")
+		if got.err != nil || got.url != refresh {
+			t.Fatalf("transient request %d = %+v, want refresh", i, got)
 		}
 	}
-
-	// F3 cannot publish across B's intervening rejection, but it must retire
-	// the owner so the next ordinary load can publish and serve later hits.
-	var loads atomic.Int32
 	for i := 0; i < 3; i++ {
-		value, err := c.Do(key, func() (interface{}, error) {
-			loads.Add(1)
-			return "recovered", nil
-		})
-		if err != nil || value != "recovered" {
-			t.Fatalf("sequential request %d = %v, %v", i, value, err)
+		got := awaitDisplaced(t, startCacheLookup(b, context.Background(), track), "recovery and reuse")
+		if got.err != nil || got.url != recovered {
+			t.Fatalf("recovery %d = %+v, want cached recovered URL", i, got)
 		}
 	}
-	if got := loads.Load(); got != 1 {
-		t.Fatalf("sequential requests loaded %d times, want 1 (later requests must hit the cache)", got)
+	if got := runner.calls.Load(); got != 5 {
+		t.Fatalf("lookups = %d, want five including one recovered lookup", got)
 	}
+}
+
+type phaseWaitContext struct {
+	context.Context
+	phase   atomic.Bool
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *phaseWaitContext) Done() <-chan struct{} {
+	if c.phase.Load() {
+		c.once.Do(func() { close(c.waiting) })
+	}
+	return c.Context.Done()
 }

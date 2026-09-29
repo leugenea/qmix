@@ -585,20 +585,6 @@ func TestYtdlpStreamDerivesContentRange(t *testing.T) {
 	}
 }
 
-// TestYtdlpCachedNonString verifies a cached non-string value (impossible via
-// the normal code path, but guarded defensively) surfaces as a service error
-// rather than a panic or type confusion.
-func TestYtdlpCachedNonString(t *testing.T) {
-	c := NewCache(time.Minute)
-	track := &Track{ID: "1", Title: "x"}
-	c.state(cacheKey(track)).entry = &entry{value: 42, expiry: time.Now().Add(time.Minute)}
-	b := &YTDLP{Runner: &fakeRunner{out: []byte(searchFixture)}, CacheTTL: time.Minute, cache: c}
-	_, err := b.resolveURL(context.Background(), track)
-	if !errors.Is(err, ErrService) {
-		t.Fatalf("err = %v, want ErrService", err)
-	}
-}
-
 // TestFirstJSONLineLongToken guards against bufio.Scanner's default 64KB
 // token cap: real yt-dlp dump-json output is a single line carrying the full
 // format list of the result, which exceeds 64KB (qmix#19).

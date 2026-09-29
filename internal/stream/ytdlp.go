@@ -202,18 +202,13 @@ func (b *YTDLP) resolveSource(ctx context.Context, t *Track) (string, *Cache, *e
 	}
 	// The shared lookup survives one caller leaving while other callers still
 	// need it, and is canceled when its final waiter disconnects.
-	e, release, err := c.DoContextEntryLeased(ctx, cacheKey(t), func(loadCtx context.Context) (interface{}, error) {
+	e, release, err := c.DoContextEntryLeased(ctx, cacheKey(t), func(loadCtx context.Context) (string, error) {
 		return b.searchURL(loadCtx, t)
 	})
 	if err != nil {
 		return "", c, nil, nil, err
 	}
-	u, ok := e.value.(string)
-	if !ok {
-		release()
-		return "", c, nil, nil, fmt.Errorf("ytdlp: %w: cached value is not a url", ErrService)
-	}
-	return u, c, e, release, nil
+	return e.url, c, e, release, nil
 }
 
 // searchURL runs the YouTube search via the runner and extracts the top audio
@@ -349,17 +344,13 @@ func acceptedMediaStatus(status int) bool {
 }
 
 func (b *YTDLP) freshURL(ctx context.Context, c *Cache, t *Track, stale *entry) (string, *entry, error) {
-	e, err := c.DoContextRejected(ctx, cacheKey(t), stale, func(loadCtx context.Context) (interface{}, error) {
+	e, err := c.DoContextRejected(ctx, cacheKey(t), stale, func(loadCtx context.Context) (string, error) {
 		return b.searchURL(loadCtx, t)
 	})
 	if err != nil {
 		return "", nil, err
 	}
-	u, ok := e.value.(string)
-	if !ok {
-		return "", nil, fmt.Errorf("ytdlp: %w: cached value is not a url", ErrService)
-	}
-	return u, e, nil
+	return e.url, e, nil
 }
 
 func (b *YTDLP) openURL(ctx context.Context, url, rangeHeader string) (*http.Response, error) {
