@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790684508522,
+  "lastUpdate": 1790688207804,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1481,6 +1481,60 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/122f7a122075865104b69458889ca146a6169dea"
         },
         "date": 1790684504182,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.105760444663986,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 28.388400928941188,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2bed00feb250d446268f930d9a72200b50ea2815",
+          "message": "fix(stream): release stranded refresh owner (#285) (#293)",
+          "timestamp": "2026-09-29T16:22:54+03:00",
+          "tree_id": "99956d14a25c753d513fcddd77a3e26198897f3e",
+          "url": "https://github.com/leugenea/qmix/commit/2bed00feb250d446268f930d9a72200b50ea2815"
+        },
+        "date": 1790688206470,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
