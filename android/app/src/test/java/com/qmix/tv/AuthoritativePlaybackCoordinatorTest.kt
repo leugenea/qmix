@@ -177,7 +177,7 @@ class AuthoritativePlaybackCoordinatorTest {
     }
 
     @Test
-    fun close_reports_one_final_pause_even_after_room_session_cancellation() = runTest {
+    fun close_cancels_reporting_without_final_pause_even_after_room_session_cancellation() = runTest {
         val reports = CoordinatorReportClient()
         val reportingEngine = RecordingPlaybackEngine()
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
@@ -192,11 +192,9 @@ class AuthoritativePlaybackCoordinatorTest {
         guarded.close()
         guarded.close()
         runCurrent()
-        assertEquals(listOf(
-            PlayerReport("one", PlayerReportState.PLAYING, 9),
-            PlayerReport("one", PlayerReportState.PAUSED, 9),
-        ), reports.calls.map { it.report })
-        assertFalse(reports.calls.last().canceled)
+        assertEquals(listOf(PlayerReport("one", PlayerReportState.PLAYING, 9)),
+            reports.calls.map { it.report })
+        assertTrue(reports.calls.last().canceled)
         assertFalse(reportingEngine.hasListeners)
     }
 

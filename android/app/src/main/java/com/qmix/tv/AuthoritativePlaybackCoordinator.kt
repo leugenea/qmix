@@ -412,16 +412,11 @@ class AuthoritativePlaybackCoordinator(
         observer(next)
     }
 
-    /** A foreground-loss pause may already be in flight; explicit close waits for it off-session. */
-    fun finalPauseCompletion(): Job? = mutationContext.run { statePublisher?.finalPauseCompletion() }
-    fun canCloseRoomAfterFinalPause(): Boolean = statePublisher?.canCloseRoomAfterFinalPause() ?: true
-
     override fun close(): Unit = mutationContext.run {
         if (closed) return@run
         closed = true
-        // qmix#259: close still emits a final PAUSED report on the process-owned scope;
-        // DELETE joins that Job before closing the backend room.
-        if (foregroundReady) reportFinalPauseIfActive()
+        // qmix#278: ending/abandoning a session does not issue a final PAUSED;
+        // only foreground loss does, while the room survives.
         sessionJob.cancel()
         retryJob = null
         reportReconciliationJob = null

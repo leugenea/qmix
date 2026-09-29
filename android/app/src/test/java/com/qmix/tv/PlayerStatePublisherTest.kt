@@ -857,43 +857,14 @@ class PlayerStatePublisherTest {
         assertEquals(listOf(PlayerReportState.PLAYING), reporter.states())
         advanceTimeBy(2_000)
         runCurrent()
-        assertTrue("final PAUSED deadline completed", publisher.finalPauseCompletion()?.isCompleted == true)
-        assertFalse("a cancelled prior report is still in flight", publisher.canCloseRoomAfterFinalPause())
         reporter.complete(0, PlayerReportResult.ACCEPTED)
         runCurrent()
-        assertTrue("settled predecessor permits a later explicit end", publisher.canCloseRoomAfterFinalPause())
         assertEquals(listOf(PlayerReportState.PLAYING), reporter.states())
         publisher.close()
     }
 
     @Test
-    fun completed_final_pause_predecessors_are_pruned_across_foreground_cycles() = runTest {
-        val reporter = SuspendedReporter()
-        val publisher = publisher(reporter)
-        val predecessors = PlayerStatePublisher::class.java.getDeclaredField("finalPausePredecessors")
-            .apply { isAccessible = true }
-        publisher.selectTrack("one")
-
-        repeat(12) { cycle ->
-            publisher.update(PlayerReport("one", PlayerReportState.PLAYING, cycle), immediate = true)
-            runCurrent()
-            publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, cycle))
-            runCurrent()
-            assertTrue(reporter.calls[cycle * 2].canceled)
-            reporter.complete(cycle * 2 + 1, PlayerReportResult.ACCEPTED)
-            runCurrent()
-            assertTrue(publisher.canCloseRoomAfterFinalPause())
-            assertEquals("only the most recent predecessor is retained", 1,
-                (predecessors.get(publisher) as Set<*>).size)
-            publisher.setForeground(true)
-            publisher.reconciled("one")
-        }
-        assertEquals(24, reporter.calls.size)
-        publisher.close()
-    }
-
-    @Test
-    fun foreground_recovery_waits_for_the_final_pause_before_a_new_report() = runTest {
+    fun foreground_recovery_waits_for_the_final_pause_before_a_new_pause() = runTest {
         val reporter = SuspendedReporter()
         val publisher = publisher(reporter)
         publisher.selectTrack("one")
@@ -901,15 +872,18 @@ class PlayerStatePublisherTest {
         runCurrent()
         publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 5))
         runCurrent()
+
         publisher.setForeground(true)
         publisher.reconciled("one")
         publisher.update(PlayerReport("one", PlayerReportState.PAUSED, 6), immediate = true)
         runCurrent()
         assertEquals(listOf(4, 5), reporter.positions())
+        assertEquals(1, reporter.inFlight)
 
         reporter.complete(1, PlayerReportResult.ACCEPTED)
         runCurrent()
         assertEquals(listOf(4, 5, 6), reporter.positions())
+        assertEquals(1, reporter.maxInFlight)
         publisher.close()
     }
 
@@ -935,6 +909,112 @@ class PlayerStatePublisherTest {
         assertEquals(listOf(PlayerReportState.PLAYING, PlayerReportState.PAUSED, PlayerReportState.PLAYING),
             reporter.states())
         assertEquals(listOf(4, 5, 6), reporter.positions())
+        assertEquals(1, reporter.maxInFlight)
+        publisher.close()
+    }
+
+    @Test
+    fun overlapping_foreground_cycles_serialize_each_pause_before_recovered_playing() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 1), immediate = true)
+        runCurrent()
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 2))
+        runCurrent()
+        assertEquals(listOf(1, 2), reporter.positions())
+
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 3), immediate = true)
+        runCurrent()
+        assertEquals(listOf(1, 2), reporter.positions())
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 4))
+        runCurrent()
+        assertEquals(listOf(1, 2), reporter.positions())
+
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 5), immediate = true)
+        runCurrent()
+        assertEquals(listOf(1, 2), reporter.positions())
+        reporter.complete(1, PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(listOf(1, 2, 4), reporter.positions())
+        assertEquals(1, reporter.maxInFlight)
+        reporter.complete(2, PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(listOf(1, 2, 4, 5), reporter.positions())
+        assertEquals(listOf(PlayerReportState.PLAYING, PlayerReportState.PAUSED,
+            PlayerReportState.PAUSED, PlayerReportState.PLAYING), reporter.states())
+        assertEquals(1, reporter.maxInFlight)
+        publisher.close()
+    }
+
+    @Test
+    fun timed_out_second_pause_cannot_release_recovery_ahead_of_uncancellable_first_pause() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        publisher.selectTrack("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 1), immediate = true)
+        runCurrent()
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 2))
+        runCurrent()
+        reporter.calls[1].ignoreCancellation = true
+
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 3), immediate = true)
+        runCurrent()
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 4))
+        runCurrent()
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 5), immediate = true)
+        runCurrent()
+
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(reporter.calls[1].canceled)
+        assertEquals(listOf(1, 2), reporter.positions())
+        assertEquals(1, reporter.inFlight)
+        reporter.complete(1, PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(listOf(1, 2, 5), reporter.positions())
+        assertEquals(1, reporter.maxInFlight)
+        publisher.close()
+    }
+
+    @Test
+    fun timed_out_pause_waits_for_canceled_recovered_pause_before_next_playing() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        publisher.selectTrack("one")
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 1))
+        runCurrent()
+        reporter.complete(0, PlayerReportResult.ACCEPTED)
+        runCurrent()
+
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PAUSED, 2), immediate = true)
+        runCurrent()
+        reporter.calls[1].ignoreCancellation = true
+        publisher.reportFinalPause(PlayerReport("one", PlayerReportState.PAUSED, 3))
+        runCurrent()
+        publisher.setForeground(true)
+        publisher.reconciled("one")
+        publisher.update(PlayerReport("one", PlayerReportState.PLAYING, 4), immediate = true)
+        runCurrent()
+
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(reporter.calls[1].canceled)
+        assertEquals(listOf(1, 2), reporter.positions())
+        assertEquals(1, reporter.inFlight)
+        reporter.complete(1, PlayerReportResult.ACCEPTED)
+        runCurrent()
+        assertEquals(listOf(1, 2, 4), reporter.positions())
         assertEquals(1, reporter.maxInFlight)
         publisher.close()
     }

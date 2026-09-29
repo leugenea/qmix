@@ -215,8 +215,9 @@ visibility-change retries).
 If a new room later receives the same code, it has a different incarnation and
 host token; in-flight mutations bound to the old incarnation and its SSE
 subscriptions cannot carry over. On explicit host end, the Android TV client
-sends one best-effort DELETE after any final PAUSED report (qmix#259); mere
-foreground loss and missing-room replacement do not. The shorter unused-room
+promptly sends one best-effort DELETE without a final PAUSED report (qmix#259/#278).
+Foreground loss still sends a best-effort PAUSED report but no DELETE;
+missing-room replacement sends neither. The shorter unused-room
 TTL is implemented by #260; explicit close does not wait for inactivity.
 
 ## Integration tests

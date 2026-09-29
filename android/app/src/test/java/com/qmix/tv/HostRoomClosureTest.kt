@@ -213,72 +213,21 @@ class HostRoomClosureTest {
         assertEquals(0, deleteCount.get())
     }
 
-    @Test fun final_pause_finishes_before_delete_without_delaying_setup() {
-        val reports = LinkedBlockingQueue<PlayerReport>()
-        val allowPause = CompletableDeferred<Unit>()
-        val pauseAcknowledged = CompletableDeferred<Unit>()
-        val deleteBeforePauseSettled = java.util.concurrent.atomic.AtomicBoolean()
-        val engine = RecordingEngine()
-        lateinit var publisher: PlayerStatePublisher
-        val controller = controller(delete = { code, token ->
-            if (!pauseAcknowledged.isCompleted || publisher.finalPauseCompletion()?.isCompleted != true) {
-                deleteBeforePauseSettled.set(true)
-            }
-            deleteCount.incrementAndGet()
-            deletes.put(code to token)
-        }, playback = { _, credentials, observer, advance, sessionScope ->
-            AuthoritativePlaybackCoordinator(credentials.code, "https://example/stream", engine,
-                { RoomFetchResult.Failure }, sessionScope, QueueMutationContext(Dispatchers.Unconfined),
-                advance, observer, { listener ->
-                    PlayerStatePublisher(credentials.code, credentials.hostToken,
-                        { _, _, report ->
-                            reports.put(report)
-                            if (report.state == PlayerReportState.PAUSED) {
-                                allowPause.await()
-                                pauseAcknowledged.complete(Unit)
-                            }
-                            PlayerReportResult.ACCEPTED
-                        }, sessionScope, QueueMutationContext(Dispatchers.Unconfined), scope, listener)
-                            .also { publisher = it }
-                })
-        })
-        repository.awaitGeneration()
-        controller.enterRoom()
-        val live = repository.awaitGeneration()
-        live.trySend(RoomSyncState.Active("ABCD", RoomState("ABCD",
-            CurrentTrack("one", 3, "playing", "One", "Artist"), emptyList()),
-            Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.awaitRoomStateForTest { (it.synchronization as? RoomSyncState.Active)?.room?.current?.trackId == "one" }
-        assertTrue("playback was not prepared", engine.prepared.await(5, TimeUnit.SECONDS))
-        engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 3_000))
-        assertEquals(PlayerReportState.PLAYING, reports.poll(5, TimeUnit.SECONDS)?.state)
-        controller.endRoom()
-        assertTrue(controller.awaitSetupForTest())
-        assertEquals(PlayerReportState.PAUSED, reports.poll(5, TimeUnit.SECONDS)?.state)
-        allowPause.complete(Unit)
-        runBlocking { withTimeout(5_000) { pauseAcknowledged.await() } }
-        expectDelete()
-        drainCloseScope()
-        assertFalse("DELETE overtook end-time PAUSED", deleteBeforePauseSettled.get())
-    }
-
     private fun playingController(
         engine: RecordingEngine,
         report: suspend (PlayerReport) -> PlayerReportResult,
-        capture: (PlayerStatePublisher) -> Unit = {},
-        closeScope: CoroutineScope = scope,
         delete: suspend (String, String) -> Unit = { code, token ->
             deleteCount.incrementAndGet()
             deletes.put(code to token)
         },
-    ): HostSessionController = controller(delete = delete, closeScope = closeScope,
+    ): HostSessionController = controller(delete = delete,
         playback = { _, credentials, observer, advance, sessionScope ->
         AuthoritativePlaybackCoordinator(credentials.code, "https://example/stream", engine,
             { RoomFetchResult.Failure }, sessionScope, QueueMutationContext(Dispatchers.Unconfined),
             advance, observer, { listener ->
                 PlayerStatePublisher(credentials.code, credentials.hostToken,
                     { _, _, value -> report(value) }, sessionScope,
-                    QueueMutationContext(Dispatchers.Unconfined), scope, listener).also(capture)
+                    QueueMutationContext(Dispatchers.Unconfined), scope, listener)
             })
     })
 
@@ -295,107 +244,96 @@ class HostRoomClosureTest {
         engine.emit(PlaybackState("one", PlaybackStatus.READY, isPlaying = true, positionMs = 3_000))
     }
 
-    @Test fun foreground_pause_in_flight_finishes_before_explicit_end_delete() {
+    /** qmix#208/#278: backgrounding pauses the surviving room, not closing it. */
+    @Test fun foreground_loss_reports_one_paused_without_delete() {
+        val reports = LinkedBlockingQueue<PlayerReport>()
+        val engine = RecordingEngine()
+        val controller = playingController(engine, { report ->
+            reports.put(report)
+            PlayerReportResult.ACCEPTED
+        })
+        startPlaying(controller, engine)
+        assertEquals("playing report entered; state=${controller.state}", PlayerReportState.PLAYING,
+            reports.poll(5, TimeUnit.SECONDS)?.state)
+
+        controller.onHostStopped()
+        controller.onHostStopped()
+        assertEquals("one foreground PAUSED; state=${controller.state}, reports=${reports.toList()}",
+            PlayerReportState.PAUSED, reports.poll(5, TimeUnit.SECONDS)?.state)
+        assertEquals("no DELETE on foreground loss; state=${controller.state}", 0, deleteCount.get())
+        controller.abandonRoom()
+        assertTrue("Setup after abandonment; state=${controller.state}", controller.awaitSetupForTest())
+        drainCloseScope()
+        assertTrue("no duplicate PAUSED after teardown; state=${controller.state}, reports=${reports.toList()}",
+            reports.isEmpty())
+        assertEquals("abandonment also must not DELETE; state=${controller.state}", 0, deleteCount.get())
+    }
+
+    /** qmix#208/#278: foreground loss reports PAUSED, but explicit end never waits for it. */
+    @Test fun foreground_pause_in_flight_does_not_delay_explicit_end_delete() {
         val reports = LinkedBlockingQueue<PlayerReport>()
         val releasePause = CompletableDeferred<Unit>()
-        val pauseAcknowledged = CompletableDeferred<Unit>()
-        val deleteBeforePauseSettled = java.util.concurrent.atomic.AtomicBoolean()
         val engine = RecordingEngine()
-        lateinit var publisher: PlayerStatePublisher
         val controller = playingController(engine, { report ->
             reports.put(report)
             if (report.state == PlayerReportState.PAUSED) {
-                releasePause.await()
-                pauseAcknowledged.complete(Unit)
+                withContext(NonCancellable) { withTimeout(10_000) { releasePause.await() } }
             }
             PlayerReportResult.ACCEPTED
-        }, capture = { publisher = it }, delete = { code, token ->
-            if (!pauseAcknowledged.isCompleted || publisher.finalPauseCompletion()?.isCompleted != true) {
-                deleteBeforePauseSettled.set(true)
-            }
-            deleteCount.incrementAndGet()
-            deletes.put(code to token)
         })
         try {
             startPlaying(controller, engine)
-            assertEquals(PlayerReportState.PLAYING, reports.poll(5, TimeUnit.SECONDS)?.state)
+            assertEquals("playing report entered; state=${controller.state}", PlayerReportState.PLAYING,
+                reports.poll(5, TimeUnit.SECONDS)?.state)
             controller.onHostStopped()
-            assertEquals(PlayerReportState.PAUSED, reports.poll(5, TimeUnit.SECONDS)?.state)
+            assertEquals("foreground PAUSED entered; reports=${reports.toList()}", PlayerReportState.PAUSED,
+                reports.poll(5, TimeUnit.SECONDS)?.state)
             controller.endRoom()
-            assertTrue(controller.awaitSetupForTest())
-            releasePause.complete(Unit)
-            runBlocking { withTimeout(5_000) { pauseAcknowledged.await() } }
-            expectDelete()
-            drainCloseScope()
-            assertFalse("DELETE overtook foreground PAUSED", deleteBeforePauseSettled.get())
+            val close = deletes.poll(2, TimeUnit.SECONDS)
+            assertEquals("DELETE during foreground PAUSED; state=${controller.state}, reports=${reports.toList()}",
+                "ABCD" to "host-secret", close)
+            assertEquals("one DELETE; last observed=$close", 1, deleteCount.get())
+            assertTrue("PAUSED remains blocked when DELETE starts; state=${controller.state}", !releasePause.isCompleted)
         } finally { releasePause.complete(Unit) }
+        assertTrue("Setup after PAUSED released; state=${controller.state}", controller.awaitSetupForTest())
+        drainCloseScope()
     }
 
-    @Test fun timed_out_foreground_pause_then_settled_predecessor_allows_later_end() {
+    /** qmix#278: DELETE cannot be held hostage by a report that ignores cancellation. */
+    @Test fun explicit_end_deletes_once_while_older_report_is_still_hung_without_final_pause() {
         val reports = LinkedBlockingQueue<PlayerReport>()
         val releasePlaying = CompletableDeferred<Unit>()
         val engine = RecordingEngine()
-        lateinit var publisher: PlayerStatePublisher
         val controller = playingController(engine, { report ->
             reports.put(report)
             if (report.state == PlayerReportState.PLAYING) {
-                withContext(NonCancellable) { releasePlaying.await() }
+                withContext(NonCancellable) { withTimeout(10_000) { releasePlaying.await() } }
             }
             PlayerReportResult.ACCEPTED
-        }, { publisher = it })
+        })
         try {
             startPlaying(controller, engine)
-            assertEquals(PlayerReportState.PLAYING, reports.poll(5, TimeUnit.SECONDS)?.state)
-            controller.onHostStopped()
-            runBlocking { withTimeout(5_000) { publisher.finalPauseCompletion()!!.join() } }
-            assertFalse("old report still in flight", publisher.canCloseRoomAfterFinalPause())
-            releasePlaying.complete(Unit)
-            runBlocking {
-                withTimeout(5_000) {
-                    while (!publisher.canCloseRoomAfterFinalPause()) kotlinx.coroutines.yield()
-                }
-            }
+            assertEquals("older report entered; last observed=${reports.toList()}", PlayerReportState.PLAYING,
+                reports.peek()?.state)
             controller.endRoom()
-            assertTrue(controller.awaitSetupForTest())
-            expectDelete()
-            drainCloseScope()
-            assertTrue("the timed-out pause must never be sent", reports.isEmpty())
-        } finally { releasePlaying.complete(Unit) }
-    }
-
-    @Test fun still_running_predecessor_blocks_delete_after_close_deadline() {
-        val reports = LinkedBlockingQueue<PlayerReport>()
-        val releasePlaying = CompletableDeferred<Unit>()
-        val closeOnly = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val engine = RecordingEngine()
-        lateinit var publisher: PlayerStatePublisher
-        val controller = playingController(engine, { report ->
-            reports.put(report)
-            if (report.state == PlayerReportState.PLAYING) {
-                withContext(NonCancellable) { releasePlaying.await() }
-            }
-            PlayerReportResult.ACCEPTED
-        }, capture = { publisher = it }, closeScope = closeOnly)
-        try {
-            startPlaying(controller, engine)
-            assertEquals(PlayerReportState.PLAYING, reports.poll(5, TimeUnit.SECONDS)?.state)
-            controller.onHostStopped()
-            runBlocking { withTimeout(5_000) { publisher.finalPauseCompletion()!!.join() } }
-            assertFalse(publisher.canCloseRoomAfterFinalPause())
-            controller.endRoom()
-            // The close worker must have actually exited before asserting absence of DELETE.
-            runBlocking { withTimeout(5_000) {
-                closeOnly.coroutineContext[kotlinx.coroutines.Job]!!.children.toList().joinAll()
-            } }
-            assertEquals(0, deleteCount.get())
-            releasePlaying.complete(Unit)
-            assertTrue(controller.awaitSetupForTest())
-            drainCloseScope()
-            assertEquals(0, deleteCount.get())
+            val close = deletes.poll(2, TimeUnit.SECONDS)
+            assertEquals("prompt DELETE before hung report settles; state=${controller.state}, reports=${reports.toList()}",
+                "ABCD" to "host-secret", close)
+            assertEquals("one DELETE; last observed=$close, state=${controller.state}", 1, deleteCount.get())
+            assertEquals("explicit end sends no final PAUSED; last observed=${reports.toList()}",
+                listOf(PlayerReportState.PLAYING), reports.toList().map { it.state })
+            // Keep the cancellation-ignoring report blocked beyond the old 2.5-second join.
+            runBlocking { kotlinx.coroutines.delay(2_600) }
+            assertEquals("DELETE remains unique past old join; state=${controller.state}, reports=${reports.toList()}",
+                1, deleteCount.get())
         } finally {
             releasePlaying.complete(Unit)
-            closeOnly.cancel()
         }
+        assertTrue("Setup after hung report released; last observed=${controller.state}", controller.awaitSetupForTest())
+        drainCloseScope()
+        assertEquals("still only one DELETE after teardown; last observed=${deletes.toList()}", 1, deleteCount.get())
+        assertEquals("no late PAUSED after teardown; last observed=${reports.toList()}",
+            listOf(PlayerReportState.PLAYING), reports.toList().map { it.state })
     }
 
     private class GenerationalRoomRepository : RoomRepository {

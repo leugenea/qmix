@@ -529,27 +529,26 @@ or 24-hour non-empty lifetime.
 - The Android host publishes actual playback through one serialized request
   pipeline. Immediate transitions supersede queued progress, old-track callbacks
   are excluded by selection-bound Job cancellation, and 409 responses force a
-  GET reconciliation without retrying the rejected report. Foreground loss or
-  coordinator close while playing/buffering cancels ordinary reports and sends
-  one best-effort PAUSED report (captured track and last position) on the
+  GET reconciliation without retrying the rejected report. Foreground loss
+  while playing, buffering, or paused cancels ordinary reports and sends one
+  best-effort PAUSED report (captured track and last position) on the
   application-owned IO scope, with a two-second deadline. It waits for the
   cancelled in-flight coroutine before sending PAUSED and drops the final report
   if an uncooperative older request consumes the deadline. Since the backend has
   no per-track sequence numbers, cancellation cannot rule out a prior request
-  already received by the server; this last report is best effort. An already
-  acknowledged pause at the same position is not duplicated; an unacknowledged
+  already received by the server; this last report is best effort. A recovered
+  same-track report waits for the process-owned PAUSED and its cancelled
+  predecessor to settle, even if the bounded PAUSED attempt was dropped. An
+  already acknowledged pause at the same position is not duplicated; an unacknowledged
   explicit pause is retried once because ordinary reporting is cancelled. Completed,
   error, and idle selections do not send a final pause. On explicit host end of
-  an existing Invitation or LiveRoom (qmix#259), the TV sends one host-authenticated
-  `DELETE /rooms/{code}` on the application-owned IO scope. It joins the
-  cancelled room session's ordinary reports and any final PAUSED report from
-  coordinator close or an earlier foreground loss before attempting DELETE.
-  The join is best effort and bounded to 2.5 seconds: if a session report,
-  final PAUSED, or its cancelled predecessor is still in flight, DELETE is
-  skipped and the room is left to server TTL rather than risking a late
-  report into a closed room. DELETE has its own
-  three-second deadline; failure is logged by safe category only and never
-  delays local teardown or the Setup transition. No DELETE is sent for
+  an existing Invitation or LiveRoom (qmix#259/#278), the TV cancels the room
+  session, sends no final PAUSED, and sends exactly one host-authenticated
+  `DELETE /rooms/{code}` promptly on the application-owned IO scope without
+  joining cancelled reports or an earlier foreground-loss PAUSED. A late report
+  cannot mutate the deleted room or a new incarnation using the same code.
+  DELETE has a three-second deadline; failure is logged by safe category only
+  and never delays local teardown or the Setup transition. No DELETE is sent for
   foreground loss alone, process/application teardown, an already-missing
   room's **New room** action, or automatic replacement after a definitive
   `404`. A concurrently expired room may reject DELETE; there is no retry.
