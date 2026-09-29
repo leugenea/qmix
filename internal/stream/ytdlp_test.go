@@ -362,22 +362,34 @@ func TestYtdlpStream(t *testing.T) {
 func TestYtdlpInvalidStatusRefreshesURL(t *testing.T) {
 	var hits atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
+		n := hits.Add(1)
+		want := "/fresh"
+		if n == 1 {
+			want = "/stale"
+		}
+		if r.URL.String() != want {
+			t.Errorf("upstream GET %d fetched %s, want %s", n, r.URL, want)
+		}
 		if r.Header.Get("Range") != "bytes=0-4" {
 			t.Errorf("upstream Range = %q", r.Header.Get("Range"))
 		}
-		if r.URL.Path == "/stale" {
+		switch r.URL.Path {
+		case "/stale":
 			w.Header().Set("Content-Type", "text/html")
 			w.Header().Set("Content-Range", "bytes 0-4/999")
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = io.WriteString(w, "<html>forbidden upstream</html>")
 			return
+		case "/fresh":
+			w.Header().Set("Content-Type", "audio/webm")
+			w.Header().Set("Content-Range", "bytes 0-4/10")
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = io.WriteString(w, "audio")
+		default:
+			t.Errorf("unexpected upstream path %q, want /stale or /fresh", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusInternalServerError)
 		}
-		w.Header().Set("Content-Type", "audio/webm")
-		w.Header().Set("Content-Range", "bytes 0-4/10")
-		w.Header().Set("Accept-Ranges", "bytes")
-		w.WriteHeader(http.StatusPartialContent)
-		_, _ = io.WriteString(w, "audio")
 	}))
 	defer upstream.Close()
 
@@ -397,8 +409,11 @@ func TestYtdlpInvalidStatusRefreshesURL(t *testing.T) {
 	if got := hits.Load(); got != 2 {
 		t.Fatalf("upstream hits = %d, want 2", got)
 	}
-	if got, ok := b.cacheRef().Get(cacheKey(track)); !ok || got != upstream.URL+"/fresh" {
-		t.Fatalf("cached url = (%v, %v), want fresh", got, ok)
+	// The successful retry becomes the source of the next request, without
+	// another yt-dlp invocation or another GET to the rejected URL.
+	second := serveProxy(t, b, track, "bytes=0-4")
+	if second.Code != http.StatusPartialContent || second.Body.String() != "audio" || runner.calls.Load() != 2 || hits.Load() != 3 {
+		t.Fatalf("next request = %d %q, searches %d, hits %d", second.Code, second.Body.String(), runner.calls.Load(), hits.Load())
 	}
 }
 
