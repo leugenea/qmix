@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790679692659,
+  "lastUpdate": 1790679696217,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2763,6 +2763,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/52f1bc7b2c2c0dbddda806183389ac18f7b47d2c"
         },
         "date": 1790673291845,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d57c9162830ae4448d418ce6a31b98e794a76026",
+          "message": "refactor(tv): simplify live room screen (#283)\n\n* test(tv): characterize live room screen before refactor (#269)\n\n* refactor(tv): separate live room screen responsibilities (#269)\n\n* test(tv): arm cancellation cleanup before foreground restart (#269)",
+          "timestamp": "2026-09-29T14:00:56+03:00",
+          "tree_id": "31ff9e27f98419cc29ce31d224658f0598768ad2",
+          "url": "https://github.com/leugenea/qmix/commit/d57c9162830ae4448d418ce6a31b98e794a76026"
+        },
+        "date": 1790679695393,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
