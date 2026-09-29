@@ -441,37 +441,9 @@ var (
 
 func decodePlayerRequest(w http.ResponseWriter, r *http.Request) (playerReport, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxPlayerBodyBytes)
-	decoder := json.NewDecoder(r.Body)
-	first, err := decoder.Token()
-	if err != nil || first != json.Delim('{') {
-		return playerReport{}, playerDecodeError(err)
-	}
-
-	fields := make(map[string]json.RawMessage, 3)
-	for decoder.More() {
-		token, err := decoder.Token()
-		if err != nil {
-			return playerReport{}, playerDecodeError(err)
-		}
-		key, ok := token.(string)
-		if !ok || (key != "track_id" && key != "state" && key != "pos_sec") {
-			return playerReport{}, errInvalidPlayerJSON
-		}
-		if _, duplicate := fields[key]; duplicate {
-			return playerReport{}, errInvalidPlayerJSON
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return playerReport{}, playerDecodeError(err)
-		}
-		fields[key] = value
-	}
-	closing, err := decoder.Token()
-	if err != nil || closing != json.Delim('}') || len(fields) != 3 {
-		return playerReport{}, playerDecodeError(err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return playerReport{}, playerDecodeError(err)
+	fields, err := readPlayerFields(json.NewDecoder(r.Body))
+	if err != nil {
+		return playerReport{}, err
 	}
 
 	var report playerReport
@@ -491,6 +463,51 @@ func decodePlayerRequest(w http.ResponseWriter, r *http.Request) (playerReport, 
 		return playerReport{}, errInvalidPlayerPosition
 	}
 	return report, nil
+}
+
+// readPlayerFields enforces the exact object shape before any field values are
+// interpreted, so malformed or trailing JSON takes precedence over report validation.
+func readPlayerFields(decoder *json.Decoder) (map[string]json.RawMessage, error) {
+	first, err := decoder.Token()
+	if err != nil || first != json.Delim('{') {
+		return nil, playerDecodeError(err)
+	}
+
+	fields := make(map[string]json.RawMessage, 3)
+	for decoder.More() {
+		if err := readPlayerField(decoder, fields); err != nil {
+			return nil, err
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') || len(fields) != 3 {
+		return nil, playerDecodeError(err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, playerDecodeError(err)
+	}
+	return fields, nil
+}
+
+// readPlayerField rejects unknown and repeated names before reading their values.
+func readPlayerField(decoder *json.Decoder, fields map[string]json.RawMessage) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return playerDecodeError(err)
+	}
+	key, ok := token.(string)
+	if !ok || (key != "track_id" && key != "state" && key != "pos_sec") {
+		return errInvalidPlayerJSON
+	}
+	if _, duplicate := fields[key]; duplicate {
+		return errInvalidPlayerJSON
+	}
+	var value json.RawMessage
+	if err := decoder.Decode(&value); err != nil {
+		return playerDecodeError(err)
+	}
+	fields[key] = value
+	return nil
 }
 
 func playerDecodeError(err error) error {
