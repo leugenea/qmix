@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790625549024,
+  "lastUpdate": 1790668178113,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1226,6 +1226,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Kotlin erosion",
             "value": 45.263248396849654,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 14,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "217f69f618887f635abe314895c59abcd2d036e1",
+          "message": "fix(tv): close room despite stalled player report (#278)",
+          "timestamp": "2026-09-29T10:49:00+03:00",
+          "tree_id": "a556ad23d66a76f23960980da349e458a44e09bb",
+          "url": "https://github.com/leugenea/qmix/commit/217f69f618887f635abe314895c59abcd2d036e1"
+        },
+        "date": 1790668176617,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 25.306274549099474,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 45.483486876683585,
             "unit": "%"
           },
           {
