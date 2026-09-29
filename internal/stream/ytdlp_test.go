@@ -238,23 +238,35 @@ func TestYtdlpDirectCacheKeyUsesSourceURL(t *testing.T) {
 	}
 }
 
-// TestYtdlpCacheReuse verifies a second resolve of the same track uses the
-// cache and does not re-run the runner.
+// TestYtdlpCacheReuse verifies a second public stream of the same track uses
+// the lazily initialized cache and does not re-run yt-dlp (qmix#291).
 func TestYtdlpCacheReuse(t *testing.T) {
-	r := &fakeRunner{out: []byte(searchFixture)}
-	c := NewCache(time.Minute)
-	b := &YTDLP{Runner: r, CacheTTL: time.Minute}
-	b.SetCache(c)
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.String() != "/audio" || req.Header.Get("Range") != "bytes=0-4" {
+			t.Errorf("media request = %s Range %q, want /audio bytes=0-4", req.URL, req.Header.Get("Range"))
+			http.Error(w, "unexpected media request", http.StatusBadRequest)
+			return
+		}
+		hits.Add(1)
+		w.Header().Set("Content-Type", "audio/webm")
+		w.Header().Set("Content-Range", "bytes 0-4/5")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "audio")
+	}))
+	defer upstream.Close()
+	r := &fakeRunner{out: []byte(fmt.Sprintf(`{"url":%q}`, upstream.URL+"/audio"))}
+	b := &YTDLP{Runner: r, Client: upstream.Client(), CacheTTL: time.Minute}
 
 	tr := &Track{ID: "1", Title: "Some Song", Artist: "Some Artist"}
-	if _, err := b.resolveURL(context.Background(), tr); err != nil {
-		t.Fatal(err)
+	for i := 0; i < 2; i++ {
+		got := serveProxy(t, b, tr, "bytes=0-4")
+		if got.Code != http.StatusPartialContent || got.Body.String() != "audio" || got.Header().Get("Content-Type") != "audio/webm" || got.Header().Get("Content-Range") != "bytes 0-4/5" {
+			t.Fatalf("stream %d = status %d, body %q, headers %v", i, got.Code, got.Body.String(), got.Header())
+		}
 	}
-	if _, err := b.resolveURL(context.Background(), tr); err != nil {
-		t.Fatal(err)
-	}
-	if len(r.got) != 1 {
-		t.Fatalf("runner invoked %d times, want 1 (cached)", len(r.got))
+	if len(r.got) != 1 || r.got[0] != "ytsearch:Some Artist - Some Song" || hits.Load() != 2 {
+		t.Fatalf("runner inputs %q, upstream GETs %d; want one search and two GETs", r.got, hits.Load())
 	}
 }
 
@@ -580,8 +592,7 @@ func TestYtdlpCachedNonString(t *testing.T) {
 	c := NewCache(time.Minute)
 	track := &Track{ID: "1", Title: "x"}
 	c.state(cacheKey(track)).entry = &entry{value: 42, expiry: time.Now().Add(time.Minute)}
-	b := &YTDLP{Runner: &fakeRunner{out: []byte(searchFixture)}, CacheTTL: time.Minute}
-	b.SetCache(c)
+	b := &YTDLP{Runner: &fakeRunner{out: []byte(searchFixture)}, CacheTTL: time.Minute, cache: c}
 	_, err := b.resolveURL(context.Background(), track)
 	if !errors.Is(err, ErrService) {
 		t.Fatalf("err = %v, want ErrService", err)

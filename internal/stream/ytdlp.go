@@ -81,8 +81,8 @@ type YTDLP struct {
 	// (qmix#130). Only the search subprocess consumes capacity; the audio
 	// HTTP fetch is never gated. Nil keeps the pre-#130 unbounded behavior.
 	Limiter *ytdlpcap.Limiter
-	// cache is the lazily created TTL cache; mu guards its initialization and
-	// injection so concurrent Stream calls are safe under -race.
+	// cache is the lazily created TTL cache; mu guards its initialization so
+	// concurrent first Stream calls are safe under -race.
 	mu    sync.Mutex
 	cache *Cache
 }
@@ -153,16 +153,6 @@ func (b *YTDLP) cacheRef() *Cache {
 	return b.cache
 }
 
-// SetCache injects a Cache (used by tests to reset or to observe state). It
-// returns the previous cache.
-func (b *YTDLP) SetCache(c *Cache) *Cache {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	prev := b.cache
-	b.cache = c
-	return prev
-}
-
 // cacheKey builds a stable key for the selected yt-dlp input. Direct YouTube
 // paths use the source URL, preventing metadata collisions from sharing audio.
 func cacheKey(t *Track) string {
@@ -203,7 +193,7 @@ func (b *YTDLP) resolveURL(ctx context.Context, t *Track) (string, error) {
 }
 
 // resolveSource carries the selected cache and exact generation used by a
-// subsequent GET. SetCache cannot redirect this request's rejection or retry.
+// subsequent GET, including its status rejection and retry.
 func (b *YTDLP) resolveSource(ctx context.Context, t *Track) (string, *Cache, *entry, func(), error) {
 	c := b.cacheRef()
 	if c == nil {
@@ -328,7 +318,7 @@ func (b *YTDLP) Stream(ctx context.Context, t *Track, rangeHeader string) (*Resu
 }
 
 // A rejected GET gets exactly one fresh lookup and retry. Only the selected
-// cache may receive the terminal invalidation, even if SetCache ran meanwhile.
+// cache may receive the terminal invalidation.
 func (b *YTDLP) retryInvalidMedia(ctx context.Context, c *Cache, t *Track, attempted *entry, rangeHeader string) (*http.Response, error) {
 	var url string
 	var err error
