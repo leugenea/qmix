@@ -8,18 +8,9 @@ import (
 	"github.com/leugenea/qmix/internal/ratelimit"
 )
 
-// Existing callers and tests can keep referring to the room-specific bounds.
-const (
-	MaxRatePerMinute = ratelimit.MaxRatePerMinute
-	MaxBurst         = ratelimit.MaxBurst
-)
-
 // Limiter is one non-blocking token bucket owned by one room incarnation.
 type Limiter struct {
 	bucket *ratelimit.Bucket
-	// Preserve invalid direct struct literals in existing package tests. These
-	// fields cannot grant admission: only an initialized bucket can do that.
-	ratePerSecond, burst, tokens float64
 }
 
 // NewLimiter constructs one room-incarnation bucket. Invalid direct arguments

@@ -10,11 +10,7 @@ import (
 )
 
 // Keep the identity bound here; token-bucket bounds are shared by ratelimit.
-const (
-	MaxRatePerMinute = ratelimit.MaxRatePerMinute
-	MaxBurst         = ratelimit.MaxBurst
-	MaxIdentityLimit = 65_536
-)
+const MaxIdentityLimit = 65_536
 
 type bucket struct {
 	limit    *ratelimit.Bucket
