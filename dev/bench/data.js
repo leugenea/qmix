@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790673292727,
+  "lastUpdate": 1790679692659,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1393,6 +1393,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Kotlin CCN > 10",
             "value": 14,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d57c9162830ae4448d418ce6a31b98e794a76026",
+          "message": "refactor(tv): simplify live room screen (#283)\n\n* test(tv): characterize live room screen before refactor (#269)\n\n* refactor(tv): separate live room screen responsibilities (#269)\n\n* test(tv): arm cancellation cleanup before foreground restart (#269)",
+          "timestamp": "2026-09-29T14:00:56+03:00",
+          "tree_id": "31ff9e27f98419cc29ce31d224658f0598768ad2",
+          "url": "https://github.com/leugenea/qmix/commit/d57c9162830ae4448d418ce6a31b98e794a76026"
+        },
+        "date": 1790679691483,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.124745786439007,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 28.388400928941188,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 13,
             "unit": "functions"
           },
           {
