@@ -78,6 +78,67 @@ func TestPlayerReportUpdatesCurrentAndPublishesExactState(t *testing.T) {
 	}
 }
 
+func TestCurrentDurationSurvivesSkipAndAppearsInPublicViews(t *testing.T) {
+	server, store := newTestServer()
+	mux := newTestMux(server)
+	code, token := createRoom(t, mux)
+	ref, err := store.AppendPreflight(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, track := range []Track{{ID: "known", Title: "Known", DurationSec: 203}, {ID: "unknown", Title: "Unknown"}} {
+		if _, err := store.Append(ref, track); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, cancel := subscribeTestEvents(t, store, server.hub, code)
+	defer cancel()
+	for _, want := range []struct {
+		id       string
+		duration int
+	}{{"known", 203}, {"unknown", 0}} {
+		response := doReq(t, mux, http.MethodPost, "/rooms/"+code+"/skip", "", token)
+		if response.Code != http.StatusOK {
+			t.Fatalf("skip status = %d; body=%s", response.Code, response.Body.String())
+		}
+		var skipped struct {
+			Current map[string]interface{} `json:"current"`
+		}
+		decodeBody(t, response, &skipped)
+		changed := receiveWithin(t, events)
+		if changed.Name != "track_changed" {
+			t.Fatalf("event = %q, want track_changed", changed.Name)
+		}
+		payload := decodeEventPayload[map[string]interface{}](t, changed)
+		state := receiveWithin(t, events)
+		if state.Name != "player_state" || len(decodeEventPayload[map[string]interface{}](t, state)) != 3 {
+			t.Fatalf("player state payload changed: %+v", state)
+		}
+		_ = receiveWithin(t, events) // queue_updated
+		get := doReq(t, mux, http.MethodGet, "/rooms/"+code, "", "")
+		var room struct {
+			Current map[string]interface{} `json:"current"`
+		}
+		decodeBody(t, get, &room)
+		snapshot, err := store.EventSnapshot(code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, current := range map[string]map[string]interface{}{
+			"skip": skipped.Current, "event": payload, "GET": room.Current,
+			"snapshot": snapshot.Data["current"].(map[string]interface{}),
+		} {
+			if current["track_id"] != want.id || current["title"] == nil {
+				t.Fatalf("%s current = %#v", name, current)
+			}
+			duration, present := current["duration_sec"]
+			if want.duration > 0 && duration != float64(want.duration) && duration != want.duration || want.duration == 0 && present {
+				t.Errorf("%s duration = %v, present=%v, want %d", name, duration, present, want.duration)
+			}
+		}
+	}
+}
+
 func TestPlayerReportErrorIsGuestSafe(t *testing.T) {
 	server, _ := newTestServer()
 	mux := newTestMux(server)

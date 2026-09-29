@@ -187,6 +187,8 @@
       overflow-wrap: anywhere;
     }
 
+    .player-detail { margin: 8px 0 0; color: var(--md-sys-color-on-surface-variant); font-size: .875rem; }
+    .player-detail:empty { display: none; }
     .queue { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; counter-reset: queue; }
     .queue li { display: grid; grid-template-columns: 40px 1fr; align-items: center; min-height: 56px; padding: 8px 4px; overflow-wrap: anywhere; counter-increment: queue; }
     .queue li.queue-track-card {
@@ -291,14 +293,17 @@
       <section class="card" aria-labelledby="current-heading">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Live</p>
-            <h2 id="current-heading">Now playing</h2>
+            <p class="eyebrow">Playback</p>
+            <h2 id="current-heading">Current track</h2>
           </div>
           <span class="section-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Zm0 12.25A3.25 3.25 0 1 1 15.25 12 3.25 3.25 0 0 1 12 15.25Zm0-2A1.25 1.25 0 1 0 10.75 12 1.25 1.25 0 0 0 12 13.25Z"/></svg>
           </span>
         </div>
         <p id="current-track" class="current-track">Nothing is playing</p>
+        <p id="player-status" class="player-detail" role="status" aria-live="polite">Idle</p>
+        <p id="player-position" class="player-detail"></p>
+        <p id="connection-status" class="player-detail" role="status" aria-live="polite">Connecting…</p>
       </section>
 
       <section class="card" aria-labelledby="queue-heading">
