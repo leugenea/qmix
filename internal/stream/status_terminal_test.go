@@ -28,11 +28,13 @@ func TestCachePreCanceledStatusRefreshReleasesReservation(t *testing.T) {
 	if canceledLookupCalls.Load() != 0 {
 		t.Fatalf("canceled caller started %d lookups", canceledLookupCalls.Load())
 	}
-	c.mu.Lock()
-	if s := c.states["track"]; s == nil || s.owner != nil || s.entry != attempted {
-		c.mu.Unlock()
-		t.Fatal("pre-canceled rejection mutated ownership or the cached entry")
+	// The canceled attempt must leave the original value reusable. The
+	// concurrent Stream-level counterpart is
+	// TestStatusCanceledBeforeAdmissionKeepsCurrentURL.
+	if got, ok := c.Get("track"); !ok || got != "old" {
+		t.Fatalf("pre-canceled rejection changed cached value: %v, %v", got, ok)
 	}
+	c.mu.Lock()
 	c.state("track").entry.expiry = time.Time{}
 	c.mu.Unlock()
 	if _, err := c.Do("track", func() (interface{}, error) { return "recovered", nil }); err != nil {
