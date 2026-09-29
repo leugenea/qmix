@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790705527242,
+  "lastUpdate": 1790720517221,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1864,6 +1864,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go erosion",
             "value": 23.117684912183755,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 28.388400928941188,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5086f2e93658b2cbdd920b5cf3c2c571b01778d1",
+          "message": "refactor(stream): replace reservation cache with generation-aware flights (#292) (#300)",
+          "timestamp": "2026-09-30T01:21:22+03:00",
+          "tree_id": "381e9226256e60ac858e2cf1f82cd9cc3a436c90",
+          "url": "https://github.com/leugenea/qmix/commit/5086f2e93658b2cbdd920b5cf3c2c571b01778d1"
+        },
+        "date": 1790720516212,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.91730642559347,
             "unit": "%"
           },
           {
