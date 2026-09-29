@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790700764461,
+  "lastUpdate": 1790703375215,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -1751,6 +1751,60 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/a108a68057f146b08d032ff914c12c28e4128428"
         },
         "date": 1790700758457,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.105760444663986,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 28.388400928941188,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "91fa5cabc4f31ccb58d218629b01481eb1f70d35",
+          "message": "test(stream): characterize publication ordering (#290) (#298)",
+          "timestamp": "2026-09-29T20:35:07+03:00",
+          "tree_id": "2346f74cc422af8dbb51b45c53ade5c8f8a94ab4",
+          "url": "https://github.com/leugenea/qmix/commit/91fa5cabc4f31ccb58d218629b01481eb1f70d35"
+        },
+        "date": 1790703373220,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
