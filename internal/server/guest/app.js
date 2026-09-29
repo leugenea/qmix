@@ -3,11 +3,17 @@
 
   const code = decodeURIComponent(window.location.pathname.split("/").filter(Boolean)[1] || "");
   const currentElement = document.getElementById("current-track");
+  const playerStatusElement = document.getElementById("player-status");
+  const playerPositionElement = document.getElementById("player-position");
+  const connectionElement = document.getElementById("connection-status");
   const queueElement = document.getElementById("queue");
   const form = document.getElementById("queue-form");
   const urlInput = document.getElementById("track-url");
   const messageElement = document.getElementById("message");
   let current = null;
+  let lastTrackEnded = false;
+  let pendingPlayerState = null;
+  let playerFrame = null;
   let source = null;
   let retryTimer = null;
   let messageTimer = null;
@@ -21,10 +27,16 @@
     roomEnded = true;
     clearTimeout(retryTimer);
     clearTimeout(messageTimer);
+    cancelAnimationFrame(playerFrame);
+    playerFrame = null;
+    pendingPlayerState = null;
     messageElement.textContent = "";
     delete messageElement.dataset.kind;
     if (source) source.close();
     source = null;
+    playerStatusElement.textContent = "Stopped";
+    playerPositionElement.textContent = "";
+    connectionElement.textContent = "Closed";
     const notice = document.getElementById("room-ended");
     notice.textContent = "This room has ended. Tracks can no longer be added.";
     notice.hidden = false;
@@ -51,8 +63,27 @@
     return track.artist ? `${track.title} — ${track.artist}` : (track.title || "Unknown track");
   }
 
+  function playbackLabel() {
+    if (!current) return lastTrackEnded ? "Ended" : "Idle";
+    return { playing: "Playing", paused: "Paused", error: "Playback error" }[current.state] || "Idle";
+  }
+
+  function positionLabel() {
+    if (!current) return "";
+    const seconds = (value) => `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
+    const position = Number.isInteger(current.pos_sec) && current.pos_sec >= 0 ? seconds(current.pos_sec) : "";
+    const duration = Number.isInteger(current.duration_sec) && current.duration_sec > 0 ? seconds(current.duration_sec) : "";
+    if (!position) return duration ? `Duration ${duration}` : "";
+    return duration ? `${position} / ${duration}` : position;
+  }
+
   function renderCurrent() {
-    currentElement.textContent = trackLabel(current);
+    const label = trackLabel(current);
+    const status = playbackLabel();
+    const position = positionLabel();
+    if (currentElement.textContent !== label) currentElement.textContent = label;
+    if (playerStatusElement.textContent !== status) playerStatusElement.textContent = status;
+    if (playerPositionElement.textContent !== position) playerPositionElement.textContent = position;
   }
 
   function renderQueue(queue) {
@@ -101,9 +132,14 @@
   function connect() {
     if (roomEnded) return;
     if (source) source.close();
+    connectionElement.textContent = source ? "Reconnecting…" : "Connecting…";
+    cancelAnimationFrame(playerFrame);
+    playerFrame = null;
+    pendingPlayerState = null;
     const eventSource = new EventSource(`/rooms/${encodeURIComponent(code)}/events`);
     source = eventSource;
     let checking = false;
+    let snapshotReady = false;
     eventSource.onopen = () => {
       if (source !== eventSource) return;
       retryDelay = 1000;
@@ -112,6 +148,7 @@
       if (source !== eventSource || checking) return;
       checking = true;
       eventSource.close();
+      connectionElement.textContent = "Reconnecting…";
       try {
         const response = await probeRoom();
         if (source !== eventSource) return;
@@ -131,29 +168,52 @@
       if (source !== eventSource) return;
       const data = parseEvent(event);
       if (!data) return;
+      snapshotReady = true;
+      lastTrackEnded = false;
       current = data.current;
       renderCurrent();
       renderQueue(data.queue);
+      connectionElement.textContent = "Live";
     });
     eventSource.addEventListener("queue_updated", (event) => {
       if (source !== eventSource) return;
+      if (!snapshotReady) return;
       const data = parseEvent(event);
       if (data) renderQueue(data.queue);
     });
     eventSource.addEventListener("track_changed", (event) => {
       if (source !== eventSource) return;
+      if (!snapshotReady) return;
       const data = parseEvent(event);
-      if (!data) return;
+      if (!data && event.data.trim() !== "null") return;
+      lastTrackEnded = false;
       current = data;
       renderCurrent();
     });
     eventSource.addEventListener("player_state", (event) => {
       if (source !== eventSource) return;
+      if (!snapshotReady) return;
       const data = parseEvent(event);
-      if (data && current) {
-        current.state = data.state;
+      if (!data || !current || data.track_id !== current.track_id) return;
+      if (data.state === "ended") {
+        cancelAnimationFrame(playerFrame);
+        playerFrame = null;
+        pendingPlayerState = null;
+        current = null;
+        lastTrackEnded = true;
         renderCurrent();
+        return;
       }
+      pendingPlayerState = data;
+      if (playerFrame !== null) return;
+      playerFrame = requestAnimationFrame(() => {
+        playerFrame = null;
+        if (roomEnded || !current || !pendingPlayerState || pendingPlayerState.track_id !== current.track_id || source !== eventSource) return;
+        current.state = pendingPlayerState.state;
+        current.pos_sec = pendingPlayerState.pos_sec;
+        pendingPlayerState = null;
+        renderCurrent();
+      });
     });
     eventSource.addEventListener("room_closed", () => {
       if (source !== eventSource) return;

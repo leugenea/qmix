@@ -35,16 +35,18 @@ type Track struct {
 // position, not a server-side clock. State is playing, paused, or error while a
 // track remains current. Title/Artist keep the audio metadata of the playing
 // track on the room so the stream endpoint and public room view can expose its
-// metadata. URL and ResolvedBy are retained for internal stream
+// metadata. DurationSec retains the resolved duration, if known. URL and
+// ResolvedBy are retained for internal stream
 // source selection and are not exposed through the current-track API.
 type Current struct {
-	TrackID    string
-	PosSec     int
-	State      string
-	URL        string
-	Title      string
-	Artist     string
-	ResolvedBy string
+	TrackID     string
+	PosSec      int
+	State       string
+	URL         string
+	Title       string
+	Artist      string
+	DurationSec int
+	ResolvedBy  string
 }
 
 // playerReport is the validated host playback report applied atomically by the

@@ -217,11 +217,12 @@ type roomView struct {
 }
 
 type curView struct {
-	TrackID string `json:"track_id"`
-	PosSec  int    `json:"pos_sec"`
-	State   string `json:"state"`
-	Title   string `json:"title"`
-	Artist  string `json:"artist"`
+	TrackID     string `json:"track_id"`
+	PosSec      int    `json:"pos_sec"`
+	State       string `json:"state"`
+	Title       string `json:"title"`
+	Artist      string `json:"artist"`
+	DurationSec int    `json:"duration_sec,omitempty"`
 }
 
 func viewRoom(room *Room) roomView {
@@ -234,7 +235,7 @@ func viewRoom(room *Room) roomView {
 }
 
 func viewCurrent(current *Current) curView {
-	return curView{TrackID: current.TrackID, PosSec: current.PosSec, State: current.State, Title: current.Title, Artist: current.Artist}
+	return curView{TrackID: current.TrackID, PosSec: current.PosSec, State: current.State, Title: current.Title, Artist: current.Artist, DurationSec: current.DurationSec}
 }
 
 // handleAddTrack implements queue submission for both public route aliases. The
@@ -616,13 +617,17 @@ func queuePayload(room *Room) map[string]interface{} {
 
 // currentPayload is the current track for track_changed events.
 func currentPayload(cur *Current) map[string]interface{} {
-	return map[string]interface{}{
+	payload := map[string]interface{}{
 		"track_id": cur.TrackID,
 		"pos_sec":  cur.PosSec,
 		"state":    cur.State,
 		"title":    cur.Title,
 		"artist":   cur.Artist,
 	}
+	if cur.DurationSec > 0 {
+		payload["duration_sec"] = cur.DurationSec
+	}
+	return payload
 }
 
 func playerStatePayload(trackID, state string, posSec int) map[string]interface{} {

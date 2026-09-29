@@ -372,7 +372,7 @@ func (s *Store) Skip(code, token string) (map[string]interface{}, error) {
 	}
 	next := room.Queue[0]
 	room.Queue = room.Queue[1:]
-	room.Current = &Current{TrackID: next.ID, State: "playing", URL: next.URL, Title: next.Title, Artist: next.Artist, ResolvedBy: next.ResolvedBy}
+	room.Current = &Current{TrackID: next.ID, State: "playing", URL: next.URL, Title: next.Title, Artist: next.Artist, DurationSec: next.DurationSec, ResolvedBy: next.ResolvedBy}
 	s.touch(room)
 	payload := currentPayload(room.Current)
 	s.publishLocked(room, "track_changed", payload)

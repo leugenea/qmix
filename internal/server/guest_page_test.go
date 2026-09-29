@@ -39,6 +39,21 @@ func TestGuestPageServesRoomUIWithoutAuthentication(t *testing.T) {
 	}
 }
 
+func TestGuestPageProvidesAccessiblePlayerStateAndConnectionIndicators(t *testing.T) {
+	s, _ := newTestServer()
+	mux := newTestMux(s)
+	code, _ := createRoom(t, mux)
+	page := doReq(t, mux, http.MethodGet, "/r/"+code, "", "").Body.String()
+	for _, want := range []string{
+		`id="player-status"`, `id="player-position"`,
+		`id="connection-status"`, `role="status"`, `aria-live="polite"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("guest player view missing %q", want)
+		}
+	}
+}
+
 func TestGuestPageIncludesPersistentRoomEndedNotice(t *testing.T) {
 	s, _ := newTestServer()
 	mux := newTestMux(s)
