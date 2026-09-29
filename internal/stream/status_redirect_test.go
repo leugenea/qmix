@@ -68,6 +68,7 @@ func TestYtdlpRetryRedirectReturnsRedacted502WithoutFollowing(t *testing.T) {
 	const old = "https://media.example/old"
 	const retry = "https://media.example/retry"
 	const leak = "https://media.example/leak?private=1"
+	const recovered = "https://media.example/recovered"
 	firstBody, redirectBody := &closeProbe{text: detail}, &closeProbe{text: detail}
 	var firstHits, retryHits, leakHits atomic.Int32
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -84,11 +85,13 @@ func TestYtdlpRetryRedirectReturnsRedacted502WithoutFollowing(t *testing.T) {
 		case leak:
 			leakHits.Add(1)
 			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {detail}}, Body: io.NopCloser(strings.NewReader(detail)), Request: req}, nil
+		case recovered:
+			return &http.Response{StatusCode: 206, Header: http.Header{"Content-Type": {"audio/webm"}, "Content-Range": {"bytes 20-24/25"}}, Body: io.NopCloser(strings.NewReader("audio")), ContentLength: 5, Request: req}, nil
 		default:
 			return nil, fmt.Errorf("unexpected URL %s", req.URL)
 		}
 	})}
-	runner := &sequenceRunner{urls: []string{old, retry}}
+	runner := &sequenceRunner{urls: []string{old, retry, recovered}}
 	backend := &YTDLP{Runner: runner, Client: client, CacheTTL: time.Minute}
 	req := httptest.NewRequest(http.MethodGet, "/stream", nil)
 	req.Header.Set("Range", "bytes=20-")
@@ -108,8 +111,19 @@ func TestYtdlpRetryRedirectReturnsRedacted502WithoutFollowing(t *testing.T) {
 	if strings.Contains(rec.Body.String(), detail) || strings.Contains(fmt.Sprint(rec.Header()), detail) {
 		t.Fatal("upstream detail leaked")
 	}
-	if backend.cacheRef().GetEntry(cacheKey(testTrack())) != nil {
-		t.Fatal("redirect retry remained cached")
+	for _, h := range []string{"Location", "Content-Range", "Accept-Ranges", "Content-Length"} {
+		if rec.Header().Get(h) != "" {
+			t.Errorf("redirect header %s leaked: %q", h, rec.Header().Get(h))
+		}
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("error Content-Type = %q, want application/json", got)
+	}
+	// The terminal redirect must evict its attempted URL; only a third
+	// resolution can make the next public request succeed.
+	next := serveProxy(t, backend, testTrack(), "bytes=20-")
+	if next.Code != 206 || next.Body.String() != "audio" || next.Header().Get("Content-Range") != "bytes 20-24/25" || firstHits.Load() != 1 || retryHits.Load() != 1 || leakHits.Load() != 0 || runner.calls.Load() != 3 {
+		t.Fatalf("after redirect: status %d body %q headers %v first %d retry %d leak %d lookups %d", next.Code, next.Body.String(), next.Header(), firstHits.Load(), retryHits.Load(), leakHits.Load(), runner.calls.Load())
 	}
 }
 

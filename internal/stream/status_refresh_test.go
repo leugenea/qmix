@@ -42,6 +42,18 @@ func TestYtdlpRepeatedInvalidStatusReturnsSafe502(t *testing.T) {
 		if req.Header.Get("Range") != "bytes=30-" {
 			t.Errorf("retry Range = %q", req.Header.Get("Range"))
 		}
+		if n <= len(bodies) {
+			want := []string{"https://media.example/stale?private=1", "https://media.example/again?private=2"}[n-1]
+			if req.URL.String() != want {
+				t.Errorf("upstream GET %d fetched %s, want %s", n, req.URL, want)
+			}
+		}
+		if n == 3 {
+			if req.URL.String() != "https://media.example/recovered" {
+				t.Errorf("recovery fetched %s", req.URL)
+			}
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"audio/webm"}}, Body: io.NopCloser(strings.NewReader("audio")), ContentLength: 5, Request: req}, nil
+		}
 		if n > len(bodies) {
 			return nil, fmt.Errorf("unexpected upstream hit %d", n)
 		}
@@ -49,7 +61,7 @@ func TestYtdlpRepeatedInvalidStatusReturnsSafe502(t *testing.T) {
 			Header:        http.Header{"Content-Type": {"text/html; " + detail}, "Content-Range": {"bytes 0-1/999"}, "Accept-Ranges": {detail}},
 			ContentLength: 999, Request: req}, nil
 	})}
-	runner := &sequenceRunner{urls: []string{"https://media.example/stale?private=1", "https://media.example/again?private=2"}}
+	runner := &sequenceRunner{urls: []string{"https://media.example/stale?private=1", "https://media.example/again?private=2", "https://media.example/recovered"}}
 	backend := &YTDLP{Runner: runner, Client: client, CacheTTL: time.Minute}
 	track := testTrack()
 	req := httptest.NewRequest(http.MethodGet, "/stream", nil)
@@ -72,11 +84,16 @@ func TestYtdlpRepeatedInvalidStatusReturnsSafe502(t *testing.T) {
 			t.Errorf("upstream header %s leaked: %q", h, rec.Header().Get(h))
 		}
 	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("error Content-Type = %q, want application/json", got)
+	}
 	if strings.Contains(rec.Body.String(), detail) || strings.Contains(rec.Header().Get("Content-Type"), detail) {
 		t.Fatal("upstream error detail leaked")
 	}
-	if _, ok := backend.cacheRef().Get(cacheKey(track)); ok {
-		t.Fatal("second rejected URL remains cached")
+	// A later public request must look up a new URL, not revisit either rejected URL.
+	recovered := serveProxy(t, backend, track, "bytes=30-")
+	if recovered.Code != 200 || recovered.Body.String() != "audio" || hits.Load() != 3 || runner.calls.Load() != 3 {
+		t.Fatalf("recovery: status %d, body %q, hits %d, searches %d", recovered.Code, recovered.Body.String(), hits.Load(), runner.calls.Load())
 	}
 }
 
@@ -94,6 +111,9 @@ func TestYtdlpAcceptedStatusesDoNotRefresh(t *testing.T) {
 			var hits atomic.Int32
 			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				hits.Add(1)
+				if req.URL.String() != "https://media.example/audio" {
+					t.Errorf("media GET fetched %s, want https://media.example/audio", req.URL)
+				}
 				if req.Header.Get("Range") != tc.rangeHeader {
 					t.Errorf("Range = %q, want %q", req.Header.Get("Range"), tc.rangeHeader)
 				}
@@ -104,14 +124,12 @@ func TestYtdlpAcceptedStatusesDoNotRefresh(t *testing.T) {
 			backend := &YTDLP{Runner: runner, Client: client, CacheTTL: time.Minute}
 			track := testTrack()
 			rec := serveProxy(t, backend, track, tc.rangeHeader)
-			if rec.Code != tc.status || rec.Body.String() != tc.body || rec.Header().Get("Content-Range") != tc.contentRange || rec.Header().Get("Accept-Ranges") != "bytes" || rec.Header().Get("Content-Type") != "audio/webm" {
+			if rec.Code != tc.status || rec.Body.String() != tc.body || rec.Header().Get("Content-Range") != tc.contentRange || rec.Header().Get("Accept-Ranges") != "bytes" || rec.Header().Get("Content-Type") != "audio/webm" || rec.Header().Get("Content-Length") != fmt.Sprint(len(tc.body)) {
 				t.Fatalf("status %d, body %q, headers %v", rec.Code, rec.Body.String(), rec.Header())
 			}
-			if hits.Load() != 1 || runner.calls.Load() != 1 {
-				t.Fatalf("hits %d, searches %d; want 1", hits.Load(), runner.calls.Load())
-			}
-			if url, ok := backend.cacheRef().Get(cacheKey(track)); !ok || url != "https://media.example/audio" {
-				t.Fatalf("cached URL = %v, %v", url, ok)
+			second := serveProxy(t, backend, track, tc.rangeHeader)
+			if second.Code != tc.status || second.Body.String() != tc.body || hits.Load() != 2 || runner.calls.Load() != 1 {
+				t.Fatalf("reuse: status %d, body %q, hits %d, searches %d", second.Code, second.Body.String(), hits.Load(), runner.calls.Load())
 			}
 		})
 	}
@@ -130,55 +148,92 @@ func TestYtdlpInvalidStatusRetriesWithoutCache(t *testing.T) {
 		_, _ = io.WriteString(w, "audio")
 	}))
 	defer upstream.Close()
-	runner := &sequenceRunner{urls: []string{upstream.URL + "/old", upstream.URL + "/new"}}
+	runner := &sequenceRunner{urls: []string{upstream.URL + "/old", upstream.URL + "/new", upstream.URL + "/new"}}
 	backend := &YTDLP{Runner: runner, Client: upstream.Client(), CacheTTL: -1}
 	rec := serveProxy(t, backend, testTrack(), "")
-	if rec.Code != 200 || rec.Body.String() != "audio" || hits.Load() != 2 || runner.calls.Load() != 2 || backend.cacheRef() != nil {
+	if rec.Code != 200 || rec.Body.String() != "audio" || hits.Load() != 2 || runner.calls.Load() != 2 {
 		t.Fatalf("status %d body %q hits %d searches %d", rec.Code, rec.Body.String(), hits.Load(), runner.calls.Load())
+	}
+	second := serveProxy(t, backend, testTrack(), "")
+	if second.Code != 200 || second.Body.String() != "audio" || hits.Load() != 3 || runner.calls.Load() != 3 {
+		t.Fatalf("uncached next request: status %d body %q hits %d searches %d", second.Code, second.Body.String(), hits.Load(), runner.calls.Load())
 	}
 }
 
 func TestYtdlpRefreshOverloadKeepsPublic503(t *testing.T) {
 	limiter := ytdlpcap.New(1, 0)
-	backend := &YTDLP{CacheTTL: time.Minute, Limiter: limiter}
+	runner := &sequenceRunner{urls: []string{"https://media.example/old", "https://media.example/new"}}
+	backend := &YTDLP{Runner: runner, CacheTTL: time.Minute, Limiter: limiter}
 	track := testTrack()
-	cache := backend.cacheRef()
-	if _, err := cache.Do(cacheKey(track), func() (interface{}, error) { return "https://media.example/old", nil }); err != nil {
-		t.Fatal(err)
-	}
 	var hits atomic.Int32
+	var reject atomic.Bool
 	backend.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		hits.Add(1)
-		return &http.Response{StatusCode: 403, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("bad")), Request: req}, nil
+		n := hits.Add(1)
+		want := "https://media.example/old"
+		if n == 3 {
+			want = "https://media.example/new"
+		}
+		if req.URL.String() != want {
+			t.Errorf("upstream GET %d fetched %s, want %s", n, req.URL, want)
+		}
+		status := http.StatusOK
+		body := "audio"
+		if reject.Load() && req.URL.Path == "/old" {
+			status, body = http.StatusForbidden, "bad"
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"audio/webm"}}, Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body)), Request: req}, nil
 	})}
+	if first := serveProxy(t, backend, track, ""); first.Code != 200 || first.Body.String() != "audio" || runner.calls.Load() != 1 {
+		t.Fatalf("prime: status %d body %q lookups %d", first.Code, first.Body.String(), runner.calls.Load())
+	}
+	reject.Store(true)
 	if err := limiter.Acquire(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer limiter.Release()
+	held := true
+	defer func() {
+		if held {
+			limiter.Release()
+		}
+	}()
 	req := httptest.NewRequest(http.MethodGet, "/stream", nil)
 	rec := httptest.NewRecorder()
 	err := ServeStream(rec, req, backend, track)
-	if !errors.Is(err, ytdlpcap.ErrOverloaded) || rec.Code != 503 || rec.Header().Get("Retry-After") != RetryAfterOverloaded || hits.Load() != 1 {
-		t.Fatalf("status %d, retry-after %q, hits %d, err %v", rec.Code, rec.Header().Get("Retry-After"), hits.Load(), err)
+	if !errors.Is(err, ytdlpcap.ErrOverloaded) || rec.Code != 503 || rec.Header().Get("Retry-After") != RetryAfterOverloaded || rec.Body.String() != `{"error":"overloaded","message":"stream resolver is temporarily overloaded"}` || hits.Load() != 2 || runner.calls.Load() != 1 {
+		t.Fatalf("status %d, body %q, retry-after %q, hits %d, lookups %d, err %v", rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"), hits.Load(), runner.calls.Load(), err)
+	}
+	limiter.Release()
+	held = false
+	reject.Store(false)
+	if next := serveProxy(t, backend, track, ""); next.Code != 200 || next.Body.String() != "audio" || hits.Load() != 3 || runner.calls.Load() != 2 {
+		t.Fatalf("after overload: status %d body %q hits %d lookups %d", next.Code, next.Body.String(), hits.Load(), runner.calls.Load())
 	}
 }
 
 func TestYtdlpTransportFailureDoesNotRefresh(t *testing.T) {
 	var hits atomic.Int32
 	runner := &sequenceRunner{urls: []string{"https://media.example/audio"}}
-	backend := &YTDLP{Runner: runner, CacheTTL: time.Minute, Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		hits.Add(1)
-		return nil, errors.New("transport unavailable")
+	backend := &YTDLP{Runner: runner, CacheTTL: time.Minute, Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != runner.urls[0] {
+			t.Errorf("media URL = %s", req.URL)
+		}
+		if hits.Add(1) == 1 {
+			return nil, errors.New("transport unavailable")
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"audio/webm"}}, Body: io.NopCloser(strings.NewReader("audio")), ContentLength: 5, Request: req}, nil
 	})}}
 	track := testTrack()
-	if _, err := backend.Stream(context.Background(), track, ""); !errors.Is(err, ErrService) {
-		t.Fatalf("error = %v, want ErrService", err)
+	req := httptest.NewRequest(http.MethodGet, "/stream", nil)
+	rec := httptest.NewRecorder()
+	if err := ServeStream(rec, req, backend, track); !errors.Is(err, ErrService) || rec.Code != 502 || rec.Body.String() != `{"error":"upstream_failure","message":"audio service is temporarily unavailable"}` {
+		t.Fatalf("status %d body %q error = %v, want safe 502 and ErrService", rec.Code, rec.Body.String(), err)
 	}
 	if hits.Load() != 1 || runner.calls.Load() != 1 {
 		t.Fatalf("hits %d, searches %d; want 1 each", hits.Load(), runner.calls.Load())
 	}
-	if v, ok := backend.cacheRef().Get(cacheKey(track)); !ok || v != runner.urls[0] {
-		t.Fatalf("transport failure evicted URL: %v, %v", v, ok)
+	second := serveProxy(t, backend, track, "")
+	if second.Code != 200 || second.Body.String() != "audio" || hits.Load() != 2 || runner.calls.Load() != 1 {
+		t.Fatalf("transport recovery: status %d body %q hits %d searches %d", second.Code, second.Body.String(), hits.Load(), runner.calls.Load())
 	}
 }
 
