@@ -20,13 +20,49 @@ Completed:
 - **Integration tests** for the main scenarios — required `integration-mandatory` CI job.
 - **Code quality** — [per-language complexity erosion and informational duplication reports](docs/code-quality.md), with both erosion and duplication history and non-blocking alert semantics.
 - Updated toolchain: Go 1.25 / alpine 3.24, with compose configured for deployment constraints (port 8180, `mem_limit`, `restart: on-failure:3`).
-- **M5** — guest PWA, completed in #55.
+- **M5** — guest web app, implemented in #55; installation and offline mode are not MVP guarantees.
 
 In progress / next:
 
 - **M4** — the single-module Kotlin/Compose for TV scaffold, Media3 playback engine, room creation/QR flow, live room synchronization, queue advancement, authoritative local playback coordination, player-state publishing, focused local playback controls, and foreground recovery are implemented via #71, #72, #73, #101, #124, #121, #122, #123, and #65 (see [`android/README.md`](android/README.md)). Published-artifact and target-hardware acceptance remain in #62.
 - **M6** — Definition of Done (E2E + v0.1.0).
 - Automatic Yandex token refresh through `QMIX_YM_REFRESH_TOKEN` (`goym` does not provide built-in refresh support, so this is a separate task).
+
+## Guest web app and room synchronization
+
+Guests open `/r/{code}` in a phone browser, directly or through the TV's QR
+invitation, without an account or an installation step. The guest web app
+submits supported music links and displays the current track, last
+host-reported playback state/position, and queue.
+
+SSE recovery is **snapshot-only** (qmix#140). Every successful connection to
+`GET /rooms/{code}/events`, including a reconnection, starts with a fresh
+`queue_snapshot` containing the complete current track and queue. The server
+ignores `Last-Event-ID`: event IDs do not provide retained history or replay of
+missed events. Subsequent live events describe changes after that snapshot.
+The guest web app applies snapshot and event payloads directly and remains
+visibly reconnecting until the new stream supplies its snapshot. Android TV
+instead treats room change events as invalidations and reconciles through
+`GET /rooms/{code}`, including after SSE reopens; it does not apply SSE payloads
+as room state.
+
+The web app manifest supplies presentation metadata (name, icons, colors, and
+display preference). There is no service worker or implemented offline mode;
+the manifest does not guarantee installation, an install prompt, offline page
+loading, or offline queue submission, even over HTTPS.
+
+Trusted-LAN HTTP is supported, for example a guest web app invitation at
+`http://192.168.1.20:8180/r/ABCD`. It is **insecure**: traffic and host credentials
+can be observed or modified on the network. Do not expose this HTTP deployment
+to untrusted networks. A private LAN HTTP origin is not normally a secure
+context for service workers; localhost development exceptions do not make a
+phone's remote LAN origin secure. HTTPS is supported and recommended for public
+or remote deployment, with TLS termination at a reverse proxy.
+
+See [guest web app examples and current MVP acceptance](docs/guest-web-app.md).
+Post-MVP work is separate: [SSE replay #141](https://github.com/leugenea/qmix/issues/141),
+[guest installability #142](https://github.com/leugenea/qmix/issues/142), and
+[useful offline mode #143](https://github.com/leugenea/qmix/issues/143).
 
 ## Streaming
 
@@ -227,7 +263,8 @@ real socket with the full `App.Handler()`, without network access or secrets:
 
 - `/healthz`;
 - room lifecycle: create -> get -> add track -> skip/reorder (host token);
-- SSE: snapshot on connection, mutation events, and snapshot on reconnection;
+- SSE: fresh snapshot on every connection, live mutation events, and a fresh
+  snapshot on reconnection even when `Last-Event-ID` is supplied (no replay);
 - host player reports over `PATCH /rooms/{code}/player`, including pause, seek,
   safe error state, completion, exact SSE payloads, and reconnect consistency;
 - adding a track through a mock resolver (unknown link -> 422);
@@ -629,4 +666,4 @@ database extraction is undocumented and not recommended.
 
 - Backend: Go, REST + SSE, in-memory state
 - TV host: Kotlin + Compose for TV + Media3; scaffold, room creation/QR, live synchronization, queue advancement, authoritative local playback coordination, player-state publishing, focused local playback controls, and foreground-only recovery are implemented; published-artifact and target-hardware acceptance remain owned by #62
-- Guests: login-free PWA (completed in #55)
+- Guests: login-free guest web app (implemented in #55; no guaranteed installation or offline mode)
