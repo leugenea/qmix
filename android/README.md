@@ -38,14 +38,23 @@ cd android
 ./gradlew --no-daemon :app:connectedDebugAndroidTest
 ```
 
-## Backend and guest addresses
+## Backend and guest web app addresses
 
 The first setup screen is intentionally blank. Enter the backend API base URL
-and the guest web origin; there is no production-looking fallback host. After a
+and the guest web app origin; there is no production-looking fallback host. After a
 room is created successfully, both canonical addresses are stored in the app's
 private `SharedPreferences` and restored after process or device restart. Host
 tokens are never stored with these settings and are never added to invitation
 URLs or QR codes.
+
+The invitation opens the login-free guest web app in a phone browser. For
+example, guest origin `http://192.168.1.20:8180` and room URL `/r/ABCD` produce
+QR contents `http://192.168.1.20:8180/r/ABCD`; an HTTPS guest origin such as
+`https://qmix.example` produces `https://qmix.example/r/ABCD`. No installation
+step is required or guaranteed. The manifest is presentation metadata only;
+there is no service worker or implemented offline mode. Ordinary private-LAN
+HTTP is not a secure context for service workers, unlike localhost development
+exceptions. See [guest web app acceptance and deferred work](../docs/guest-web-app.md).
 
 HTTPS remains supported and is recommended for every public or remote
 deployment. A trusted-LAN deployment may use addresses such as
@@ -93,14 +102,21 @@ before another collection can start. The Flow is non-conflated, so every
 completed refresh remains observable even when its value equals the previous
 snapshot.
 
-The repository treats SSE as invalidation only: the four room change events
-trigger a complete `GET /rooms/{code}` reconciliation, while heartbeats and
+The backend sends a fresh `queue_snapshot` on every successful SSE connection,
+including reconnections, and ignores `Last-Event-ID`; no missed-event replay is
+implemented (qmix#140; [post-MVP replay #141](https://github.com/leugenea/qmix/issues/141)).
+Unlike the guest web app, which applies snapshot and live-event payloads, the
+repository treats SSE as invalidation only: `queue_snapshot`, `queue_updated`,
+`track_changed`, and `player_state` trigger a complete `GET /rooms/{code}`
+reconciliation, while heartbeats and
 payload data are ignored. REST reads are serialized and coalesced, so an event
 received during a request causes exactly one follow-up request without allowing
 older responses to overwrite newer state. The SSE connection reconnects with
-capped exponential backoff and jitter. REST retains the 15-second call timeout;
-the long-lived SSE client disables call and read timeouts and owns reconnect
-policy explicitly. A 404 ends synchronization, network failures preserve the
+capped exponential backoff and jitter; reopening it triggers a fresh REST read.
+REST retains the 15-second call timeout; the long-lived SSE client disables the
+overall call timeout but uses a 45-second read timeout, allowing three server
+heartbeat intervals (qmix#213), and owns reconnect policy explicitly. A 404 ends
+synchronization, network failures preserve the
 last room state as stale, and cancellation closes the request, event stream,
 retry, and periodic work.
 
@@ -189,7 +205,7 @@ Remember per host session whether any authoritative room snapshot **ever**
 contained a queued or current track, including one since played, skipped, or
 removed; a later empty snapshot does not reset this flag. If no track was ever
 observed, retire the missing session, create one replacement room, and display
-its new code, guest URL, and QR with a short "room expired; here is a new room"
+its new code, guest web app URL, and QR with a short "room expired; here is a new room"
 notice. Automatic replacement returns to the Invitation screen even if the host
 was in LiveRoom; press **Enter room** again. If a track was observed on either
 screen, do **not** silently replace the lost session: switch to the LiveRoom

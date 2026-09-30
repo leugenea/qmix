@@ -3,7 +3,7 @@
 ## 1. Overview
 
 QMix is a collaborative music player. A host starts the player on Google TV and
-creates a room; friends join it from their phones through a link (PWA, no
+creates a room; friends join it from their phones through a link (guest web app, no
 account required) and add supported Spotify, YouTube, VK, or Yandex Music links
 to a shared queue. The backend resolves each link to track metadata, locates an
 audio source, and streams it to the player. All participants see the current
@@ -22,14 +22,14 @@ stream.
 - Resolution of Spotify, YouTube, VK, and Yandex Music links to track metadata
 - Audio streaming through a single streaming backend
 - Real-time state synchronization (current track and queue) over SSE
-- A TV application (Kotlin + Media3) and a guest PWA
+- A TV application (Kotlin + Media3) and a guest web app
 
 **Intentionally excluded from the MVP:**
 - Accounts, authentication, and personal playlists
 - Voting, likes, and ratings
 - Public or searchable rooms
 - Torrents and peer-to-peer sources
-- Offline mode
+- Event-history replay, guaranteed guest installation, and offline mode
 
 ## 3. Stack
 
@@ -39,7 +39,7 @@ stream.
 | Realtime | SSE + REST | Sufficient for the queue and current track; simpler than WebSocket and works through proxies |
 | State | In-memory, no database | One store supports multiple ephemeral rooms; no persistence is required for the MVP |
 | TV | Kotlin + Media3 (ExoPlayer) | Standard Android TV stack with built-in streaming and D-pad support |
-| PWA | Minimal SPA | Guests can join without installing an app or creating an account |
+| Guest web app | Minimal SPA | Guests can join in a browser without installing an app or creating an account |
 
 The backend uses Go's standard library by default. For solved problems, it uses
 maintained libraries rather than custom implementations. Link resolution and
@@ -59,7 +59,7 @@ that cover the complete requirement.
   TV app ──────────►│  Rooms + Queues (in-memory) │
   (Kotlin/Media3)   │        REST + SSE           │
                     │            │                │
-  PWA guest ───────►│            │                │
+  Guest web app ──►│            │                │
   (phone, no auth)  │            ▼                │
                     │   ┌──────────────────┐      │
                     │   │ Resolver plugin  │      │
@@ -92,8 +92,11 @@ that cover the complete requirement.
   Returning from the background
   cannot resume audio or issue queue commands until a fresh matching room read
   establishes the authoritative current; replacement selections remain paused.
-- **PWA** — the guest page for submitting supported links and viewing the queue
-  and current track, with a dark theme.
+- **Guest web app** — the browser page for submitting supported links and viewing
+  the queue and current track, with a dark theme. Its manifest supplies
+  presentation metadata (name, icons, colors, and display preference), not an
+  installation or offline guarantee. There is no service worker or implemented
+  offline mode, including in HTTPS deployments.
 
 ## 5. Data model
 
@@ -148,7 +151,7 @@ through `StreamBackend` and caches the URL with a TTL
   limited to 4 KiB and each room holds at most 100 queued tracks. When the
   shared yt-dlp capacity queue is full, resolution is rejected with `503` plus
   `Retry-After`. This is the canonical submission route
-- `GET /r/{code}` — get the guest room page (no login)
+- `GET /r/{code}` — get the guest web app room page (no login)
 - `POST /r/{code}/queue` — compatibility alias for the same queue-submission
   operation. Its historical `201 {"status":"accepted","track":...}` success
   body is retained; the canonical route retains its historical bare track body
@@ -210,7 +213,8 @@ and credentials are never accepted, stored, published, logged, or returned.
 
 **SSE**
 - `GET /rooms/{code}/events` — event stream:
-  - `queue_snapshot` — complete state on connection or reconnection (`Last-Event-ID`)
+  - `queue_snapshot` — fresh complete current-track and queue state on every
+    successful connection or reconnection; independent of `Last-Event-ID`
   - `queue_updated` — queue changed (append or reorder)
   - `track_changed` — current track changed
   - `player_state` — exact `{track_id,state,pos_sec}` player report or initial
@@ -220,9 +224,21 @@ and credentials are never accepted, stored, published, logged, or returned.
     It is a lifecycle signal, not a queue or playback update; clients must stop
     reconnecting and submitting links for that room rather than awaiting another
     snapshot. New event connections for the closed code receive `404`.
-    The guest PWA treats an SSE error followed by `GET /r/{code}` returning
+    The guest web app treats an SSE error followed by `GET /r/{code}` returning
     `404`, or a queue-submit `404`, as an ended room if the terminal event
     was missed; inconclusive lookups keep the normal reconnect backoff.
+
+Reconnect is **snapshot-only** (qmix#140). The server ignores `Last-Event-ID`
+and retains no event history for replay. An `id:` field is a live sequencing
+boundary, not a resumable history cursor; missed intermediate events are not
+delivered on reconnect. The guest web app replaces current/queue from the new
+snapshot, then applies live `queue_updated`, `track_changed`, and `player_state`
+payloads. It shows reconnecting until that snapshot arrives and ignores data
+from obsolete connections. Android ignores SSE payload data and uses the four
+room change event names as invalidations for a serialized, coalesced
+`GET /rooms/{code}` reconciliation; a reopened stream also requests a fresh
+REST read. Neither client depends on replay. See
+[guest web app examples and current MVP acceptance](docs/guest-web-app.md).
 
 The server flushes an SSE comment (`: ping`) every 15 seconds when otherwise
 idle. The Android client uses a 45-second **read** timeout (qmix#213), allowing
@@ -491,8 +507,8 @@ or 24-hour non-empty lifetime.
   when empty (no queued or current track), it expires after 12 hours of
   inactivity. Non-empty rooms expire after 24 hours without a queue or playback
   mutation, bounding memory retained by abandoned queues.
-- SSE clients can reconnect; on connection they receive a `queue_snapshot`
-  containing the complete state.
+- SSE clients recover by fresh snapshot, not replay: every successful connection
+  receives a complete `queue_snapshot`, regardless of `Last-Event-ID`.
 - **TV missing-room recovery (qmix#264):** A definitive `404` from
   room REST or SSE while the foreground invitation QR **or** live room is shown,
   including a foreground-return room read, means the old room is gone; a timeout,
@@ -561,6 +577,18 @@ or 24-hour non-empty lifetime.
 
 ## 9. Deployment
 
+- Trusted-LAN HTTP is supported for the TV API and guest web app, but provides
+  no transport confidentiality or integrity: network peers can observe or
+  modify room traffic and host credentials. Android requires a one-time HTTP
+  warning acknowledgement. Do not expose HTTP to untrusted networks. HTTPS is
+  supported and recommended for public or remote deployment, terminated at a
+  reverse proxy in front of the HTTP backend.
+- An ordinary private LAN HTTP origin is not a secure context for service
+  workers. Localhost/loopback development exceptions do not apply to a phone
+  opening a remote LAN address. This MVP has no service worker even over HTTPS;
+  its manifest is presentation metadata, not an offline or installability
+  promise. [Guest web app invitation examples](docs/guest-web-app.md#invitation-examples)
+  cover both deployment forms.
 - `cmd/qmix` reads all runtime `QMIX_*` variables once into one typed
   `internal/config.Config` before constructing the logger and application. That
   aggregate owns address, logging, optional resolver credentials, the shared
@@ -658,5 +686,11 @@ or 24-hour non-empty lifetime.
 - Public and searchable rooms
 - Torrents and peer-to-peer audio sources
 - Accounts, authentication, and personal data
-- Offline mode and client-side caching
+- Retained SSE event history and `Last-Event-ID` replay
+  ([post-MVP #141](https://github.com/leugenea/qmix/issues/141))
+- Guaranteed guest installability
+  ([secure-deployment work #142](https://github.com/leugenea/qmix/issues/142))
+- Offline mode and application-managed client-side caching
+  ([post-MVP #143](https://github.com/leugenea/qmix/issues/143)); ordinary browser
+  HTTP caching of assets is not an offline feature
 - Multiple hosts and transfer of room control
