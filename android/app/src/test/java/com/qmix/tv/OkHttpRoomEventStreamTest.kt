@@ -189,8 +189,14 @@ class OkHttpRoomEventStreamTest {
         assertCallbackHandoff(downstreamBufferCapacity = 0)
     }
 
+    /** qmix#308: a dropped saturated HTTP404 callback still closes and naturally cleans up. */
+    @Test
+    fun saturated_http_404_callback_preserves_owned_prefix_and_natural_cleanup() = runTest {
+        assertCallbackHandoff(downstreamBufferCapacity = null, terminalFailure404 = true)
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
-    private suspend fun TestScope.assertCallbackHandoff(downstreamBufferCapacity: Int?) {
+    private suspend fun TestScope.assertCallbackHandoff(downstreamBufferCapacity: Int?, terminalFailure404: Boolean = false) {
         val rawDefaultBuffer = System.getProperty("kotlinx.coroutines.channels.defaultBuffer")
         // Pinned coroutines 1.9.0 uses 64 only when the JVM property is absent.
         // A malformed explicit value remains null, never silently falls back to 64.
@@ -235,7 +241,13 @@ class OkHttpRoomEventStreamTest {
                     eventTypes.forEach { type ->
                         productionListener.onEvent(source, "ignored", type, "ignored")
                     }
-                    productionListener.onClosed(source)
+                    if (terminalFailure404) {
+                        productionListener.onFailure(
+                            source, null, response.newBuilder().code(404).message("Not Found").build(),
+                        )
+                    } else {
+                        productionListener.onClosed(source)
+                    }
                     // These are callback/return-tail receipts, not admission acknowledgements.
                     burstReturned.complete(Unit)
                     sourceToReturn = source
