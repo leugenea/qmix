@@ -1127,6 +1127,172 @@ class SequentialRoomRepositoryTest {
         }
     }
 
+    /** qmix#308: finite SSE404 holds child-free Missing send while the original GET stays gated. */
+    @Test
+    fun child_free_sse_404_missing_send_waits_for_command4_and_retires_the_held_get_naturally() = runTest {
+        assertSaturatedSse404Missing()
+    }
+
+    private suspend fun TestScope.assertSaturatedSse404Missing() {
+        val fixture = Fixture(this)
+        val collectorEntered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val collectorReturnTailReached = CompletableDeferred<Unit>()
+        val releaseInvalidations = CompletableDeferred<Unit>()
+        val failureReturned = CompletableDeferred<Unit>()
+        val missingEntered = CompletableDeferred<Unit>()
+        val releaseMissing = CompletableDeferred<Unit>()
+        val missingReturnTailReached = CompletableDeferred<Unit>()
+        val naturalCollectReturned = CompletableDeferred<Unit>()
+        var collectionJob: Job? = null
+        var primaryFailure: Throwable? = null
+        // Register releases and failure cleanup before allocating even the lazy collection.
+        try {
+            fixture.events.script = { connection ->
+                emit(RoomEventStreamEvent.Opened)
+                releaseInvalidations.await()
+                // Bypass the inherited, inert UNLIMITED mailbox: four actual inline send returns.
+                connection.emitFourInvalidations(this)
+                emit(RoomEventStreamEvent.Failure(404))
+                failureReturned.complete(Unit)
+                // Normal return immediately enters the source's ordinary, ungated finally.
+            }
+            val job = launch(StandardTestDispatcher(testScheduler), start = CoroutineStart.LAZY) {
+                fixture.repository.observe("ABCD").collect { state ->
+                    fixture.observed += state
+                    if (state == active(connection = LiveConnection.CONNECTED)) {
+                        collectorEntered.complete(Unit)
+                        releaseCollector.await()
+                        collectorReturnTailReached.complete(Unit)
+                    }
+                    if (state == RoomSyncState.Missing("ABCD")) {
+                        missingEntered.complete(Unit)
+                        releaseMissing.await()
+                        missingReturnTailReached.complete(Unit)
+                    }
+                }
+                naturalCollectReturned.complete(Unit)
+            }
+            collectionJob = job
+            job.start()
+            awaitRefreshPhase("SSE404 CONNECTED hold entered", fixture::commandLastState) { collectorEntered.await() }
+            awaitRefreshPhase("SSE404 held initial GET entered", fixture::commandLastState) { fixture.fetcher.initialEntered.await() }
+            runCurrent()
+            val request = fixture.fetcher.requests.single()
+            val connection = fixture.events.connections.single()
+            val eventProducer = connection.producer
+            val initialProducer = request.producer
+            // Save the actual shared parent and all three identities before any role detaches.
+            val owner = requireNotNull(eventProducer.parent)
+            assertSame("original GET and event share the repository owner", owner, initialProducer.parent)
+            val periodic = owner.children.single { it !== eventProducer && it !== initialProducer }
+            assertEquals(setOf(eventProducer, initialProducer, periodic), owner.children.toSet())
+            assertTrue("original event role active before source release", eventProducer.isActive)
+            assertTrue("original GET role positively entered and held", initialProducer.isActive)
+            assertTrue("original periodic role live before its deadline", periodic.isActive)
+            assertFalse("source release still closed", releaseInvalidations.isCompleted)
+            assertFalse("initial GET has no result", request.result.isCompleted)
+            assertFalse("CONNECTED release still closed", releaseCollector.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals("bootstrap and Opened consumed before saturation", 0L, testScheduler.currentTime)
+
+            releaseInvalidations.complete(Unit)
+            connection.awaitFourReturns(fixture::commandLastState)
+            awaitRefreshPhase("inline Failure404 returned, not Missing admission", fixture::commandLastState) { failureReturned.await() }
+            awaitRefreshPhase("finite SSE404 source finally entered", fixture::commandLastState) { connection.cleanupEntered.await() }
+            awaitRefreshPhase("finite SSE404 source return tail reached", fixture::commandLastState) { connection.cleanupReturned.await() }
+            runCurrent()
+            // Failure only assigns status404. With source gates/children excluded and Command4 full,
+            // collectEvents' next operation at RoomRepository.kt:205 is the held Missing send.
+            // Source-tail reach (including its unconditional cancelled flag) is not Job retirement.
+            assertTrue("the sole source release is open", releaseInvalidations.isCompleted)
+            assertTrue("exact event role holds the source-assisted terminal send", eventProducer.isActive)
+            assertFalse("source return tail is not whole event completion", eventProducer.isCompleted)
+            assertTrue("no child cleanup can impersonate event send hold", eventProducer.children.none())
+            assertFalse("CONNECTED gate remains closed after four send returns", releaseCollector.isCompleted)
+            assertFalse("CONNECTED callback has not returned", collectorReturnTailReached.isCompleted)
+            assertFalse("Missing has not been published", missingEntered.isCompleted)
+            assertTrue("GET still waits independently for its result", initialProducer.isActive)
+            assertFalse("GET result never released to fill Command4", request.result.isCompleted)
+            assertFalse("GET cancellation has not begun", request.cancelled)
+            assertFalse("GET cleanup has not entered", request.cleanupEntered.isCompleted)
+            assertFalse("GET cleanup has not returned", request.cleanupReturned.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals("no timer command contributes to saturation", 0L, testScheduler.currentTime)
+
+            releaseCollector.complete(Unit)
+            awaitRefreshPhase("SSE404 CONNECTED callback return tail", fixture::commandLastState) { collectorReturnTailReached.await() }
+            awaitRefreshPhase("authoritative SSE404 Missing callback entered", fixture::commandLastState) { missingEntered.await() }
+            awaitRefreshPhase("exact finite event role joined successfully", fixture::commandLastState) { eventProducer.join() }
+            runCurrent()
+            // Missing entry and sender termination may occur in either order; both are now positive.
+            assertTrue("original event whole terminal reached", eventProducer.isCompleted)
+            assertFalse("finite source and event role completed without cancellation", eventProducer.isCancelled)
+            assertFalse("Missing release still closed", releaseMissing.isCompleted)
+            assertFalse("Missing callback has not returned", missingReturnTailReached.isCompleted)
+            assertTrue("held Missing leaves the original GET live", initialProducer.isActive)
+            assertTrue("held Missing leaves the original timer live", periodic.isActive)
+            assertFalse("GET result remains incomplete under public Missing", request.result.isCompleted)
+            assertFalse("held Missing has not cancelled GET", request.cancelled)
+            assertFalse("held Missing has not entered GET cleanup", request.cleanupEntered.isCompleted)
+            assertFalse("held Missing has not reached GET cleanup tail", request.cleanupReturned.isCompleted)
+            assertFalse("whole collect has not returned", naturalCollectReturned.isCompleted)
+            assertFalse("collection still owns the Missing hold", job.isCompleted)
+            assertEquals(
+                listOf(active(), active(connection = LiveConnection.CONNECTED), RoomSyncState.Missing("ABCD")),
+                fixture.observed,
+            )
+            assertEquals("public terminal backpressure remains at time zero", 0L, testScheduler.currentTime)
+
+            releaseMissing.complete(Unit)
+            awaitRefreshPhase("SSE404 Missing callback return tail", fixture::commandLastState) { missingReturnTailReached.await() }
+            awaitRefreshPhase("held GET cancellation cleanup entered", fixture::commandLastState) { request.cleanupEntered.await() }
+            awaitRefreshPhase("held GET cancellation cleanup returned", fixture::commandLastState) { request.cleanupReturned.await() }
+            awaitRefreshPhase("SSE404 public collect returned naturally", fixture::commandLastState) { naturalCollectReturned.await() }
+            awaitRefreshPhase("exact SSE404 collection joined naturally", fixture::commandLastState) { job.join() }
+            awaitRefreshPhase("original SSE404 event whole join", fixture::commandLastState) { eventProducer.join() }
+            awaitRefreshPhase("original held GET whole join", fixture::commandLastState) { initialProducer.join() }
+            awaitRefreshPhase("original periodic whole join", fixture::commandLastState) { periodic.join() }
+            // Reuse unchanged common GET/source cleanup, incomplete-result and single-room checks
+            // only after the positive natural whole join, never the result-fabricating cleanup helper.
+            fixture.assertInitialGetRetiredAfterStartup(job, "saturated SSE404 natural retirement")
+            assertFalse("whole collection succeeded without defensive cancellation", job.isCancelled)
+            assertTrue("captured repository owner completed", owner.isCompleted)
+            assertFalse("captured repository owner succeeded", owner.isCancelled)
+            assertTrue("captured repository owner has no children", owner.children.none())
+            assertFalse("exact event role remains successfully terminal", eventProducer.isCancelled)
+            assertTrue("held initial GET was cancelled by Missing retirement", initialProducer.isCancelled)
+            assertTrue("original periodic role completed", periodic.isCompleted)
+            assertTrue("original periodic role was cancelled", periodic.isCancelled)
+            assertFalse("no successor after successful whole-owner completion", fixture.fetcher.successorEntered.isCompleted)
+            assertEquals(
+                listOf(active(), active(connection = LiveConnection.CONNECTED), RoomSyncState.Missing("ABCD")),
+                fixture.observed,
+            )
+            assertEquals("finite SSE404 history never advances virtual time", 0L, testScheduler.currentTime)
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            releaseCollector.complete(Unit)
+            releaseMissing.complete(Unit)
+            releaseInvalidations.complete(Unit)
+            try {
+                val job = collectionJob
+                if (job != null) {
+                    if (!job.isCompleted) job.cancel()
+                    withContext(NonCancellable) {
+                        awaitRefreshPhase("exact SSE404 collection defensive join", fixture::commandLastState) { job.join() }
+                    }
+                }
+            } catch (cleanupFailure: Throwable) {
+                val failure = primaryFailure
+                if (failure == null) throw cleanupFailure
+                if (failure !== cleanupFailure) failure.addSuppressed(cleanupFailure)
+            }
+        }
+    }
+
     private class SubtreeHeldFetcher {
         private val fetcher = TestFetcher()
         val requests get() = fetcher.requests
