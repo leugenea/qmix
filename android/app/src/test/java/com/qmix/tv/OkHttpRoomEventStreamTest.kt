@@ -1,19 +1,24 @@
 package com.qmix.tv
 
+import kotlin.coroutines.ContinuationInterceptor
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -195,8 +200,15 @@ class OkHttpRoomEventStreamTest {
         assertCallbackHandoff(downstreamBufferCapacity = null, terminalFailure404 = true)
     }
 
+    /** qmix#308: a dispatcher-changing caller must not widen the owned callback handoff. */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private suspend fun TestScope.assertCallbackHandoff(downstreamBufferCapacity: Int?, terminalFailure404: Boolean = false) {
+    @Test
+    fun dispatcher_changing_flow_on_preserves_owned_callback_prefix_and_natural_cleanup() = runTest {
+        assertCallbackHandoff(downstreamBufferCapacity = null, upstreamDispatcher = StandardTestDispatcher(testScheduler))
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun TestScope.assertCallbackHandoff(downstreamBufferCapacity: Int?, terminalFailure404: Boolean = false, upstreamDispatcher: TestDispatcher? = null) {
         val rawDefaultBuffer = System.getProperty("kotlinx.coroutines.channels.defaultBuffer")
         // Pinned coroutines 1.9.0 uses 64 only when the JVM property is absent.
         // A malformed explicit value remains null, never silently falls back to 64.
@@ -255,10 +267,18 @@ class OkHttpRoomEventStreamTest {
                     source
                 },
             )
-            val observed = factory.observe("AB CD")
+            val observed = if (upstreamDispatcher != null) {
+                assertFalse("flowOn dispatcher must differ from the public collector", upstreamDispatcher === dispatcher)
+                factory.observe("AB CD").onEach {
+                    assertSame("public upstream runs on the selected flowOn dispatcher", upstreamDispatcher, currentCoroutineContext()[ContinuationInterceptor])
+                }.flowOn(upstreamDispatcher)
+            } else {
+                factory.observe("AB CD")
+            }
             val publicFlow = if (downstreamBufferCapacity != null) observed.buffer(downstreamBufferCapacity) else observed
             val job = launch(dispatcher, start = CoroutineStart.LAZY) {
                 publicFlow.collect { event ->
+                    assertSame("public collector retains its original dispatcher", dispatcher, currentCoroutineContext()[ContinuationInterceptor])
                     events.add(event)
                     if (event == RoomEventStreamEvent.Opened) {
                         collectorEntered.complete(Unit)
