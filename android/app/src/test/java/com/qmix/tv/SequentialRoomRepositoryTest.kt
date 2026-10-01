@@ -2,19 +2,24 @@ package com.qmix.tv
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -23,6 +28,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -179,6 +185,91 @@ class SequentialRoomRepositoryTest {
         runCurrent()
 
         assertEquals(2, fetcher.requests.size)
+    }
+
+    /** qmix#308: a delivered result does not retire the exact refresh Job's subtree. */
+    @Test
+    fun refresh_completed_handoff_waits_for_the_whole_producer_before_one_coalesced_successor() = runTest {
+        val fetcher = SubtreeHeldFetcher()
+        val events = TestEventStreams()
+        val observed = mutableListOf<RoomSyncState>()
+        val first = roomState("ABCD", "before-cleanup")
+        val current = roomState("ABCD", "after-cleanup")
+        val repository = SequentialRoomRepository(
+            fetchRoom = fetcher::fetch,
+            eventStreams = events,
+            backoff = ReconnectBackoff(randomFraction = { 0.0 }),
+        )
+        fun lastState() = "${fetcher.lastState()}, emissions=$observed, connections=${events.connections.size}"
+        val collection = backgroundScope.launch(StandardTestDispatcher(testScheduler), start = CoroutineStart.LAZY) {
+            repository.observe("ABCD").toList(observed)
+        }
+        // Register every release before starting any owned work or making an assertion.
+        try {
+            collection.start()
+            runCurrent()
+            assertEquals("initial GET; last state=${lastState()}", 1, fetcher.requests.size)
+            assertEquals("event collection ready; last state=${lastState()}", 1, events.connections.size)
+            assertEquals("cold loading; last state=${lastState()}", listOf(active()), observed)
+
+            events.latest.emit(RoomEventStreamEvent.Opened)
+            runCurrent()
+            assertEquals(
+                "opened while first GET is held; last state=${lastState()}",
+                active(connection = LiveConnection.CONNECTED), observed.last(),
+            )
+            listOf("queue_snapshot", "queue_updated", "track_changed", "player_state").forEach {
+                events.latest.emit(RoomEventStreamEvent.Event(it))
+            }
+            // This is a real periodic trigger, not a negative wall-clock correctness window.
+            advanceTimeBy(15_000L)
+            runCurrent()
+            assertEquals("all invalidations coalesce during GET; last state=${lastState()}", 1, fetcher.requests.size)
+
+            fetcher.complete(0, RoomFetchResult.Success(first))
+            awaitRefreshPhase("original child entered cancellation cleanup", ::lastState) {
+                fetcher.cleanupEntered.await()
+            }
+            // Drain all current-time work, including RefreshCompleted, without advancing any deadline.
+            // A fix may join before or after emitting first; neither ordering is assumed here.
+            runCurrent()
+            val originalProducer = fetcher.producers.first()
+            assertEquals(
+                "held cleanup belongs to the exact original producer; last state=${lastState()}",
+                listOf(fetcher.heldChild), originalProducer.children.toList(),
+            )
+            assertFalse("exact original Job still owns held child; last state=${lastState()}", originalProducer.isCompleted)
+            assertEquals("no successor before full subtree terminal; last state=${lastState()}", 1, fetcher.requests.size)
+
+            fetcher.releaseCleanup.complete(Unit)
+            awaitRefreshPhase("exact original refresh full terminal", ::lastState) { originalProducer.join() }
+            runCurrent()
+            assertTrue("original refresh positively joined; last state=${lastState()}", originalProducer.isCompleted)
+            assertEquals("exactly one coalesced successor; last state=${lastState()}", 2, fetcher.requests.size)
+            assertEquals("successor saw full predecessor terminal; last state=${lastState()}", listOf(true), fetcher.predecessorTerminal)
+            assertEquals("same room for both GETs; last state=${lastState()}", listOf("ABCD", "ABCD"), fetcher.requests.map(Request::roomCode))
+
+            fetcher.complete(1, RoomFetchResult.Success(current))
+            awaitRefreshPhase("successor refresh full terminal", ::lastState) { fetcher.producers.last().join() }
+            runCurrent()
+            assertEquals("no extra successor after draining accepted signals; last state=${lastState()}", 2, fetcher.requests.size)
+            assertEquals(
+                "authoritative snapshots remain ordered and current; last state=${lastState()}",
+                listOf(
+                    active(), active(connection = LiveConnection.CONNECTED),
+                    active(first, Freshness.FRESH, LiveConnection.CONNECTED),
+                    active(current, Freshness.FRESH, LiveConnection.CONNECTED),
+                ), observed,
+            )
+        } finally {
+            fetcher.releaseCleanup.complete(Unit)
+            collection.cancel()
+            withContext(NonCancellable) {
+                awaitRefreshPhase("collection cleanup after unconditional release", ::lastState) { collection.join() }
+            }
+        }
+        assertTrue("event stream retired after collection join; last state=${lastState()}", events.latest.cancelled)
+        assertTrue("every real refresh Job is terminal; last state=${lastState()}", fetcher.producers.all(Job::isCompleted))
     }
 
     @Test
@@ -669,6 +760,44 @@ class SequentialRoomRepositoryTest {
         assertEquals(listOf(QMixLogOperation.SSE_CONNECTION), sink.records.map(QMixLogRecord::operation))
     }
 
+    private class SubtreeHeldFetcher {
+        private val fetcher = TestFetcher()
+        val requests get() = fetcher.requests
+        val producers = mutableListOf<Job>()
+        val predecessorTerminal = mutableListOf<Boolean>()
+        val cleanupEntered = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        lateinit var heldChild: Job
+            private set
+
+        suspend fun fetch(roomCode: String): RoomFetchResult {
+            val context = currentCoroutineContext()
+            producers.lastOrNull()?.let { predecessorTerminal += it.isCompleted }
+            producers += context.job
+            // Attach to the actual repository refresh, not an independent fake owner or observer.
+            val child = if (producers.size == 1) CoroutineScope(context).launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    awaitRefreshPhase("refresh child cancellation", ::lastState, 60_000L) { awaitCancellation() }
+                } finally {
+                    withContext(NonCancellable) {
+                        cleanupEntered.complete(Unit)
+                        awaitRefreshPhase("held refresh child release", ::lastState) { releaseCleanup.await() }
+                    }
+                }
+            }.also { heldChild = it } else null
+            return try {
+                awaitRefreshPhase("controlled GET result", ::lastState, 60_000L) { fetcher.fetch(roomCode) }
+            } finally {
+                child?.cancel()
+            }
+        }
+
+        fun complete(index: Int, result: RoomFetchResult) = fetcher.complete(index, result)
+
+        fun lastState() = "requests=${requests.size}, producerTerminal=${producers.map(Job::isCompleted)}, " +
+            "predecessorTerminal=$predecessorTerminal, cleanupEntered=${cleanupEntered.isCompleted}, released=${releaseCleanup.isCompleted}"
+    }
+
     private class Fixture(
         private val scope: TestScope,
         eventCleanupGate: CompletableDeferred<Unit>? = null,
@@ -747,6 +876,17 @@ class SequentialRoomRepositoryTest {
     }
 
     companion object {
+        private suspend fun <T> awaitRefreshPhase(
+            step: String,
+            lastState: () -> String,
+            timeoutMillis: Long = 5_000L,
+            action: suspend () -> T,
+        ): T = try {
+            withTimeout(timeoutMillis) { action() }
+        } catch (timeout: TimeoutCancellationException) {
+            throw AssertionError("$step: timeout; last state=${lastState()}", timeout)
+        }
+
         private fun roomState(code: String, trackId: String) = RoomState(
             code = code,
             current = CurrentTrack(trackId, 0, "playing", "Title", "Artist"),
