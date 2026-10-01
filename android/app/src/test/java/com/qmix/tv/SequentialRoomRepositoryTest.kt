@@ -15,6 +15,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.take
@@ -100,6 +101,69 @@ class SequentialRoomRepositoryTest {
         releaseCollector.complete(Unit)
         runCurrent()
         assertEquals(active(room, Freshness.FRESH, LiveConnection.CONNECTED), observed.last())
+    }
+
+    /** qmix#308: receipts surround actual inline repository command sends, not fixture inputs. */
+    @Test
+    fun held_connected_collector_accepts_four_invalidations_and_preserves_one_coalesced_refresh() = runTest {
+        Fixture(this).assertHeldInvalidationAdmissions(includeFifth = false)
+    }
+
+    @Test
+    fun fifth_event_command_is_held_until_the_four_slot_consumer_releases() = runTest {
+        Fixture(this).assertHeldInvalidationAdmissions(includeFifth = true)
+    }
+
+    /** qmix#308: an immediate event producer must not strand bootstrap before the receive loop. */
+    @Test
+    fun inline_event_startup_burst_cannot_prevent_initial_get_and_collection_cleanup() = runTest {
+        val fixture = Fixture(this)
+        val burstReached = CompletableDeferred<Unit>()
+        val burstReturned = CompletableDeferred<Unit>()
+        val releaseSource = CompletableDeferred<Unit>()
+        fixture.events.script = { connection ->
+            // No gate or queued test input precedes these five command-producing Opened events.
+            repeat(4) { emit(RoomEventStreamEvent.Opened) }
+            connection.emitWithReceipt(this, RoomEventStreamEvent.Opened, burstReached, burstReturned)
+            releaseSource.await()
+            awaitCancellation()
+        }
+        val room = roomState("ABCD", "inline-startup")
+        var collection: Job? = null
+        // Unconditional releases are registered before UNDISPATCHED collection can enter a callback.
+        try {
+            // UNDISPATCHED avoids an enclosing Unconfined event loop deferring the event launch.
+            collection = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler), start = CoroutineStart.UNDISPATCHED) {
+                fixture.repository.observe("ABCD").toList(fixture.observed)
+            }
+            assertTrue("fifth startup emit reached before undispatched launch returns", burstReached.isCompleted)
+            awaitRefreshPhase("inline fifth Opened reached", fixture::commandLastState) { burstReached.await() }
+            awaitRefreshPhase("initial GET after immediate startup", fixture::commandLastState) { fixture.fetcher.initialEntered.await() }
+            awaitRefreshPhase("inline fifth Opened returned", fixture::commandLastState) { burstReturned.await() }
+            runCurrent()
+            // GET entry is required, but its ordering relative to the Opened callbacks is not constrained.
+            assertEquals("one bootstrap GET; ${fixture.commandLastState()}", 1, fixture.fetcher.requests.size)
+            assertEquals(
+                listOf(active()) + List(5) { active(connection = LiveConnection.CONNECTED) },
+                fixture.observed,
+            )
+            fixture.fetcher.complete(0, RoomFetchResult.Success(room))
+            awaitRefreshPhase("startup refresh whole terminal", fixture::commandLastState) {
+                fixture.fetcher.requests.single().producer.join()
+            }
+            runCurrent()
+            assertEquals(
+                listOf(active()) + List(5) { active(connection = LiveConnection.CONNECTED) } +
+                    active(room, Freshness.FRESH, LiveConnection.CONNECTED), fixture.observed,
+            )
+            assertEquals(listOf("ABCD"), fixture.fetcher.requests.map(Request::roomCode))
+            assertEquals("no startup successor; ${fixture.commandLastState()}", 1, fixture.fetcher.requests.size)
+            assertEquals("no periodic deadline crossed", 0L, testScheduler.currentTime)
+        } finally {
+            collection?.cancel()
+            releaseSource.complete(Unit)
+            collection?.let { fixture.joinCommandCollection(it) }
+        }
     }
 
     /** qmix#179: periodic recovery is virtual-time owned by the collection. */
@@ -817,18 +881,154 @@ class SequentialRoomRepositoryTest {
         fun start() = scope.backgroundScope.launch(UnconfinedTestDispatcher(scope.testScheduler)) {
             repository.observe(roomCode).toList(observed)
         }.also { scope.runCurrent() }
+
+        suspend fun assertHeldInvalidationAdmissions(includeFifth: Boolean) {
+            val collectorEntered = CompletableDeferred<Unit>()
+            val releaseCollector = CompletableDeferred<Unit>()
+            val collectorReturned = CompletableDeferred<Unit>()
+            val releaseInvalidations = CompletableDeferred<Unit>()
+            val scriptStopped = CompletableDeferred<Unit>()
+            val releaseSource = CompletableDeferred<Unit>()
+            events.script = { connection ->
+                emit(RoomEventStreamEvent.Opened)
+                releaseInvalidations.await()
+                connection.emitFourInvalidations(this)
+                if (includeFifth) {
+                    connection.emitWithReceipt(
+                        this, RoomEventStreamEvent.Event("queue_updated"),
+                        connection.fifthReached, connection.fifthReturned,
+                    )
+                }
+                scriptStopped.complete(Unit)
+                // This gate follows the last real emit; it cannot impersonate a held command send.
+                releaseSource.await()
+                awaitCancellation()
+            }
+            val collection = scope.backgroundScope.launch(StandardTestDispatcher(scope.testScheduler), start = CoroutineStart.LAZY) {
+                repository.observe(roomCode).collect { state ->
+                    observed += state
+                    if (state == active(connection = LiveConnection.CONNECTED)) {
+                        collectorEntered.complete(Unit)
+                        withContext(NonCancellable) { releaseCollector.await() }
+                        collectorReturned.complete(Unit)
+                    }
+                }
+            }
+            // All unconditional releases below are installed before this lazy collection starts.
+            try {
+                collection.start()
+                awaitRefreshPhase("CONNECTED/LOADING collector hold entered", ::commandLastState) { collectorEntered.await() }
+                awaitRefreshPhase("held initial GET entered", ::commandLastState) { fetcher.initialEntered.await() }
+                scope.runCurrent()
+                assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), observed)
+                assertEquals("initial GET held before admissions; ${commandLastState()}", 1, fetcher.requests.size)
+                assertFalse("no GET result enters the command queue", fetcher.requests.single().result.isCompleted)
+                assertEquals("no timer/bootstrap/result payload in admission boundary", 0L, scope.testScheduler.currentTime)
+                val connection = events.latest
+                val initialProducer = fetcher.requests.single().producer
+                val owner = requireNotNull(connection.producer.parent)
+                assertEquals("event and refresh share actual repository owner", owner, initialProducer.parent)
+                val periodic = owner.children.single { it !== connection.producer && it !== initialProducer }
+                assertEquals(setOf(connection.producer, initialProducer, periodic), owner.children.toSet())
+
+                releaseInvalidations.complete(Unit)
+                connection.awaitFourReturns(::commandLastState)
+                if (includeFifth) {
+                    awaitRefreshPhase("fifth actual emit reached", ::commandLastState) { connection.fifthReached.await() }
+                    // No time advance or correctness timeout: all ready work in this same context is drained.
+                    scope.runCurrent()
+                    assertFalse("fifth actual emit must remain held by Command4; ${commandLastState()}", connection.fifthReturned.isCompleted)
+                } else {
+                    awaitRefreshPhase("four-event source stopped", ::commandLastState) { scriptStopped.await() }
+                }
+                assertEquals("still before the first periodic deadline", 0L, scope.testScheduler.currentTime)
+                releaseCollector.complete(Unit)
+                awaitRefreshPhase("held collector returned", ::commandLastState) { collectorReturned.await() }
+                if (includeFifth) {
+                    awaitRefreshPhase("fifth actual emit returned after consumer release", ::commandLastState) { connection.fifthReturned.await() }
+                }
+                awaitRefreshPhase("finite script stopped before any sixth emit", ::commandLastState) { scriptStopped.await() }
+                scope.runCurrent()
+                assertEquals("all accepted invalidations coalesce behind held GET", 1, fetcher.requests.size)
+                assertCoalescedSnapshots()
+                assertTrue("exact periodic role still owned until teardown", periodic.isActive)
+            } finally {
+                collection.cancel()
+                releaseCollector.complete(Unit)
+                releaseInvalidations.complete(Unit)
+                releaseSource.complete(Unit)
+                joinCommandCollection(collection)
+            }
+        }
+
+        private suspend fun assertCoalescedSnapshots() {
+            val first = roomState(roomCode, "first-command-snapshot")
+            val second = roomState(roomCode, "coalesced-command-snapshot")
+            fetcher.complete(0, RoomFetchResult.Success(first))
+            awaitRefreshPhase("initial refresh whole terminal", ::commandLastState) { fetcher.requests.first().producer.join() }
+            awaitRefreshPhase("exactly one successor GET entered", ::commandLastState) { fetcher.successorEntered.await() }
+            scope.runCurrent()
+            assertEquals("exactly one coalesced successor", 2, fetcher.requests.size)
+            assertEquals(active(first, Freshness.FRESH, LiveConnection.CONNECTED), observed.last())
+            fetcher.complete(1, RoomFetchResult.Success(second))
+            awaitRefreshPhase("successor refresh whole terminal", ::commandLastState) { fetcher.requests.last().producer.join() }
+            scope.runCurrent()
+            assertEquals(listOf(roomCode, roomCode), fetcher.requests.map(Request::roomCode))
+            assertEquals("no third GET after draining commands", 2, fetcher.requests.size)
+            assertEquals(
+                listOf(
+                    active(), active(connection = LiveConnection.CONNECTED),
+                    active(first, Freshness.FRESH, LiveConnection.CONNECTED),
+                    active(second, Freshness.FRESH, LiveConnection.CONNECTED),
+                ), observed,
+            )
+            assertEquals("no periodic work mixed with event admission", 0L, scope.testScheduler.currentTime)
+        }
+
+        suspend fun joinCommandCollection(collection: Job) {
+            collection.cancel()
+            fetcher.requests.forEach { it.result.complete(RoomFetchResult.Failure) }
+            withContext(NonCancellable) {
+                events.connections.forEach { connection ->
+                    awaitRefreshPhase("event cleanup entered", ::commandLastState) { connection.cleanupEntered.await() }
+                }
+                awaitRefreshPhase("whole collection cleanup terminal", ::commandLastState) { collection.join() }
+                events.connections.forEach { connection ->
+                    awaitRefreshPhase("exact event producer terminal", ::commandLastState) { connection.producer.join() }
+                    assertTrue("event cleanup returned, not merely entered", connection.cleanupReturned.isCompleted)
+                    assertTrue("exact event Job completed", connection.producer.isCompleted)
+                }
+                fetcher.requests.forEach { request ->
+                    awaitRefreshPhase("exact refresh producer terminal", ::commandLastState) { request.producer.join() }
+                    assertTrue("fetch finally entered", request.cleanupEntered.isCompleted)
+                    assertTrue("fetch finally returned", request.cleanupReturned.isCompleted)
+                    assertTrue("exact refresh Job completed", request.producer.isCompleted)
+                }
+                assertTrue("whole collection positively joined", collection.isCompleted)
+            }
+        }
+
+        fun commandLastState() = "emissions=$observed, requests=${fetcher.requests.size}, " +
+            "refreshTerminal=${fetcher.requests.map { it.producer.isCompleted }}, connections=${events.connections.size}, " +
+            "receipts=${events.connections.lastOrNull()?.receiptState()}"
     }
 
     private class TestFetcher {
         val requests = mutableListOf<Request>()
+        val initialEntered = CompletableDeferred<Unit>()
+        val successorEntered = CompletableDeferred<Unit>()
 
         suspend fun fetch(roomCode: String): RoomFetchResult {
-            val request = Request(roomCode)
+            val request = Request(roomCode, producer = currentCoroutineContext().job)
             requests += request
+            if (requests.size == 1) initialEntered.complete(Unit)
+            if (requests.size == 2) successorEntered.complete(Unit)
             return try {
                 request.result.await()
             } finally {
+                request.cleanupEntered.complete(Unit)
                 if (!request.result.isCompleted) request.cancelled = true
+                request.cleanupReturned.complete(Unit)
             }
         }
 
@@ -839,8 +1039,11 @@ class SequentialRoomRepositoryTest {
 
     private data class Request(
         val roomCode: String,
+        val producer: Job,
         val result: CompletableDeferred<RoomFetchResult> = CompletableDeferred(),
         var cancelled: Boolean = false,
+        val cleanupEntered: CompletableDeferred<Unit> = CompletableDeferred(),
+        val cleanupReturned: CompletableDeferred<Unit> = CompletableDeferred(),
     )
 
     private class TestEventStreams(
@@ -849,11 +1052,17 @@ class SequentialRoomRepositoryTest {
         val connections = mutableListOf<Connection>()
         val latest: Connection
             get() = connections.last()
+        var script: (suspend FlowCollector<RoomEventStreamEvent>.(Connection) -> Unit)? = null
 
         override fun observe(roomCode: String): Flow<RoomEventStreamEvent> = flow {
-            val connection = Connection(roomCode)
+            val connection = Connection(roomCode, currentCoroutineContext().job)
             connections += connection
             try {
+                val inlineScript = script
+                if (inlineScript != null) {
+                    inlineScript.invoke(this, connection)
+                    return@flow
+                }
                 while (true) {
                     val event = connection.events.receive()
                     emit(event)
@@ -861,17 +1070,61 @@ class SequentialRoomRepositoryTest {
                 }
             } finally {
                 connection.cancelled = true
+                connection.cleanupEntered.complete(Unit)
                 cleanupGate?.let { withContext(NonCancellable) { it.await() } }
+                connection.cleanupReturned.complete(Unit)
             }
         }
 
-        class Connection(val roomCode: String) {
+        class Connection(val roomCode: String, val producer: Job) {
             val events = Channel<RoomEventStreamEvent>(Channel.UNLIMITED)
             var cancelled = false
+            val cleanupEntered = CompletableDeferred<Unit>()
+            val cleanupReturned = CompletableDeferred<Unit>()
+            val firstReached = CompletableDeferred<Unit>()
+            val firstReturned = CompletableDeferred<Unit>()
+            val secondReached = CompletableDeferred<Unit>()
+            val secondReturned = CompletableDeferred<Unit>()
+            val thirdReached = CompletableDeferred<Unit>()
+            val thirdReturned = CompletableDeferred<Unit>()
+            val fourthReached = CompletableDeferred<Unit>()
+            val fourthReturned = CompletableDeferred<Unit>()
+            val fifthReached = CompletableDeferred<Unit>()
+            val fifthReturned = CompletableDeferred<Unit>()
 
             fun emit(event: RoomEventStreamEvent) {
                 events.trySend(event)
             }
+
+            suspend fun emitWithReceipt(
+                collector: FlowCollector<RoomEventStreamEvent>,
+                event: RoomEventStreamEvent,
+                reached: CompletableDeferred<Unit>,
+                returned: CompletableDeferred<Unit>,
+            ) {
+                reached.complete(Unit)
+                collector.emit(event)
+                returned.complete(Unit)
+            }
+
+            suspend fun emitFourInvalidations(collector: FlowCollector<RoomEventStreamEvent>) {
+                emitWithReceipt(collector, RoomEventStreamEvent.Event("queue_snapshot"), firstReached, firstReturned)
+                emitWithReceipt(collector, RoomEventStreamEvent.Event("queue_updated"), secondReached, secondReturned)
+                emitWithReceipt(collector, RoomEventStreamEvent.Event("track_changed"), thirdReached, thirdReturned)
+                emitWithReceipt(collector, RoomEventStreamEvent.Event("player_state"), fourthReached, fourthReturned)
+            }
+
+            suspend fun awaitFourReturns(lastState: () -> String) {
+                awaitRefreshPhase("first actual invalidation emit returned", lastState) { firstReturned.await() }
+                awaitRefreshPhase("second actual invalidation emit returned", lastState) { secondReturned.await() }
+                awaitRefreshPhase("third actual invalidation emit returned", lastState) { thirdReturned.await() }
+                awaitRefreshPhase("fourth actual invalidation emit returned", lastState) { fourthReturned.await() }
+            }
+
+            fun receiptState() = "fourReturned=${firstReturned.isCompleted}/${secondReturned.isCompleted}/" +
+                "${thirdReturned.isCompleted}/${fourthReturned.isCompleted}, fifthReached=${fifthReached.isCompleted}, " +
+                "fifthReturned=${fifthReturned.isCompleted}, cleanupEntered=${cleanupEntered.isCompleted}, " +
+                "cleanupReturned=${cleanupReturned.isCompleted}, eventTerminal=${producer.isCompleted}"
         }
     }
 
