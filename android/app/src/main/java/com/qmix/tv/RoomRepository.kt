@@ -76,7 +76,7 @@ class SequentialRoomRepository(
     override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
         emit(RoomSyncState.Active(roomCode, null, Freshness.LOADING, LiveConnection.CONNECTING))
         coroutineScope {
-            val commands = Channel<Command>(Channel.UNLIMITED)
+            val commands = Channel<Command>(4)
             var room: RoomState? = null
             var freshness = Freshness.LOADING
             var connection = LiveConnection.CONNECTING
@@ -118,6 +118,8 @@ class SequentialRoomRepository(
                     RoomFetchResult.Missing -> RoomSyncState.Missing(roomCode)
                 }
 
+            commands.send(Command.Refresh)
+
             val periodicJob = launch {
                 while (currentCoroutineContext().isActive) {
                     delay(PERIODIC_REFRESH_MILLIS)
@@ -127,7 +129,6 @@ class SequentialRoomRepository(
             val eventJob = launch {
                 collectEvents(roomCode, commands)
             }
-            commands.send(Command.Refresh)
 
             try {
                 var terminal = false
