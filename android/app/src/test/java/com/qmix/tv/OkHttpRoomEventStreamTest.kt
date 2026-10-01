@@ -175,17 +175,22 @@ class OkHttpRoomEventStreamTest {
     /** qmix#308: preserve the direct default64 prefix and natural source cleanup. */
     @Test
     fun direct_callback_handoff_preserves_first_sixty_four_and_source_cleanup() = runTest {
-        assertCallbackHandoff(downstreamLargeBuffer = false)
+        assertCallbackHandoff(downstreamBufferCapacity = null)
     }
 
     /** qmix#308: caller buffering must not widen the owned callback handoff. */
     @Test
     fun downstream_large_buffer_cannot_enlarge_owned_callback_handoff() = runTest {
-        assertCallbackHandoff(downstreamLargeBuffer = true)
+        assertCallbackHandoff(downstreamBufferCapacity = 128)
+    }
+
+    @Test
+    fun downstream_rendezvous_buffer_preserves_owned_callback_prefix_and_natural_cleanup() = runTest {
+        assertCallbackHandoff(downstreamBufferCapacity = 0)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private suspend fun TestScope.assertCallbackHandoff(downstreamLargeBuffer: Boolean) {
+    private suspend fun TestScope.assertCallbackHandoff(downstreamBufferCapacity: Int?) {
         val rawDefaultBuffer = System.getProperty("kotlinx.coroutines.channels.defaultBuffer")
         // Pinned coroutines 1.9.0 uses 64 only when the JVM property is absent.
         // A malformed explicit value remains null, never silently falls back to 64.
@@ -193,7 +198,7 @@ class OkHttpRoomEventStreamTest {
         val effectiveSource = if (rawDefaultBuffer == null) "pinned 1.9.0 fallback" else "explicit JVM property"
         println(
             "qmix#308 defaultBuffer raw=[$rawDefaultBuffer], effective=$effectiveDefaultBuffer, " +
-                "source=$effectiveSource, downstreamLargeBuffer=$downstreamLargeBuffer",
+                "source=$effectiveSource, downstreamBufferCapacity=$downstreamBufferCapacity",
         )
         assertEquals("Nonqualifying baseline: effective JVM defaultBuffer must be 64", 64L, effectiveDefaultBuffer)
 
@@ -239,7 +244,7 @@ class OkHttpRoomEventStreamTest {
                 },
             )
             val observed = factory.observe("AB CD")
-            val publicFlow = if (downstreamLargeBuffer) observed.buffer(128) else observed
+            val publicFlow = if (downstreamBufferCapacity != null) observed.buffer(downstreamBufferCapacity) else observed
             val job = launch(dispatcher, start = CoroutineStart.LAZY) {
                 publicFlow.collect { event ->
                     events.add(event)
