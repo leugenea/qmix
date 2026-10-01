@@ -1,5 +1,6 @@
 package com.qmix.tv
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -32,6 +33,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -163,6 +165,140 @@ class SequentialRoomRepositoryTest {
             collection?.cancel()
             releaseSource.complete(Unit)
             collection?.let { fixture.joinCommandCollection(it) }
+        }
+    }
+
+    /** qmix#308 S1: the approved bootstrap GET is acquired even before inline terminal SSE. */
+    @Test
+    fun inline_sse_404_retires_the_owner_approved_initial_get() = runTest {
+        val fixture = Fixture(this)
+        val missingReached = CompletableDeferred<Unit>()
+        fixture.events.script = { emit(RoomEventStreamEvent.Failure(404)) }
+        val supervisor = SupervisorJob()
+        val owner = CoroutineScope(supervisor + UnconfinedTestDispatcher(testScheduler))
+        var collection: Job? = null
+        // Cleanup is installed before inline callbacks; the active runTest driver owns observation.
+        try {
+            val terminal = owner.async(start = CoroutineStart.UNDISPATCHED) {
+                fixture.repository.observe("ABCD").collect { state ->
+                    fixture.observed += state
+                    if (state is RoomSyncState.Missing) missingReached.complete(Unit)
+                }
+            }
+            collection = terminal
+            awaitRefreshPhase("inline SSE404 Missing published", fixture::commandLastState) { missingReached.await() }
+            awaitRefreshPhase("inline SSE404 natural whole collection terminal", fixture::commandLastState) { terminal.join() }
+            terminal.await()
+            assertFalse("Missing completes successfully", terminal.isCancelled)
+            assertEquals(listOf(active(), RoomSyncState.Missing("ABCD")), fixture.observed)
+            fixture.assertInitialGetRetiredAfterStartup(terminal, "inline SSE404 Missing")
+        } finally {
+            owner.cancel()
+            collection?.cancel()
+            withContext(NonCancellable) {
+                try {
+                    collection?.let { fixture.joinCommandCollection(it) }
+                } finally {
+                    awaitRefreshPhase("inline SSE404 supervisor whole terminal", fixture::commandLastState) { supervisor.join() }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun inline_connected_collector_failure_retires_the_initial_get_and_preserves_the_primary_exception() = runTest {
+        val fixture = Fixture(this)
+        val connectedReached = CompletableDeferred<Unit>()
+        val primary = RoomApiException(UserMessage.SERVER_UNAVAILABLE)
+        fixture.events.script = {
+            emit(RoomEventStreamEvent.Opened)
+            awaitCancellation()
+        }
+        val supervisor = SupervisorJob()
+        val owner = CoroutineScope(supervisor + UnconfinedTestDispatcher(testScheduler))
+        var collection: Job? = null
+        try {
+            val terminal = owner.async(start = CoroutineStart.UNDISPATCHED) {
+                fixture.repository.observe("ABCD").collect { state ->
+                    fixture.observed += state
+                    if (state == active(connection = LiveConnection.CONNECTED)) {
+                        connectedReached.complete(Unit)
+                        throw primary
+                    }
+                }
+            }
+            collection = terminal
+            awaitRefreshPhase("inline CONNECTED throwing collector reached", fixture::commandLastState) { connectedReached.await() }
+            awaitRefreshPhase("inline CONNECTED failure natural whole collection terminal", fixture::commandLastState) { terminal.join() }
+            val failure = try {
+                terminal.await()
+                null
+            } catch (caught: Throwable) {
+                caught
+            }
+            assertSame("collector primary survives owned teardown", primary, failure)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            fixture.assertInitialGetRetiredAfterStartup(terminal, "inline CONNECTED collector failure")
+        } finally {
+            owner.cancel()
+            collection?.cancel()
+            withContext(NonCancellable) {
+                try {
+                    collection?.let { fixture.joinCommandCollection(it) }
+                } finally {
+                    awaitRefreshPhase("inline CONNECTED failure supervisor whole terminal", fixture::commandLastState) { supervisor.join() }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun inline_connected_collector_cancellation_retires_the_initial_get() = runTest {
+        val fixture = Fixture(this)
+        val connectedReached = CompletableDeferred<Unit>()
+        val cancellation = CancellationException("inline CONNECTED collector cancelled")
+        fixture.events.script = {
+            emit(RoomEventStreamEvent.Opened)
+            awaitCancellation()
+        }
+        val supervisor = SupervisorJob()
+        val owner = CoroutineScope(supervisor + UnconfinedTestDispatcher(testScheduler))
+        var collection: Job? = null
+        try {
+            val terminal = owner.async(start = CoroutineStart.UNDISPATCHED) {
+                fixture.repository.observe("ABCD").collect { state ->
+                    fixture.observed += state
+                    if (state == active(connection = LiveConnection.CONNECTED)) {
+                        connectedReached.complete(Unit)
+                        currentCoroutineContext().cancel(cancellation)
+                        awaitCancellation()
+                    }
+                }
+            }
+            collection = terminal
+            awaitRefreshPhase("inline CONNECTED cancelling collector reached", fixture::commandLastState) { connectedReached.await() }
+            awaitRefreshPhase("inline CONNECTED cancellation natural whole collection terminal", fixture::commandLastState) { terminal.join() }
+            val failure = try {
+                terminal.await()
+                null
+            } catch (caught: CancellationException) {
+                caught
+            }
+            assertTrue("collector cancellation, not successful completion", failure is CancellationException)
+            assertEquals("named collector cancellation survives teardown", cancellation.message, failure?.message)
+            assertTrue("whole collection cancelled", terminal.isCancelled)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            fixture.assertInitialGetRetiredAfterStartup(terminal, "inline CONNECTED collector cancellation")
+        } finally {
+            owner.cancel()
+            collection?.cancel()
+            withContext(NonCancellable) {
+                try {
+                    collection?.let { fixture.joinCommandCollection(it) }
+                } finally {
+                    awaitRefreshPhase("inline CONNECTED cancellation supervisor whole terminal", fixture::commandLastState) { supervisor.join() }
+                }
+            }
         }
     }
 
@@ -983,6 +1119,29 @@ class SequentialRoomRepositoryTest {
                 ), observed,
             )
             assertEquals("no periodic work mixed with event admission", 0L, scope.testScheduler.currentTime)
+        }
+
+        suspend fun assertInitialGetRetiredAfterStartup(collection: Job, boundary: String) {
+            // Reobserve the natural terminal already joined for the explicit outcome assertion.
+            awaitRefreshPhase("$boundary natural whole collection joined", ::commandLastState) { collection.join() }
+            assertEquals("$boundary owner-approved initial GET count; ${commandLastState()}", 1, fetcher.requests.size)
+            awaitRefreshPhase("$boundary actual initial GET body entered", ::commandLastState) { fetcher.initialEntered.await() }
+            val request = fetcher.requests.single()
+            awaitRefreshPhase("$boundary exact refresh producer whole terminal", ::commandLastState) { request.producer.join() }
+            assertTrue("$boundary held GET cancelled before any test result release", request.cancelled)
+            assertTrue("$boundary fetch cleanup entered", request.cleanupEntered.isCompleted)
+            assertTrue("$boundary fetch cleanup returned", request.cleanupReturned.isCompleted)
+            assertFalse("$boundary GET result still incomplete", request.result.isCompleted)
+            assertTrue("$boundary exact refresh Job completed", request.producer.isCompleted)
+            assertEquals("$boundary sole acquired GET room", listOf("ABCD"), fetcher.requests.map(Request::roomCode))
+            assertEquals("$boundary sole event connection room", listOf("ABCD"), events.connections.map { it.roomCode })
+            val connection = events.connections.single()
+            awaitRefreshPhase("$boundary exact event producer whole terminal", ::commandLastState) { connection.producer.join() }
+            assertTrue("$boundary event cleanup entered", connection.cleanupEntered.isCompleted)
+            assertTrue("$boundary event cleanup returned", connection.cleanupReturned.isCompleted)
+            assertTrue("$boundary exact event Job completed", connection.producer.isCompleted)
+            assertTrue("$boundary whole collection completed", collection.isCompleted)
+            assertEquals("$boundary no periodic deadline crossed", 0L, scope.testScheduler.currentTime)
         }
 
         suspend fun joinCommandCollection(collection: Job) {
