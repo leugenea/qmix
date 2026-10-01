@@ -960,6 +960,173 @@ class SequentialRoomRepositoryTest {
         assertEquals(listOf(QMixLogOperation.SSE_CONNECTION), sink.records.map(QMixLogRecord::operation))
     }
 
+    /** qmix#308: child-free GET Missing crosses saturated Command4 before natural terminal cleanup. */
+    @Test
+    fun child_free_missing_refresh_send_waits_for_command4_and_completes_collection_naturally() = runTest {
+        assertSaturatedChildFreeMissingRefresh()
+    }
+
+    private suspend fun TestScope.assertSaturatedChildFreeMissingRefresh() {
+        val fixture = Fixture(this)
+        val collectorEntered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val collectorReturnTailReached = CompletableDeferred<Unit>()
+        val releaseInvalidations = CompletableDeferred<Unit>()
+        val scriptStopped = CompletableDeferred<Unit>()
+        val missingEntered = CompletableDeferred<Unit>()
+        val releaseMissing = CompletableDeferred<Unit>()
+        val missingReturnTailReached = CompletableDeferred<Unit>()
+        val naturalCollectReturned = CompletableDeferred<Unit>()
+        var collectionJob: Job? = null
+        var primaryFailure: Throwable? = null
+        // Cleanup protects allocation as well as every subsequent assertion and wait.
+        try {
+            fixture.events.script = { connection ->
+                emit(RoomEventStreamEvent.Opened)
+                releaseInvalidations.await()
+                // Existing UNLIMITED fixture mailbox is allocated but inert; these emits are inline.
+                connection.emitFourInvalidations(this)
+                scriptStopped.complete(Unit)
+                awaitCancellation()
+            }
+            val job = launch(StandardTestDispatcher(testScheduler), start = CoroutineStart.LAZY) {
+                fixture.repository.observe("ABCD").collect { state ->
+                    fixture.observed += state
+                    if (state == active(connection = LiveConnection.CONNECTED)) {
+                        collectorEntered.complete(Unit)
+                        releaseCollector.await()
+                        collectorReturnTailReached.complete(Unit)
+                    }
+                    if (state == RoomSyncState.Missing("ABCD")) {
+                        missingEntered.complete(Unit)
+                        releaseMissing.await()
+                        missingReturnTailReached.complete(Unit)
+                    }
+                }
+                naturalCollectReturned.complete(Unit)
+            }
+            collectionJob = job
+            job.start()
+            awaitRefreshPhase("saturated Missing CONNECTED collector entered", fixture::commandLastState) { collectorEntered.await() }
+            awaitRefreshPhase("saturated Missing initial GET entered", fixture::commandLastState) { fixture.fetcher.initialEntered.await() }
+            runCurrent()
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            val request = fixture.fetcher.requests.single()
+            val connection = fixture.events.connections.single()
+            val initialProducer = request.producer
+            val eventProducer = connection.producer
+            val owner = requireNotNull(initialProducer.parent)
+            assertSame("original event and refresh are exact siblings", owner, eventProducer.parent)
+            val periodic = owner.children.single { it !== eventProducer && it !== initialProducer }
+            assertEquals(setOf(eventProducer, initialProducer, periodic), owner.children.toSet())
+            assertTrue("original event role active", eventProducer.isActive)
+            assertTrue("original refresh role active", initialProducer.isActive)
+            assertTrue("sole third role active before first periodic deadline", periodic.isActive)
+            assertFalse("initial GET result gated before admissions", request.result.isCompleted)
+            assertFalse("source gated before four inline invalidations", releaseInvalidations.isCompleted)
+            assertFalse("CONNECTED callback remains held", releaseCollector.isCompleted)
+            assertEquals("bootstrap received; no periodic deadline crossed", 0L, testScheduler.currentTime)
+
+            releaseInvalidations.complete(Unit)
+            connection.awaitFourReturns(fixture::commandLastState)
+            awaitRefreshPhase("four real inline invalidations stopped", fixture::commandLastState) { scriptStopped.await() }
+            runCurrent()
+            assertFalse("GET result cannot occupy one of the four admitted slots", request.result.isCompleted)
+            assertFalse("CONNECTED consumer still held after all four actual send returns", collectorReturnTailReached.isCompleted)
+            assertFalse("CONNECTED release remains closed", releaseCollector.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals("no timer payload in the four-slot boundary", 0L, testScheduler.currentTime)
+
+            request.result.complete(RoomFetchResult.Missing)
+            awaitRefreshPhase("exact initial fetch cleanup entered", fixture::commandLastState) { request.cleanupEntered.await() }
+            awaitRefreshPhase("exact initial fetch return tail reached", fixture::commandLastState) { request.cleanupReturned.await() }
+            runCurrent()
+            // Tail receipts alone are not admission or terminal. Source order plus ready-work drain,
+            // full Command4, completed result and this active child-free Job locate its sole send.
+            assertTrue("initial Missing result released", request.result.isCompleted)
+            assertTrue("source release cannot hold refresh", releaseInvalidations.isCompleted)
+            assertTrue("source parked after four actual send returns", scriptStopped.isCompleted)
+            assertTrue("exact child-free refresh held at result send", initialProducer.isActive)
+            assertFalse("fetch return tail is not producer terminal", initialProducer.isCompleted)
+            assertTrue("no child cleanup can impersonate refresh send hold", initialProducer.children.none())
+            assertFalse("successful fetch was not cancelled", request.cancelled)
+            assertFalse("CONNECTED release still closed at held send", releaseCollector.isCompleted)
+            assertFalse("CONNECTED callback has not returned", collectorReturnTailReached.isCompleted)
+            assertFalse("Missing is not yet public", missingEntered.isCompleted)
+            assertFalse("source cleanup has not entered", connection.cleanupEntered.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals("held send uses current-time quiescence only", 0L, testScheduler.currentTime)
+
+            releaseCollector.complete(Unit)
+            awaitRefreshPhase("CONNECTED collector return tail reached", fixture::commandLastState) { collectorReturnTailReached.await() }
+            awaitRefreshPhase("original child-free refresh joined after consumer release", fixture::commandLastState) { initialProducer.join() }
+            awaitRefreshPhase("admitted authoritative Missing collector entered", fixture::commandLastState) { missingEntered.await() }
+            runCurrent()
+            assertTrue("original refresh completed before public Missing", initialProducer.isCompleted)
+            assertFalse("original refresh completed successfully", initialProducer.isCancelled)
+            assertEquals(
+                listOf(active(), active(connection = LiveConnection.CONNECTED), RoomSyncState.Missing("ABCD")),
+                fixture.observed,
+            )
+            assertFalse("Missing collector release remains closed", releaseMissing.isCompleted)
+            assertFalse("Missing callback still held", missingReturnTailReached.isCompleted)
+            assertTrue("event remains live under held Missing", eventProducer.isActive)
+            assertTrue("periodic remains live under held Missing", periodic.isActive)
+            assertFalse("source cleanup waits for Missing return", connection.cleanupEntered.isCompleted)
+            assertFalse("source cleanup has not returned", connection.cleanupReturned.isCompleted)
+            assertFalse("whole public collect has not returned", naturalCollectReturned.isCompleted)
+            assertFalse("whole collection still owns held Missing", job.isCompleted)
+            assertEquals("terminal backpressure has not advanced a deadline", 0L, testScheduler.currentTime)
+
+            releaseMissing.complete(Unit)
+            awaitRefreshPhase("Missing collector return tail reached", fixture::commandLastState) { missingReturnTailReached.await() }
+            awaitRefreshPhase("exact original source cleanup entered", fixture::commandLastState) { connection.cleanupEntered.await() }
+            awaitRefreshPhase("exact original source cleanup returned", fixture::commandLastState) { connection.cleanupReturned.await() }
+            awaitRefreshPhase("whole public collection returned naturally", fixture::commandLastState) { naturalCollectReturned.await() }
+            awaitRefreshPhase("exact whole collection joined naturally", fixture::commandLastState) { job.join() }
+            awaitRefreshPhase("exact original event role joined", fixture::commandLastState) { eventProducer.join() }
+            awaitRefreshPhase("exact original periodic role joined", fixture::commandLastState) { periodic.join() }
+            awaitRefreshPhase("exact original refresh role joined", fixture::commandLastState) { initialProducer.join() }
+            assertTrue("successful whole collection completed", job.isCompleted)
+            assertFalse("natural completion was not forced cancellation", job.isCancelled)
+            assertTrue("actual repository owner terminal", owner.isCompleted)
+            assertFalse("actual repository owner completed successfully", owner.isCancelled)
+            assertTrue("actual repository owner has no children", owner.children.none())
+            assertTrue("original event role terminal", eventProducer.isCompleted)
+            assertTrue("original periodic role terminal", periodic.isCompleted)
+            assertTrue("original refresh role terminal", initialProducer.isCompleted)
+            assertTrue("exact source cancelled only by terminal teardown", connection.cancelled)
+            assertFalse("no successor after successful whole-owner completion", fixture.fetcher.successorEntered.isCompleted)
+            assertEquals(listOf("ABCD"), fixture.fetcher.requests.map(Request::roomCode))
+            assertEquals(listOf("ABCD"), fixture.events.connections.map { it.roomCode })
+            assertEquals(
+                listOf(active(), active(connection = LiveConnection.CONNECTED), RoomSyncState.Missing("ABCD")),
+                fixture.observed,
+            )
+            assertEquals("entire natural terminal history stays at time zero", 0L, testScheduler.currentTime)
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            releaseCollector.complete(Unit)
+            releaseMissing.complete(Unit)
+            releaseInvalidations.complete(Unit)
+            try {
+                val job = collectionJob
+                if (job != null) {
+                    if (!job.isCompleted) job.cancel()
+                    withContext(NonCancellable) {
+                        awaitRefreshPhase("exact collection defensive cleanup joined", fixture::commandLastState) { job.join() }
+                    }
+                }
+            } catch (cleanupFailure: Throwable) {
+                val failure = primaryFailure
+                if (failure == null) throw cleanupFailure
+                if (failure !== cleanupFailure) failure.addSuppressed(cleanupFailure)
+            }
+        }
+    }
+
     private class SubtreeHeldFetcher {
         private val fetcher = TestFetcher()
         val requests get() = fetcher.requests
