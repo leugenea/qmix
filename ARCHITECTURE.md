@@ -575,6 +575,17 @@ or 24-hour non-empty lifetime.
   accepted report.
 - State loss on backend restart is acceptable because MVP rooms are ephemeral.
 
+## Future approved host ownership design
+
+On October 1, 2026, the owner approved Option B: typed hosting messages, one
+process-owned operation/resource ledger, and one callback-free shared actual
+authority gate. The [approved decision and exact reviewed design](docs/design/host-ownership/README.md)
+preserve the scope, ownership matrices, conditional bounds and static evidence.
+This is **future design**, not current runtime: main at
+`9454d705a2eddc2669c964a552395f1ede35088a` does not implement Option B. Adoption
+requires independently validated implementation boundaries, coherent production
+activation and actual source/runtime acceptance; static review is not that proof.
+
 ## 9. Deployment
 
 - Trusted-LAN HTTP is supported for the TV API and guest web app, but provides

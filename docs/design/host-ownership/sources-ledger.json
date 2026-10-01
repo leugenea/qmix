@@ -1,0 +1,245 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": 1,
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job",
+      "title": "Job",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "New (optional initial state)falsefalsefalse",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-start/-l-a-z-y",
+      "title": "LAZY",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "Pitfall: launching a coroutine with LAZY",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/invoke-on-completion.html",
+      "title": "Completion",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "This handler can be invoked concurrently with the surrounding code.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/-channel",
+      "title": "Channel",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "onUndeliveredElement is called synchronously in an arbitrary context.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/-send-channel/try-send.html",
+      "title": "trySend",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "trySend never suspends and never throws exceptions.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.selects/select.html",
+      "title": "select",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "This select function is biased to the first clause.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.selects/select-unbiased.html",
+      "title": "selectUnbiased",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "randomly shuffles the clauses before checking if they are selectable",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/kotlinx.coroutines.test/run-test.html",
+      "title": "runTest",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "child coroutines are not executed in parallel to the test body.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "url": "https://kotlinlang.org/docs/lincheck-guide.html",
+      "title": "Lincheck",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "Lincheck is a framework for testing concurrent code on the JVM.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "url": "https://kotlinlang.org/docs/lincheck-testing-strategies.html",
+      "title": "LincheckStrategies",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "does not simulate and cannot catch bugs related to instruction reordering",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "url": "https://developer.android.com/media/media3/exoplayer/hello-world",
+      "title": "Media3Thread",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "ExoPlayer instances must be accessed from a single application thread.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "url": "https://developer.android.com/reference/androidx/media3/exoplayer/source/MediaSource.MediaPeriodId",
+      "title": "MediaPeriodId",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "The sequence number of the window in the buffered sequence of windows",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "url": "https://raw.githubusercontent.com/androidx/media/1.11.1/libraries/exoplayer/src/main/java/androidx/media3/exoplayer/ExoPlayerImplInternal.java",
+      "title": "ExoPlayerInternal-1.11.1",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "Return immediately to not send playback info updates after release.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "url": "https://doc.akka.io/libraries/akka-core/current/typed/interaction-patterns.html",
+      "title": "AkkaPatterns",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "Message exchange with Actors follow a few common patterns",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/1.9.0/kotlinx-coroutines-core/common/src/Job.kt",
+      "title": "Job-1.9.0",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "A background job. Conceptually, a job is a cancellable thing with a life-cycle",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/1.9.0/kotlinx-coroutines-core/common/src/CoroutineStart.kt",
+      "title": "CoroutineStart-1.9.0",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "Defines start options for coroutines builders.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/d8d6f8f37978b8e202d93b34f23f101df9c5724d/kotlinx-coroutines-core/common/src/channels/Channel.kt",
+      "title": "Channel-1.9.0",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "* it does not call `onUndeliveredElement` that was installed for this channel.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/d8d6f8f37978b8e202d93b34f23f101df9c5724d/kotlinx-coroutines-core/common/src/selects/Select.kt",
+      "title": "Select-1.9.0",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "* This select function is _biased_ to the first clause. When multiple clauses can be selected at the same time,",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/d8d6f8f37978b8e202d93b34f23f101df9c5724d/kotlinx-coroutines-test/common/src/TestBuilders.kt",
+      "title": "TestBuilders-1.9.0",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "* Because of this, child coroutines are not executed in parallel to the test body.",
+          "added": "2026-09-30"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "url": "https://raw.githubusercontent.com/androidx/media/8c6678b657ede1e7883fc164ef73ed483c7796c3/libraries/exoplayer/src/main/java/androidx/media3/exoplayer/source/MediaSource.java",
+      "title": "MediaSource-1.11.1",
+      "accessed": "2026-09-30",
+      "quotes": [
+        {
+          "text": "* The sequence number of the window in the buffered sequence of windows this media period is",
+          "added": "2026-09-30"
+        }
+      ]
+    }
+  ]
+}

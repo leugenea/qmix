@@ -1,0 +1,657 @@
+{
+  "schema_version": 3,
+  "issue": 306,
+  "author_delivery_checks_passed": true,
+  "check_kind": "Artifact identity, literal preservation, read-only guards and arithmetic only; not an independent protocol review or runtime model",
+  "checked_at_utc": "2026-10-01T06:09:02.967983+00:00",
+  "independent_review_pending": true,
+  "architecture_accepted": false,
+  "runtime_or_production_accepted": false,
+  "limited_scope": [
+    "D306-V2-FINAL-ACK-CYCLE",
+    "V2-PHYSICAL-SLOT-UNIT",
+    "V2-FOUR-STAGE-QUANTUM"
+  ],
+  "known_v2_review": {
+    "path": "/opt/data/tmp/qmix-277-design/design-v2-independent-review.json",
+    "sha256": "4dbab4ec57882464ca66c7f0e7a9d743a9bec0d8d87b75578319eeeb6e621288",
+    "completed": true,
+    "passed": false,
+    "unchanged": true,
+    "blocking_findings": 1,
+    "info_observations": 2,
+    "not_replaced_by_author_check": true
+  },
+  "read_only_guards": {
+    "before": {
+      "passed": true,
+      "at_utc": "2026-10-01T05:55:23.974049+00:00",
+      "candidate": {
+        "head": "9454d705a2eddc2669c964a552395f1ede35088a",
+        "branch": "audit/304-atomic-host-inbox",
+        "status": "M  ARCHITECTURE.md\nM  android/app/src/androidTest/java/com/qmix/tv/EndpointSettingsStoreInstrumentationTest.kt\nA  android/app/src/androidTest/java/com/qmix/tv/HostPostedMainInstrumentationTest.kt\nM  android/app/src/androidTest/java/com/qmix/tv/HostSessionControllerInstrumentationTest.kt\nM  android/app/src/androidTest/java/com/qmix/tv/HostSessionFlowTestSupport.kt\nM  android/app/src/androidTest/java/com/qmix/tv/MainActivityInstrumentationTest.kt\nM  android/app/src/androidTest/java/com/qmix/tv/QueueAdvancementInstrumentationTest.kt\nM  android/app/src/androidTest/java/com/qmix/tv/QueueTestFixtures.kt\nM  android/app/src/main/java/com/qmix/tv/AuthoritativePlaybackCoordinator.kt\nA  android/app/src/main/java/com/qmix/tv/HostCloseCredits.kt\nA  android/app/src/main/java/com/qmix/tv/HostIntentInbox.kt\nA  android/app/src/main/java/com/qmix/tv/HostPauseOwner.kt\nM  android/app/src/main/java/com/qmix/tv/HostSessionController.kt\nM  android/app/src/main/java/com/qmix/tv/PlayerStatePublisher.kt\nM  android/app/src/main/java/com/qmix/tv/QMixApplication.kt\nM  android/app/src/main/java/com/qmix/tv/QueueAdvancementCoordinator.kt\nM  android/app/src/test/java/com/qmix/tv/EndpointSettingsTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostDeferredPlaybackTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostIntentInboxTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostPauseOwnerTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostRoomClosureTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostRoomMissingRecoveryTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostSessionAtomicInboxTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionControllerTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionCoverageHeadroomTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionFlowTestSupport.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionJVMBranchTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionLifecycleTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionReviewFindingsTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionSingleWorkerRegressionTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionStateFlowMigrationTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostStateTestSupportTest.kt\nM  android/app/src/test/java/com/qmix/tv/LiveRoomPresentationTest.kt\nM  android/app/src/test/java/com/qmix/tv/PlayerStatePublisherTest.kt\nM  android/app/src/test/java/com/qmix/tv/QueueAdvancementCoordinatorTest.kt\nA  docs/host-inbox-test-boundaries.md\nA  docs/host-intent-inbox.md",
+        "index_sha256": "17c08b416df23bd7ea09542698163e8a57e36df7d99effe8e2569e9867db39ed"
+      },
+      "main": {
+        "head": "9454d705a2eddc2669c964a552395f1ede35088a",
+        "branch": "main",
+        "status": "",
+        "index_sha256": "519ba0229965f5ea15e9b09ac74e37423d60af7c97e7cb87aa2c44efbb7dc3cf"
+      },
+      "candidate_tree": "e5863aa14ce4d90db83d6b758315cb75cbc61bdc",
+      "changed_paths": 37,
+      "staged_patch_sha256": "ea4609b89e1730e59b0730dceb9f26c310ee7b86ae61b54c14fce72d5329f16b",
+      "all_index_worktree_manifest_bytes_match": true,
+      "original_artifacts_unchanged": true,
+      "index_files_byte_identical_to_before": true,
+      "git_optional_locks": false,
+      "method": "Read-only git plus Python SHA-1 tree computation; no write-tree/index refresh/build"
+    },
+    "after": {
+      "passed": true,
+      "at_utc": "2026-10-01T06:09:01.201943+00:00",
+      "candidate": {
+        "head": "9454d705a2eddc2669c964a552395f1ede35088a",
+        "branch": "audit/304-atomic-host-inbox",
+        "status": "M  ARCHITECTURE.md\nM  android/app/src/androidTest/java/com/qmix/tv/EndpointSettingsStoreInstrumentationTest.kt\nA  android/app/src/androidTest/java/com/qmix/tv/HostPostedMainInstrumentationTest.kt\nM  android/app/src/androidTest/java/com/qmix/tv/HostSessionControllerInstrumentationTest.kt\nM  android/app/src/androidTest/java/com/qmix/tv/HostSessionFlowTestSupport.kt\nM  android/app/src/androidTest/java/com/qmix/tv/MainActivityInstrumentationTest.kt\nM  android/app/src/androidTest/java/com/qmix/tv/QueueAdvancementInstrumentationTest.kt\nM  android/app/src/androidTest/java/com/qmix/tv/QueueTestFixtures.kt\nM  android/app/src/main/java/com/qmix/tv/AuthoritativePlaybackCoordinator.kt\nA  android/app/src/main/java/com/qmix/tv/HostCloseCredits.kt\nA  android/app/src/main/java/com/qmix/tv/HostIntentInbox.kt\nA  android/app/src/main/java/com/qmix/tv/HostPauseOwner.kt\nM  android/app/src/main/java/com/qmix/tv/HostSessionController.kt\nM  android/app/src/main/java/com/qmix/tv/PlayerStatePublisher.kt\nM  android/app/src/main/java/com/qmix/tv/QMixApplication.kt\nM  android/app/src/main/java/com/qmix/tv/QueueAdvancementCoordinator.kt\nM  android/app/src/test/java/com/qmix/tv/EndpointSettingsTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostDeferredPlaybackTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostIntentInboxTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostPauseOwnerTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostRoomClosureTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostRoomMissingRecoveryTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostSessionAtomicInboxTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionControllerTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionCoverageHeadroomTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionFlowTestSupport.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionJVMBranchTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionLifecycleTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionReviewFindingsTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionSingleWorkerRegressionTest.kt\nM  android/app/src/test/java/com/qmix/tv/HostSessionStateFlowMigrationTest.kt\nA  android/app/src/test/java/com/qmix/tv/HostStateTestSupportTest.kt\nM  android/app/src/test/java/com/qmix/tv/LiveRoomPresentationTest.kt\nM  android/app/src/test/java/com/qmix/tv/PlayerStatePublisherTest.kt\nM  android/app/src/test/java/com/qmix/tv/QueueAdvancementCoordinatorTest.kt\nA  docs/host-inbox-test-boundaries.md\nA  docs/host-intent-inbox.md",
+        "index_sha256": "17c08b416df23bd7ea09542698163e8a57e36df7d99effe8e2569e9867db39ed"
+      },
+      "main": {
+        "head": "9454d705a2eddc2669c964a552395f1ede35088a",
+        "branch": "main",
+        "status": "",
+        "index_sha256": "519ba0229965f5ea15e9b09ac74e37423d60af7c97e7cb87aa2c44efbb7dc3cf"
+      },
+      "candidate_tree": "e5863aa14ce4d90db83d6b758315cb75cbc61bdc",
+      "changed_paths": 37,
+      "staged_patch_sha256": "ea4609b89e1730e59b0730dceb9f26c310ee7b86ae61b54c14fce72d5329f16b",
+      "all_index_worktree_manifest_bytes_match": true,
+      "original_artifacts_unchanged": true,
+      "index_files_byte_identical_to_before": true,
+      "git_optional_locks": false,
+      "method": "Read-only git plus Python SHA-1 tree computation; no write-tree/index refresh/build"
+    },
+    "same_candidate_main_index_bytes_status_patch_tree": true,
+    "archive_members_verified_before": 37,
+    "archive_unchanged_after": true,
+    "method": "Inspected guard prefix only; writer omitted. GIT_OPTIONAL_LOCKS=0. Git read-only; Python computes tree SHA1 without write-tree."
+  },
+  "exact_core_immutable_sha256_before": {
+    "design.md": "046d410ca4f0071f8e0f46e9f480a6dc6cf62ab2f1700b2da922bf9d350bdf56",
+    "matrices.md": "f286e77e7cb04e3244dcf71db857d5458eb6954a5c8de8b19019784014f482fc",
+    "sources.md": "e76fccfdb4aaaf34bb5f75508806793a0b6d9a3bd6d4f1038f903d2d93c8890a",
+    "sources-ledger.json": "d9e8fc95062a08d5e22bcb0c8d98b2f0da19d79c3e869199102c6b996956092f",
+    "handoff-summary.md": "a72a0fddce87bc30b45642a0c74f33dcf88edfe0ec5b9bc872df4fd12997515a",
+    "read-checks.md": "4371a77c2d245f548e77d786a85c8bfa6a0f0d12a71f71ff279643246cbe1bc5",
+    "delivery-checks.json": "270ac72b7a3f4057f557e5be616266218a40d1c0ac5eccbaa790f44457b8cfbe",
+    "design-independent-review.json": "7159b32ee7e682c944ae8f2167f7680b8caa7913329c51f331688d25fa2870b9",
+    "design-v2.md": "377004f8831f9f813c3612414f647469ce29dfcf1998c5984f923592962beb60",
+    "matrices-v2.md": "800a89cd6450dad1c7d06b6dcc60081992d12b097776401420f67377d9b7ec2b",
+    "handoff-summary-v2.md": "3bfef1f752dfc4c04db820da7876bf73df88d6ec410822c118f2f63f999371f8",
+    "delivery-checks-v2.json": "2513dcc61ede4e9120ace7b7fa8101b7d8edf64e2efbbf0d79741dfb840e1dba",
+    "frozen-304.patch": "ea4609b89e1730e59b0730dceb9f26c310ee7b86ae61b54c14fce72d5329f16b",
+    "frozen-304-manifest.json": "323c8d42987f94ab35152d744d5ca0af140efe42c432ff7ff82a51916512d081",
+    "frozen-304-sources.tar.gz": "ee0dd113a1ceacf40e21ef1d804612c95bf3e0651eafc11b7ee64576a4518abe",
+    "design-v2-independent-review.json": "4dbab4ec57882464ca66c7f0e7a9d743a9bec0d8d87b75578319eeeb6e621288"
+  },
+  "exact_core_immutable_sha256_after": {
+    "design.md": "046d410ca4f0071f8e0f46e9f480a6dc6cf62ab2f1700b2da922bf9d350bdf56",
+    "matrices.md": "f286e77e7cb04e3244dcf71db857d5458eb6954a5c8de8b19019784014f482fc",
+    "sources.md": "e76fccfdb4aaaf34bb5f75508806793a0b6d9a3bd6d4f1038f903d2d93c8890a",
+    "sources-ledger.json": "d9e8fc95062a08d5e22bcb0c8d98b2f0da19d79c3e869199102c6b996956092f",
+    "handoff-summary.md": "a72a0fddce87bc30b45642a0c74f33dcf88edfe0ec5b9bc872df4fd12997515a",
+    "read-checks.md": "4371a77c2d245f548e77d786a85c8bfa6a0f0d12a71f71ff279643246cbe1bc5",
+    "delivery-checks.json": "270ac72b7a3f4057f557e5be616266218a40d1c0ac5eccbaa790f44457b8cfbe",
+    "design-independent-review.json": "7159b32ee7e682c944ae8f2167f7680b8caa7913329c51f331688d25fa2870b9",
+    "design-v2.md": "377004f8831f9f813c3612414f647469ce29dfcf1998c5984f923592962beb60",
+    "matrices-v2.md": "800a89cd6450dad1c7d06b6dcc60081992d12b097776401420f67377d9b7ec2b",
+    "handoff-summary-v2.md": "3bfef1f752dfc4c04db820da7876bf73df88d6ec410822c118f2f63f999371f8",
+    "delivery-checks-v2.json": "2513dcc61ede4e9120ace7b7fa8101b7d8edf64e2efbbf0d79741dfb840e1dba",
+    "frozen-304.patch": "ea4609b89e1730e59b0730dceb9f26c310ee7b86ae61b54c14fce72d5329f16b",
+    "frozen-304-manifest.json": "323c8d42987f94ab35152d744d5ca0af140efe42c432ff7ff82a51916512d081",
+    "frozen-304-sources.tar.gz": "ee0dd113a1ceacf40e21ef1d804612c95bf3e0651eafc11b7ee64576a4518abe",
+    "design-v2-independent-review.json": "4dbab4ec57882464ca66c7f0e7a9d743a9bec0d8d87b75578319eeeb6e621288"
+  },
+  "all_prior_task_artifacts_sha256_before": {
+    "open-issues.json": "938ad2f6baffc2b928dcb5815ce1696c4fa8ae9ce37b8c8d6805876634fcd917",
+    "execution.md": "ed47768810620f21d8df9bfeccb6ea9b57ea9b251dafb0cb66b7313deb62d510",
+    "issue-body.md": "fb6862e6e7400e05930d7aab490c40913dd54c4265add83b253045fa6a61b56d",
+    "frozen-304.patch": "ea4609b89e1730e59b0730dceb9f26c310ee7b86ae61b54c14fce72d5329f16b",
+    "frozen-304-manifest.json": "323c8d42987f94ab35152d744d5ca0af140efe42c432ff7ff82a51916512d081",
+    "frozen-304-sources.tar.gz": "ee0dd113a1ceacf40e21ef1d804612c95bf3e0651eafc11b7ee64576a4518abe",
+    "updated-277.md": "719a1a2df7fc8ed2c1cf9d9b373b0361baef070c78d37cbd08ee7628c64ccfc0",
+    "updated-304.md": "edef0b9d5582b883b9e9982bc41a331434008b2cb505a296f26d0d60735724e1",
+    "new-project-item.json": "eadeac1ea8e6f31cc57011b0a04a6dd0401bb3a10c8df0ab02ac35e77170ebab",
+    "start-journal.md": "4f0063757f65799c95555c01b09f3b39b7d9521aee817589931aac957f316f83",
+    "board-after-start.json": "a5b546b4eba2d1d9213abaa36e334403dc5f5ed1807156cd5cdafddc37f9dca8",
+    "board-after-start-retry.json": "58abfc9cb9768f02f37b74afeb3d4ba622fe9b238fa55f27a5ef3a3533ab489c",
+    "read-only-before.json": "4a0917acfef756c40f89b6c01863abfacd0af26b31cebfbb4dc89d13f1152fbc",
+    "live-issue-306.json": "3380b1fc51bfd0cfce0eba2679382fa1b32ad4575cb14eef8c1b8bfc61f595a2",
+    "live-issue-277.json": "3d103f65566374350114855f8fffb016bd91b7b0b8635c4a7cea5d732b87773f",
+    "live-issue-304.json": "7f7e8d2bdde7cfe535853850da6fe9ba80b8065f74c3c01c36af4c54e7de3f91",
+    "live-issue-305.json": "138347304e59f522b88758586f7cfdbcd55f088cb50126ad2362fb15048f5317",
+    "manifest-validation-before.json": "a8861519cb5b45dcf99ce0b43cee5b00153f271d691ab4edeb541820898e4d76",
+    "live-issue-306.md": "fc86d881bbee128e2eb908e9e3f9f749614ca5009e6866ba23eb523863993234",
+    "live-issue-277.md": "7f524142ce15cafcd4cfef71039648ab52962d1a4903e36bb861355660149e04",
+    "live-issue-304.md": "1a6094d3db65f60fd8c92b1915c5279263e936151a87939851811e39ad634918",
+    "live-issue-305.md": "abbd3d682ed3e72cbf63b104956919944609ac71e5faf77ec259b770c152cf18",
+    "review-eight-blockers.json": "b0182376b0941718446b1a50fcbb5307d5267034fe0f562d251635aae3847cdc",
+    "review-context.json": "4a46295d9ad60beeb8be4fcc3ff514587cb604b4a196c0b7f9d5879caceb4709",
+    "live-issue-306-full-rest.json": "add37c011d799d4a1468542913ebdcca09993a0a63a9c740bfea07cd8bf11c06",
+    "live-issue-306-full-rest.md": "f388b1263811703e65e2d6544ab4aa05a882f7f24932ea3a24bd3fb3afda71fb",
+    "live-issue-277-full-rest.json": "64c24dbb19ae5ca38f40f0f237d458652ac217ec89347e3b91c20c24b714639b",
+    "live-issue-277-full-rest.md": "155843319a12e954f702c71c6ebfd9ad49bf6b38d142da07b02519c4e728c5e4",
+    "live-issue-304-full-rest.json": "a77f22a43a782c5d84a7207a9ba10b6cf11fbe004635436e6e64687b5ae99010",
+    "live-issue-304-full-rest.md": "4043e39affe4a9c47fcd4fb37bdc92ed1ac667d5bf3564bfb0a16208920be86e",
+    "live-issue-305-full-rest.json": "ec9dc3802ea4dbc0ecc28ccb71393c2230ce2cc8ac4ec4553d135e76cc737759",
+    "live-issue-305-full-rest.md": "f8c17dfb6cb8d63698bebfeba883da2a1066e3eda2ef5d2e8df8923025ac4f6c",
+    "index-tree-before.json": "1da2bb83780b4f506a6f90bfbbc20ad927f5385540b601ff454b76e830fc54a1",
+    "research-fetch.py": "71011c79172d663b173ecc91e4caad3af86e120a037ce318d4e1aa41d2ea5ad6",
+    "primary-fetch-manifest.json": "eac5773d76804ce1b3c4fd1de36bc406b68a37c444c8babdc8cba603da71e8e5",
+    "search-results.json": "3eba6dba78e79fbd5d52742dbc01eaacbc75935e6e5e2ac9ec3f48a5e558ec30",
+    "legacy-71-read-checks.json": "7ab616c6ca93ebc72623f2c090f8889374c91bf37766c6bea3252349b3d42562",
+    "main-legacy-read-pack-1.md": "098f11bdcf896a6831a8a5f13596a786acd11eee792336282780d08580e81417",
+    "main-legacy-read-pack-2.md": "62ce58ddc7f198db1b0f522f2568cb41e2f30e95940f597053997af4d95a536f",
+    "main-legacy-read-pack-3.md": "a61036c41aecccf671aaf0a22d3fadde2225854edefe0c34cd1e2a0b418d9e86",
+    "candidate-legacy-read-pack-1.md": "3c97dd747d391a3db78b99e663301dc6b4a43444f883d72ae1ba4e8abe8f043b",
+    "candidate-legacy-read-pack-2.md": "6f65066f4ff9259565f4eb4fd56625cca6687a3eb98838ef692179546dd98be3",
+    "candidate-legacy-read-pack-3.md": "2f521d54f4a6a5596155c9665a608ca26c1a364d4f33719b8fa7aa84a69681a7",
+    "review-eight-blockers-condensed.json": "6d44b1a0b521bdb7bdc9aca71f59845db2e2733d95f9ca570bd2e809c411f183",
+    "review-all-eight-condensed.json": "bfa4ec20366e4147ae87c15b517ed37617d596831badf5ba3890035d1fbc3840",
+    "guard-snapshot.py": "2eb8239f0167daf88812ab3426f7f62c20fe366e6dcfc5bb5f355beb5afcb1b4",
+    "guard-continued-before.json": "9dc6b91ff47c04387f74f9fce07480471a1146803124c67c98e3ec618d863650",
+    "read-checks.py": "31bb483325cc784eca45e81e5ad6f4c9e290afea9b6e9b5e0167acf91988a0ec",
+    "ExoPlayerInternal-1.11.1.txt.evidence.md": "302f54e32a12115f6f9564e0b266f2c0e2720a5327ccba55a17f062d623e72a8",
+    "AkkaPatterns.txt.evidence.md": "aa015bccee9f847bf754d9506007831f21a0c2d718ddddfe2faa4917133ad386",
+    "Media3Thread.txt.evidence.md": "4a3188689f4e5bb0b12ca7a543fbf662c5389b3f0bf4ee0355af6a768a44a1a5",
+    "MediaPeriodId.txt.evidence.md": "04ab05199998c18d0cbd6c542d6d244e3bac123d9be2a66384c88fa48c2123a2",
+    "live-issue-306-final-full.md": "0a1bc0f6ec87ad77523314756cfb8a8099cd46bfdada046eadebe1aa0bafb9db",
+    "live-issue-306-final-full.json": "add37c011d799d4a1468542913ebdcca09993a0a63a9c740bfea07cd8bf11c06",
+    "live-issue-277-final-full.md": "7c01e5e537d1fcc5a599ab03694452dc8bba2dc0d3636404fc5f2d90aa52c612",
+    "live-issue-277-final-full.json": "64c24dbb19ae5ca38f40f0f237d458652ac217ec89347e3b91c20c24b714639b",
+    "live-issue-304-final-full.md": "fd6f378bcddbb5b15d0851a56c5114eebda76679e205663d614a45bb3fd14036",
+    "live-issue-304-final-full.json": "a77f22a43a782c5d84a7207a9ba10b6cf11fbe004635436e6e64687b5ae99010",
+    "live-issue-305-final-full.md": "c2a0b4598084835aac7afa63d224a965877795305b0c8d807a15b5f831fe9694",
+    "live-issue-305-final-full.json": "ec9dc3802ea4dbc0ecc28ccb71393c2230ce2cc8ac4ec4553d135e76cc737759",
+    "live-issue-final-read-checks.json": "096a6ce21ca29fd85289bbce5d09613f9026ab3f270f911de8a4ecd8b20f0b29",
+    "primary-version-pins.json": "6a983171bab41e2eb11357c51e2b24965f7daf05412a66dc8d71af4eb4abc21f",
+    "final-evidence.py": "b70ff1a07e8cb0e690fdccd558ac9be6f1a680fb6c3a5a7b41b4abd7921d8006",
+    "fetched-support-checks.json": "eef39c2a2944e31aac7afac9eec1343a5ab08e7357b35d9d7a960ac41c4cb5a2",
+    "sources-extra-fetch.py": "f8a7b24ee42f2f2b8efc5651a0062cf07e8d316a44e36ba6b099856e3bf05f02",
+    "sources-ledger.json": "d9e8fc95062a08d5e22bcb0c8d98b2f0da19d79c3e869199102c6b996956092f",
+    "primary-extra-fetch-manifest.json": "32c9df492c0aecfb57c3135727ba8f8a0e7b3b5a70cc814a53931f992235f395",
+    "sources.md": "e76fccfdb4aaaf34bb5f75508806793a0b6d9a3bd6d4f1038f903d2d93c8890a",
+    "handoff-summary.md": "a72a0fddce87bc30b45642a0c74f33dcf88edfe0ec5b9bc872df4fd12997515a",
+    "guard-after.json": "f5bb0e86d5fa782245894cf3435b71a878c3f7f511d9558e68ce2527e456e68c",
+    "matrices.md": "f286e77e7cb04e3244dcf71db857d5458eb6954a5c8de8b19019784014f482fc",
+    "guard-final-after.json": "ff1fe638ab62183ec70b5ac92f861fd6670f643b6e3baa03ec03cfef74d2eec2",
+    "design.md.citation-check.txt": "2fd6890e136f9c795af418f897a7f47c692428fad5fbda15e0e6169568955bed",
+    "matrices.md.citation-check.txt": "6f2782ed68171ebbb09fc3cb595b0957f8aa9eba86a66c25ad938f5e22657371",
+    "delivery-checks.json": "270ac72b7a3f4057f557e5be616266218a40d1c0ac5eccbaa790f44457b8cfbe",
+    "read-checks.md": "4371a77c2d245f548e77d786a85c8bfa6a0f0d12a71f71ff279643246cbe1bc5",
+    "design.md": "046d410ca4f0071f8e0f46e9f480a6dc6cf62ab2f1700b2da922bf9d350bdf56",
+    "design-independent-review.json": "7159b32ee7e682c944ae8f2167f7680b8caa7913329c51f331688d25fa2870b9",
+    "guard-v2-before.json": "f8e64c36aea16599b714da66b1b66b66c33740a4d73cc8ab45870ad44917aba5",
+    "v2-immutable-before.json": "b040a99eebed985b9b4941dc7ff6e1960725c530740b056961b5620f3a3149ea",
+    "v2-evidence-read.py": "838b53c4bb7352f546ef37023214dcf9d5fffd5030961efa0e79b0a1bcb0710e",
+    "live-issue-277-v2.json": "73fe05fed73e86c48699994b6de1a68da16878b7fe4823db4986038340d2c67d",
+    "live-issue-277-v2.md": "d7b82b6520aa49c9000949beb0541e8f40345ce41dba401a9ea49d72aa8d4337",
+    "live-issue-306-v2.json": "295b0117d36f4a571447093f518351c2eeffd1b440f537d1a3b7a65ddf87cb3c",
+    "live-issue-306-v2.md": "7c51b37462d9645c196da3bcaa6e0bdbc2a522b2475ece2d0de8c5524e99cd66",
+    "live-issue-305-v2.json": "080fc7620c75b7492d7e5c8288404f702c5113fdc724b424ce306bb10e0c95e8",
+    "live-issue-305-v2.md": "4b43ebeb4597eb6dc1bc95257207b8a94f6bd9de22ec60f943f90d26ba68f9d9",
+    "live-issue-304-v2.json": "05f0754859fb950442a8c009e21a63b21796c5ec2ab32819887576f5a33a8e04",
+    "live-issue-304-v2.md": "5584d5a764a3d8da0539d0a42ea73607e7e30c0a8c93c9bfad6b79e51c69606d",
+    "live-issue-v2-checks.json": "ad57df88cfd7cdb0736fd135060fbf2c339c05e4c28c158dc48a27ef0a617e3c",
+    "guard-v2-writing-before.json": "7c3dc8a98758c290c69d5b495b2c88fbd4ea7a146aa5a65548ade403c585bb68",
+    "primary-Job-v2.kt.txt": "23042f8626956589bfd20ee9431fce5faa6770f58b5c2e29f719129849f6504c",
+    "primary-refresh-v2.json": "0b572d27992a9ec56ea084084733f62b30cf2d7bfe981e3b035b1bf710efb407",
+    "design-v2.md": "377004f8831f9f813c3612414f647469ce29dfcf1998c5984f923592962beb60",
+    "handoff-summary-v2.md": "3bfef1f752dfc4c04db820da7876bf73df88d6ec410822c118f2f63f999371f8",
+    "matrices-v2.md": "800a89cd6450dad1c7d06b6dcc60081992d12b097776401420f67377d9b7ec2b",
+    "guard-v2-after.json": "eb84978f5a2e529b523e9e8f440aa5f63588424c2fda8fe0b78849d7b0feaec3",
+    "delivery-checks-v2.json": "2513dcc61ede4e9120ace7b7fa8101b7d8edf64e2efbbf0d79741dfb840e1dba",
+    "v2-delivery-audit.py": "af02060fcb5b28ca349ff410d8e2554bc2a7a13f7645de3649b9bd9760679ca1",
+    "design-v2-independent-review.json": "4dbab4ec57882464ca66c7f0e7a9d743a9bec0d8d87b75578319eeeb6e621288",
+    "primary-sources/Completion.txt": "cf3e71452c235b24660f0074f5d8e07c401d4939b862820d06d5be63fad719f7",
+    "primary-sources/select.txt": "1e88991cf94fbc5957ce13317a22b5c41d89d96d48b571cee16b4235f38512d6",
+    "primary-sources/Channel.txt": "70f5f93494d8bfc6f15e562459913a1106c3abe7673d08b9a5eb1bdf8818e660",
+    "primary-sources/LAZY.txt": "6070be4061aa83327247e151f608703cc6be48077970639b4574acf15da74e1f",
+    "primary-sources/trySend.txt": "643388cebe850f84578932df37ba8b89b57d7c33aa651d2a3e92c26bab56f8e8",
+    "primary-sources/Job.txt": "3af7ac0ab1c5d4a11a08274eec1f915eac156860e998d701b710e96e6746f45f",
+    "primary-sources/selectUnbiased.txt": "eb63a23022f896baf9f552db00e39c74b11f1bfbdb6f719b2d390a099f7578b8",
+    "primary-sources/LincheckStrategies.txt": "574678c4cb2631526a8708410264136bb15c0eb683e1d1c0935482c46f1b01b4",
+    "primary-sources/Lincheck.txt": "454b7c50a0215fdc35d42b1466df94f9c7df16cbe697c8a7f6d3f52a13d4c2c9",
+    "primary-sources/runTest.txt": "b6437660a4520c542cffe39615abaef13d30fa1df0b24e129e81f01ac0017c9e",
+    "primary-sources/CoroutineStart-1.9.0.txt": "26d615974feac7500b336bcf489c8578873f63dbf8b1cd47d280c81b0c5db9c1",
+    "primary-sources/AkkaPatterns.txt": "5a626ca2e79569734db2c4d8f65814dd11a601d44defff9f430f28c074b41424",
+    "primary-sources/Job-1.9.0.txt": "69b9fe39f729009de3eb3530f7e40bf28737f28454fb8e1c14fd4b0193619a2d",
+    "primary-sources/ExoPlayerInternal-1.11.1.txt": "143789205a2157502fb4835609f21640ac4c922283b8b8dee7ae2f66907ae850",
+    "primary-sources/Media3Thread.txt": "1bb9ba7f8038921d848ca2b6488caead7412edaa1288986391b2f958b7c68294",
+    "primary-sources/MediaPeriodId.txt": "b5f1bad4aa7cfb4f972ceef85f72ac62ac834a25785d0c15325d76e9d50ad87c",
+    "primary-sources/Channel-1.9.0.txt": "bdaf7764a48a444199ef68433cbbe2b2a283ec592d39c0f1f30ddc4549123556",
+    "primary-sources/Select-1.9.0.txt": "cc9fafce25579abdc6cb2334524e5ca6d2e76ba4279dd6799b75f5c95e647737",
+    "primary-sources/TestBuilders-1.9.0.txt": "83df1b58feffeee9c54d9bade29b73b67ea3459ecb02a9e8c4cc4b8a5ce33639",
+    "primary-sources/MediaSource-1.11.1.txt": "1cb4ad187cd41e722a6d0b8230c22716a3583679d0396fcbda42e9a848f085c6"
+  },
+  "all_prior_task_artifacts_sha256_after": {
+    "open-issues.json": "938ad2f6baffc2b928dcb5815ce1696c4fa8ae9ce37b8c8d6805876634fcd917",
+    "execution.md": "ed47768810620f21d8df9bfeccb6ea9b57ea9b251dafb0cb66b7313deb62d510",
+    "issue-body.md": "fb6862e6e7400e05930d7aab490c40913dd54c4265add83b253045fa6a61b56d",
+    "frozen-304.patch": "ea4609b89e1730e59b0730dceb9f26c310ee7b86ae61b54c14fce72d5329f16b",
+    "frozen-304-manifest.json": "323c8d42987f94ab35152d744d5ca0af140efe42c432ff7ff82a51916512d081",
+    "frozen-304-sources.tar.gz": "ee0dd113a1ceacf40e21ef1d804612c95bf3e0651eafc11b7ee64576a4518abe",
+    "updated-277.md": "719a1a2df7fc8ed2c1cf9d9b373b0361baef070c78d37cbd08ee7628c64ccfc0",
+    "updated-304.md": "edef0b9d5582b883b9e9982bc41a331434008b2cb505a296f26d0d60735724e1",
+    "new-project-item.json": "eadeac1ea8e6f31cc57011b0a04a6dd0401bb3a10c8df0ab02ac35e77170ebab",
+    "start-journal.md": "4f0063757f65799c95555c01b09f3b39b7d9521aee817589931aac957f316f83",
+    "board-after-start.json": "a5b546b4eba2d1d9213abaa36e334403dc5f5ed1807156cd5cdafddc37f9dca8",
+    "board-after-start-retry.json": "58abfc9cb9768f02f37b74afeb3d4ba622fe9b238fa55f27a5ef3a3533ab489c",
+    "read-only-before.json": "4a0917acfef756c40f89b6c01863abfacd0af26b31cebfbb4dc89d13f1152fbc",
+    "live-issue-306.json": "3380b1fc51bfd0cfce0eba2679382fa1b32ad4575cb14eef8c1b8bfc61f595a2",
+    "live-issue-277.json": "3d103f65566374350114855f8fffb016bd91b7b0b8635c4a7cea5d732b87773f",
+    "live-issue-304.json": "7f7e8d2bdde7cfe535853850da6fe9ba80b8065f74c3c01c36af4c54e7de3f91",
+    "live-issue-305.json": "138347304e59f522b88758586f7cfdbcd55f088cb50126ad2362fb15048f5317",
+    "manifest-validation-before.json": "a8861519cb5b45dcf99ce0b43cee5b00153f271d691ab4edeb541820898e4d76",
+    "live-issue-306.md": "fc86d881bbee128e2eb908e9e3f9f749614ca5009e6866ba23eb523863993234",
+    "live-issue-277.md": "7f524142ce15cafcd4cfef71039648ab52962d1a4903e36bb861355660149e04",
+    "live-issue-304.md": "1a6094d3db65f60fd8c92b1915c5279263e936151a87939851811e39ad634918",
+    "live-issue-305.md": "abbd3d682ed3e72cbf63b104956919944609ac71e5faf77ec259b770c152cf18",
+    "review-eight-blockers.json": "b0182376b0941718446b1a50fcbb5307d5267034fe0f562d251635aae3847cdc",
+    "review-context.json": "4a46295d9ad60beeb8be4fcc3ff514587cb604b4a196c0b7f9d5879caceb4709",
+    "live-issue-306-full-rest.json": "add37c011d799d4a1468542913ebdcca09993a0a63a9c740bfea07cd8bf11c06",
+    "live-issue-306-full-rest.md": "f388b1263811703e65e2d6544ab4aa05a882f7f24932ea3a24bd3fb3afda71fb",
+    "live-issue-277-full-rest.json": "64c24dbb19ae5ca38f40f0f237d458652ac217ec89347e3b91c20c24b714639b",
+    "live-issue-277-full-rest.md": "155843319a12e954f702c71c6ebfd9ad49bf6b38d142da07b02519c4e728c5e4",
+    "live-issue-304-full-rest.json": "a77f22a43a782c5d84a7207a9ba10b6cf11fbe004635436e6e64687b5ae99010",
+    "live-issue-304-full-rest.md": "4043e39affe4a9c47fcd4fb37bdc92ed1ac667d5bf3564bfb0a16208920be86e",
+    "live-issue-305-full-rest.json": "ec9dc3802ea4dbc0ecc28ccb71393c2230ce2cc8ac4ec4553d135e76cc737759",
+    "live-issue-305-full-rest.md": "f8c17dfb6cb8d63698bebfeba883da2a1066e3eda2ef5d2e8df8923025ac4f6c",
+    "index-tree-before.json": "1da2bb83780b4f506a6f90bfbbc20ad927f5385540b601ff454b76e830fc54a1",
+    "research-fetch.py": "71011c79172d663b173ecc91e4caad3af86e120a037ce318d4e1aa41d2ea5ad6",
+    "primary-fetch-manifest.json": "eac5773d76804ce1b3c4fd1de36bc406b68a37c444c8babdc8cba603da71e8e5",
+    "search-results.json": "3eba6dba78e79fbd5d52742dbc01eaacbc75935e6e5e2ac9ec3f48a5e558ec30",
+    "legacy-71-read-checks.json": "7ab616c6ca93ebc72623f2c090f8889374c91bf37766c6bea3252349b3d42562",
+    "main-legacy-read-pack-1.md": "098f11bdcf896a6831a8a5f13596a786acd11eee792336282780d08580e81417",
+    "main-legacy-read-pack-2.md": "62ce58ddc7f198db1b0f522f2568cb41e2f30e95940f597053997af4d95a536f",
+    "main-legacy-read-pack-3.md": "a61036c41aecccf671aaf0a22d3fadde2225854edefe0c34cd1e2a0b418d9e86",
+    "candidate-legacy-read-pack-1.md": "3c97dd747d391a3db78b99e663301dc6b4a43444f883d72ae1ba4e8abe8f043b",
+    "candidate-legacy-read-pack-2.md": "6f65066f4ff9259565f4eb4fd56625cca6687a3eb98838ef692179546dd98be3",
+    "candidate-legacy-read-pack-3.md": "2f521d54f4a6a5596155c9665a608ca26c1a364d4f33719b8fa7aa84a69681a7",
+    "review-eight-blockers-condensed.json": "6d44b1a0b521bdb7bdc9aca71f59845db2e2733d95f9ca570bd2e809c411f183",
+    "review-all-eight-condensed.json": "bfa4ec20366e4147ae87c15b517ed37617d596831badf5ba3890035d1fbc3840",
+    "guard-snapshot.py": "2eb8239f0167daf88812ab3426f7f62c20fe366e6dcfc5bb5f355beb5afcb1b4",
+    "guard-continued-before.json": "9dc6b91ff47c04387f74f9fce07480471a1146803124c67c98e3ec618d863650",
+    "read-checks.py": "31bb483325cc784eca45e81e5ad6f4c9e290afea9b6e9b5e0167acf91988a0ec",
+    "ExoPlayerInternal-1.11.1.txt.evidence.md": "302f54e32a12115f6f9564e0b266f2c0e2720a5327ccba55a17f062d623e72a8",
+    "AkkaPatterns.txt.evidence.md": "aa015bccee9f847bf754d9506007831f21a0c2d718ddddfe2faa4917133ad386",
+    "Media3Thread.txt.evidence.md": "4a3188689f4e5bb0b12ca7a543fbf662c5389b3f0bf4ee0355af6a768a44a1a5",
+    "MediaPeriodId.txt.evidence.md": "04ab05199998c18d0cbd6c542d6d244e3bac123d9be2a66384c88fa48c2123a2",
+    "live-issue-306-final-full.md": "0a1bc0f6ec87ad77523314756cfb8a8099cd46bfdada046eadebe1aa0bafb9db",
+    "live-issue-306-final-full.json": "add37c011d799d4a1468542913ebdcca09993a0a63a9c740bfea07cd8bf11c06",
+    "live-issue-277-final-full.md": "7c01e5e537d1fcc5a599ab03694452dc8bba2dc0d3636404fc5f2d90aa52c612",
+    "live-issue-277-final-full.json": "64c24dbb19ae5ca38f40f0f237d458652ac217ec89347e3b91c20c24b714639b",
+    "live-issue-304-final-full.md": "fd6f378bcddbb5b15d0851a56c5114eebda76679e205663d614a45bb3fd14036",
+    "live-issue-304-final-full.json": "a77f22a43a782c5d84a7207a9ba10b6cf11fbe004635436e6e64687b5ae99010",
+    "live-issue-305-final-full.md": "c2a0b4598084835aac7afa63d224a965877795305b0c8d807a15b5f831fe9694",
+    "live-issue-305-final-full.json": "ec9dc3802ea4dbc0ecc28ccb71393c2230ce2cc8ac4ec4553d135e76cc737759",
+    "live-issue-final-read-checks.json": "096a6ce21ca29fd85289bbce5d09613f9026ab3f270f911de8a4ecd8b20f0b29",
+    "primary-version-pins.json": "6a983171bab41e2eb11357c51e2b24965f7daf05412a66dc8d71af4eb4abc21f",
+    "final-evidence.py": "b70ff1a07e8cb0e690fdccd558ac9be6f1a680fb6c3a5a7b41b4abd7921d8006",
+    "fetched-support-checks.json": "eef39c2a2944e31aac7afac9eec1343a5ab08e7357b35d9d7a960ac41c4cb5a2",
+    "sources-extra-fetch.py": "f8a7b24ee42f2f2b8efc5651a0062cf07e8d316a44e36ba6b099856e3bf05f02",
+    "sources-ledger.json": "d9e8fc95062a08d5e22bcb0c8d98b2f0da19d79c3e869199102c6b996956092f",
+    "primary-extra-fetch-manifest.json": "32c9df492c0aecfb57c3135727ba8f8a0e7b3b5a70cc814a53931f992235f395",
+    "sources.md": "e76fccfdb4aaaf34bb5f75508806793a0b6d9a3bd6d4f1038f903d2d93c8890a",
+    "handoff-summary.md": "a72a0fddce87bc30b45642a0c74f33dcf88edfe0ec5b9bc872df4fd12997515a",
+    "guard-after.json": "f5bb0e86d5fa782245894cf3435b71a878c3f7f511d9558e68ce2527e456e68c",
+    "matrices.md": "f286e77e7cb04e3244dcf71db857d5458eb6954a5c8de8b19019784014f482fc",
+    "guard-final-after.json": "ff1fe638ab62183ec70b5ac92f861fd6670f643b6e3baa03ec03cfef74d2eec2",
+    "design.md.citation-check.txt": "2fd6890e136f9c795af418f897a7f47c692428fad5fbda15e0e6169568955bed",
+    "matrices.md.citation-check.txt": "6f2782ed68171ebbb09fc3cb595b0957f8aa9eba86a66c25ad938f5e22657371",
+    "delivery-checks.json": "270ac72b7a3f4057f557e5be616266218a40d1c0ac5eccbaa790f44457b8cfbe",
+    "read-checks.md": "4371a77c2d245f548e77d786a85c8bfa6a0f0d12a71f71ff279643246cbe1bc5",
+    "design.md": "046d410ca4f0071f8e0f46e9f480a6dc6cf62ab2f1700b2da922bf9d350bdf56",
+    "design-independent-review.json": "7159b32ee7e682c944ae8f2167f7680b8caa7913329c51f331688d25fa2870b9",
+    "guard-v2-before.json": "f8e64c36aea16599b714da66b1b66b66c33740a4d73cc8ab45870ad44917aba5",
+    "v2-immutable-before.json": "b040a99eebed985b9b4941dc7ff6e1960725c530740b056961b5620f3a3149ea",
+    "v2-evidence-read.py": "838b53c4bb7352f546ef37023214dcf9d5fffd5030961efa0e79b0a1bcb0710e",
+    "live-issue-277-v2.json": "73fe05fed73e86c48699994b6de1a68da16878b7fe4823db4986038340d2c67d",
+    "live-issue-277-v2.md": "d7b82b6520aa49c9000949beb0541e8f40345ce41dba401a9ea49d72aa8d4337",
+    "live-issue-306-v2.json": "295b0117d36f4a571447093f518351c2eeffd1b440f537d1a3b7a65ddf87cb3c",
+    "live-issue-306-v2.md": "7c51b37462d9645c196da3bcaa6e0bdbc2a522b2475ece2d0de8c5524e99cd66",
+    "live-issue-305-v2.json": "080fc7620c75b7492d7e5c8288404f702c5113fdc724b424ce306bb10e0c95e8",
+    "live-issue-305-v2.md": "4b43ebeb4597eb6dc1bc95257207b8a94f6bd9de22ec60f943f90d26ba68f9d9",
+    "live-issue-304-v2.json": "05f0754859fb950442a8c009e21a63b21796c5ec2ab32819887576f5a33a8e04",
+    "live-issue-304-v2.md": "5584d5a764a3d8da0539d0a42ea73607e7e30c0a8c93c9bfad6b79e51c69606d",
+    "live-issue-v2-checks.json": "ad57df88cfd7cdb0736fd135060fbf2c339c05e4c28c158dc48a27ef0a617e3c",
+    "guard-v2-writing-before.json": "7c3dc8a98758c290c69d5b495b2c88fbd4ea7a146aa5a65548ade403c585bb68",
+    "primary-Job-v2.kt.txt": "23042f8626956589bfd20ee9431fce5faa6770f58b5c2e29f719129849f6504c",
+    "primary-refresh-v2.json": "0b572d27992a9ec56ea084084733f62b30cf2d7bfe981e3b035b1bf710efb407",
+    "design-v2.md": "377004f8831f9f813c3612414f647469ce29dfcf1998c5984f923592962beb60",
+    "handoff-summary-v2.md": "3bfef1f752dfc4c04db820da7876bf73df88d6ec410822c118f2f63f999371f8",
+    "matrices-v2.md": "800a89cd6450dad1c7d06b6dcc60081992d12b097776401420f67377d9b7ec2b",
+    "guard-v2-after.json": "eb84978f5a2e529b523e9e8f440aa5f63588424c2fda8fe0b78849d7b0feaec3",
+    "delivery-checks-v2.json": "2513dcc61ede4e9120ace7b7fa8101b7d8edf64e2efbbf0d79741dfb840e1dba",
+    "v2-delivery-audit.py": "af02060fcb5b28ca349ff410d8e2554bc2a7a13f7645de3649b9bd9760679ca1",
+    "design-v2-independent-review.json": "4dbab4ec57882464ca66c7f0e7a9d743a9bec0d8d87b75578319eeeb6e621288",
+    "primary-sources/Completion.txt": "cf3e71452c235b24660f0074f5d8e07c401d4939b862820d06d5be63fad719f7",
+    "primary-sources/select.txt": "1e88991cf94fbc5957ce13317a22b5c41d89d96d48b571cee16b4235f38512d6",
+    "primary-sources/Channel.txt": "70f5f93494d8bfc6f15e562459913a1106c3abe7673d08b9a5eb1bdf8818e660",
+    "primary-sources/LAZY.txt": "6070be4061aa83327247e151f608703cc6be48077970639b4574acf15da74e1f",
+    "primary-sources/trySend.txt": "643388cebe850f84578932df37ba8b89b57d7c33aa651d2a3e92c26bab56f8e8",
+    "primary-sources/Job.txt": "3af7ac0ab1c5d4a11a08274eec1f915eac156860e998d701b710e96e6746f45f",
+    "primary-sources/selectUnbiased.txt": "eb63a23022f896baf9f552db00e39c74b11f1bfbdb6f719b2d390a099f7578b8",
+    "primary-sources/LincheckStrategies.txt": "574678c4cb2631526a8708410264136bb15c0eb683e1d1c0935482c46f1b01b4",
+    "primary-sources/Lincheck.txt": "454b7c50a0215fdc35d42b1466df94f9c7df16cbe697c8a7f6d3f52a13d4c2c9",
+    "primary-sources/runTest.txt": "b6437660a4520c542cffe39615abaef13d30fa1df0b24e129e81f01ac0017c9e",
+    "primary-sources/CoroutineStart-1.9.0.txt": "26d615974feac7500b336bcf489c8578873f63dbf8b1cd47d280c81b0c5db9c1",
+    "primary-sources/AkkaPatterns.txt": "5a626ca2e79569734db2c4d8f65814dd11a601d44defff9f430f28c074b41424",
+    "primary-sources/Job-1.9.0.txt": "69b9fe39f729009de3eb3530f7e40bf28737f28454fb8e1c14fd4b0193619a2d",
+    "primary-sources/ExoPlayerInternal-1.11.1.txt": "143789205a2157502fb4835609f21640ac4c922283b8b8dee7ae2f66907ae850",
+    "primary-sources/Media3Thread.txt": "1bb9ba7f8038921d848ca2b6488caead7412edaa1288986391b2f958b7c68294",
+    "primary-sources/MediaPeriodId.txt": "b5f1bad4aa7cfb4f972ceef85f72ac62ac834a25785d0c15325d76e9d50ad87c",
+    "primary-sources/Channel-1.9.0.txt": "bdaf7764a48a444199ef68433cbbe2b2a283ec592d39c0f1f30ddc4549123556",
+    "primary-sources/Select-1.9.0.txt": "cc9fafce25579abdc6cb2334524e5ca6d2e76ba4279dd6799b75f5c95e647737",
+    "primary-sources/TestBuilders-1.9.0.txt": "83df1b58feffeee9c54d9bade29b73b67ea3459ecb02a9e8c4cc4b8a5ce33639",
+    "primary-sources/MediaSource-1.11.1.txt": "1cb4ad187cd41e722a6d0b8230c22716a3583679d0396fcbda42e9a848f085c6"
+  },
+  "all_prior_task_artifacts_unchanged": true,
+  "prior_task_file_count": 120,
+  "artifacts": {
+    "design-v3.md": {
+      "sha256": "cd21825f4ee3b234c79edb94ff6a9a920aff6576a7f538a18ecdb8c213827c93",
+      "bytes": 31715,
+      "lines": 97
+    },
+    "matrices-v3.md": {
+      "sha256": "f07c4cb970eb6ab5e0eb4d6f00bc17f727a8057d8d865e8cdef0a1ea25800065",
+      "bytes": 83711,
+      "lines": 306
+    },
+    "handoff-summary-v3.md": {
+      "sha256": "8432fed2a54a73b87b142bd8e8ae54018eb9f12caf5a0ac3be9395c5c6077dcd",
+      "bytes": 5924,
+      "lines": 32
+    }
+  },
+  "delivery_checks_self_hash": "Intentionally excluded from its own JSON to avoid recursive hashing; final tool output supplies exact file SHA256 for parent binding.",
+  "only_authorized_new_paths": [
+    "/opt/data/tmp/qmix-277-design/design-v3.md",
+    "/opt/data/tmp/qmix-277-design/matrices-v3.md",
+    "/opt/data/tmp/qmix-277-design/handoff-summary-v3.md",
+    "/opt/data/tmp/qmix-277-design/delivery-checks-v3.json"
+  ],
+  "finding_dispositions": {
+    "D306-V2-FINAL-ACK-CYCLE": {
+      "status": "author_specified_for_fresh_independent_review_not_independently_closed",
+      "design": "design-v3.md §§3–4",
+      "matrix": "matrices-v3.md §4 histories"
+    },
+    "V2-PHYSICAL-SLOT-UNIT": {
+      "status": "author_specified_for_fresh_independent_review_not_independently_closed",
+      "design": "design-v3.md §§3–4",
+      "matrix": "matrices-v3.md §3 exact slot mapping"
+    },
+    "V2-FOUR-STAGE-QUANTUM": {
+      "status": "author_specified_for_fresh_independent_review_not_independently_closed",
+      "design": "design-v3.md §§3–4",
+      "matrix": "matrices-v3.md §5 exhaustive stages"
+    }
+  },
+  "numeric_constants": {
+    "N": 64,
+    "W": 8,
+    "O": 4,
+    "T": 2,
+    "P": 2,
+    "D": 8,
+    "R": 2,
+    "L": 8,
+    "K": 4
+  },
+  "counted_conditional_structural_bounds": {
+    "records": 98,
+    "value_terminal_ack_cells": 294,
+    "amended_repository_payloads": 284,
+    "cells_and_payloads": 578,
+    "continuations": 784,
+    "adapter_owned_job_and_registration_bundles": 176,
+    "first_service_selector_quanta": 490,
+    "healthy_POST_stages": 9,
+    "conditional_nine_stage_POST_selector_quanta": 4410
+  },
+  "formulas": {
+    "records": "64+8+4+2+2+8+2+8",
+    "cells_payloads": "3*98+4*(4+3+64)",
+    "continuations": "8*98",
+    "charged_ownership_slots": "8*6+4*16+2*1+2*4+8*4+2*10+1+1",
+    "first_service": "(4+1)*98",
+    "conditional_POST_selector": "9*(4+1)*98"
+  },
+  "numeric_changes_from_v2": {
+    "physical_slots": {
+      "before": 175,
+      "after": 176,
+      "reason": "Add the source-visible owned process-parent completion registration on borrowed Job, attached to existing L seal owner; no new record/Job. Job+one registration bundles and Call callback/cancel metadata are explicit, not heap census."
+    },
+    "conditional_POST_selector_quanta": {
+      "before": 1960,
+      "after": 4410,
+      "reason": "Two G admission phases and bounded outside posting plus publication/birth/Job attach/registration/handle attach/start counted separately: nine selected quanta. First service490 unaffected."
+    }
+  },
+  "nine_POST_stages": [
+    {
+      "number": 1,
+      "name": "Reserve"
+    },
+    {
+      "number": 2,
+      "name": "Post linkage"
+    },
+    {
+      "number": 3,
+      "name": "Commit"
+    },
+    {
+      "number": 4,
+      "name": "Pending publication"
+    },
+    {
+      "number": 5,
+      "name": "Root birth"
+    },
+    {
+      "number": 6,
+      "name": "Job attach"
+    },
+    {
+      "number": 7,
+      "name": "Completion registration"
+    },
+    {
+      "number": 8,
+      "name": "Registration attach"
+    },
+    {
+      "number": 9,
+      "name": "Start"
+    }
+  ],
+  "not_measured_runtime_metrics": true,
+  "legacy": {
+    "count": 71,
+    "suites": 15,
+    "exact_unique_rows_verified": 71,
+    "v2_legacy_section_byte_identical": true,
+    "all_meanings_and_historical_excerpt_hashes_present": true,
+    "stale_old_bindings": [
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ],
+    "not_AST_or_assertion_equivalence_proof": true
+  },
+  "eight_classes_retained": [
+    "INBOX-DISPOSAL-HANDOFF",
+    "PLAYBACK-F1",
+    "PLAYBACK-F2",
+    "PLAYBACK-F3",
+    "FT-T6",
+    "FT-T1-NATIVE",
+    "FT-T2-PAUSE",
+    "FT-E1"
+  ],
+  "source_read_fingerprints": [
+    {
+      "path": "/opt/data/repo/qmix/android/app/src/main/java/com/qmix/tv/QueueAdvancementCoordinator.kt",
+      "sha256": "175cd9413a8d81a9a956b340e2d586bfb0ff9692ef922517d9bba8e49638e131",
+      "bytes": 15536,
+      "inspection_ranges": "1–373 full"
+    },
+    {
+      "path": "/opt/data/repo/qmix/android/app/src/main/java/com/qmix/tv/HostSessionController.kt",
+      "sha256": "10bd9481f36452003f1fd125c0d1ee546e90bc0627cf0a86b24bc0b6bfd839c7",
+      "bytes": 60018,
+      "inspection_ranges": "193–203;264–363;428–1014;1115–1329"
+    },
+    {
+      "path": "/opt/data/repo/qmix/android/app/src/main/java/com/qmix/tv/PlayerStatePublisher.kt",
+      "sha256": "e828ce1aff866c91a51bff73d627c8815b05f6d0656ef3e37a9ec7186af1aedd",
+      "bytes": 14718,
+      "inspection_ranges": "120–369"
+    },
+    {
+      "path": "/opt/data/repo/qmix/android/app/src/main/java/com/qmix/tv/AuthoritativePlaybackCoordinator.kt",
+      "sha256": "c82ded90e0086597f638bd29857b236b099877b15900466808bb85fb1b6d9e2b",
+      "bytes": 23276,
+      "inspection_ranges": "30–124 construction/listener"
+    },
+    {
+      "path": "/opt/data/repo/qmix/android/app/src/main/java/com/qmix/tv/HostPauseOwner.kt",
+      "sha256": "adc1c40992f7d749dd2cc8408b9967bb7f9fbc14ff20dfbd8db7b39646da8562",
+      "bytes": 3735,
+      "inspection_ranges": "1–93 full"
+    },
+    {
+      "path": "/opt/data/tmp/qmix-277-design/main/android/app/src/main/java/com/qmix/tv/RoomRepository.kt",
+      "sha256": "9ba4e87e572e1341f2089e73e319bb270cea945195419c11502cab93db0b151d",
+      "bytes": 8593,
+      "inspection_ranges": "70–218 observe/refresh/event flows"
+    },
+    {
+      "path": "/opt/data/tmp/qmix-277-design/main/android/app/src/main/java/com/qmix/tv/RoomApiClient.kt",
+      "sha256": "159d99176ee4460ec778046e6972986cbc2829c0824b2c6a2f9226acc2d85c0c",
+      "bytes": 11129,
+      "inspection_ranges": "270–299 awaitDecoded/cancel/response"
+    },
+    {
+      "path": "/opt/data/tmp/qmix-277-design/main/android/app/src/main/java/com/qmix/tv/OkHttpRoomEventStream.kt",
+      "sha256": "261889c83fafbaa960d9f4fb6986e6a1cabaa5e54368827eb7e3a7ce60b861a2",
+      "bytes": 2677,
+      "inspection_ranges": "1–68 full"
+    },
+    {
+      "path": "/opt/data/tmp/qmix-277-design/primary-sources/Job-1.9.0.txt",
+      "sha256": "69b9fe39f729009de3eb3530f7e40bf28737f28454fb8e1c14fd4b0193619a2d",
+      "bytes": 29008,
+      "inspection_ranges": "216–292 whole completion/join/registration"
+    }
+  ],
+  "history_presence_checked_not_executed": [
+    "rejected_POST",
+    "final_GET_success_Missing_failure_foreign",
+    "create_whole_worker_join_successor",
+    "recovery_whole_worker_join_successor",
+    "terminal_first_report",
+    "cancel_before_handoff",
+    "cancel_after_handoff",
+    "terminal_before_final_ACK",
+    "final_ACK_before_terminal",
+    "dead_Main_process_cancel",
+    "registration_immediate_completion"
+  ],
+  "owner_decisions_still_unapproved": [
+    {
+      "id": "O1",
+      "decision": "Choose A or B after paper blocker closure and independent exact-artifact review",
+      "new_decision": true,
+      "not_authorized": "No implementation or automatic #304 continuation follows from this review."
+    },
+    {
+      "id": "O2",
+      "decision": "Approve the enumerated actual-authority G split/file-function boundary",
+      "new_decision": true,
+      "not_authorized": "No wholesale queue/playback/publisher algorithm rewrite or unlisted scope."
+    },
+    {
+      "id": "O3",
+      "decision": "Approve narrow repository Command4/event64 capacity and retained refresh-terminal sentinel, or explicitly choose host-only boundedness",
+      "new_decision": true,
+      "not_authorized": "Repository exclusion is not overridden merely by choosing B; no new sender Jobs, authoritative command dropping or #279 behavior fix."
+    },
+    {
+      "id": "O4",
+      "decision": "Approve visible Call/EventSource callback and response ownership attachment within original loans",
+      "new_decision": true,
+      "not_authorized": "No implied excluded transport rewrite or callback-completion guarantee after uncooperative cancellation."
+    },
+    {
+      "id": "O5",
+      "decision": "Accept native callback-overflow seal/cancel policy and require native viability proof",
+      "new_decision": true,
+      "not_authorized": "No silent conflation/loss of accepted callbacks or claim this is behavior-preserving."
+    },
+    {
+      "id": "O6",
+      "decision": "Approve proposed pool/descriptor/physical-slot budgets, K4 causal fair-service policy and conditional progress assumptions",
+      "new_decision": true,
+      "not_authorized": "Counts are proposal contracts, not current runtime metrics or a total-allocation/wall-clock guarantee."
+    },
+    {
+      "id": "O7",
+      "decision": "Approve shared process quarantine/seal lifetime and recreation/reset contracts",
+      "new_decision": true,
+      "not_authorized": "No controller-local capacity reset, dead-affinity cleanup claim, replacement finalizer loop or Setup after permanent seal."
+    },
+    {
+      "id": "O8",
+      "decision": "Choose warning End-versus-confirm precommit false/postcommit true ordering after explicit historical compatibility assessment",
+      "new_decision": true,
+      "not_authorized": "Do not infer baseline equivalence or reopen already approved durable-before-true/traffic requirement."
+    },
+    {
+      "id": "O9",
+      "decision": "Confirm G activation-claim effect-start compatibility; stronger physical-entry semantics require explicit API/adapter approval",
+      "new_decision": true,
+      "not_authorized": "No physical transport/library-entry atomicity with concurrent Stop/End is assumed."
+    }
+  ],
+  "preserved_approved_contracts": [
+    "Public signatures and truthful synchronous reservations; accepted work may later cancel.",
+    "Durable HTTP warning acknowledgement before true/traffic; uncertain acknowledgement quarantines.",
+    "Genuine later posted non-inline host work; observer Stop/End suppresses still-unstarted effects; meaningful finite Stop debt.",
+    "Whole detached-room tree and required affine cleanup before normal Setup/replacement; process PAUSED/DELETE excluded from Setup wait.",
+    "PAUSED active+immutable pending, original2s deadlines, no predecessor overtaking/reset, fullness holds all unstarted recovery/retry/new-session paths.",
+    "Prompt End/abandon; independent authenticated DELETE original3s deadline, no preceding PAUSED/join dependency, correct no-DELETE reasons.",
+    "#279 Missing/final-PAUSED behavior unchanged.",
+    "#304 remains frozen/open, #305 blocked and #277 open per captured contracts; no current remote-state write or acceptance transition."
+  ],
+  "not_performed": {
+    "source_or_repository_document_write": true,
+    "Git_or_index_write": true,
+    "git_pull": true,
+    "GitHub_write_or_publish": true,
+    "build_test_JVM_native_lint_install_prototype": true,
+    "runtime_or_protocol_model_execution": true,
+    "approval_config_change_or_denial_bypass": true,
+    "304_305_implementation": true
+  },
+  "execution_issues": [],
+  "next_step": "Parent fresh independent exact-v3-artifact review; then owner A/B/new-scope-policy discussion. No automatic implementation/acceptance."
+}
