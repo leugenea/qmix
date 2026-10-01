@@ -96,6 +96,28 @@ class SequentialRoomRepository(
                 }
             }
 
+            fun admitRefresh(requested: Boolean, pending: Boolean): Boolean {
+                if (requested) {
+                    if (refreshJob != null) return true
+                    startRefresh()
+                }
+                return pending
+            }
+
+            fun refreshResultState(result: RoomFetchResult, currentConnection: LiveConnection): RoomSyncState =
+                when (result) {
+                    is RoomFetchResult.Success -> {
+                        room = result.room
+                        freshness = Freshness.FRESH
+                        RoomSyncState.Active(roomCode, room, freshness, currentConnection)
+                    }
+                    RoomFetchResult.Failure -> {
+                        freshness = Freshness.STALE
+                        RoomSyncState.Active(roomCode, room, freshness, currentConnection)
+                    }
+                    RoomFetchResult.Missing -> RoomSyncState.Missing(roomCode)
+                }
+
             val periodicJob = launch {
                 while (currentCoroutineContext().isActive) {
                     delay(PERIODIC_REFRESH_MILLIS)
@@ -112,29 +134,15 @@ class SequentialRoomRepository(
                 while (!terminal) {
                     when (val command = commands.receive()) {
                         Command.Refresh -> {
-                            if (refreshJob != null) {
-                                refreshPending = true
-                            } else {
-                                startRefresh()
-                            }
+                            refreshPending = admitRefresh(true, refreshPending)
                         }
                         is Command.RefreshCompleted -> {
+                            // qmix#308: result handoff does not complete the producer's owned subtree.
+                            // The send needs no reducer ACK, so joining here cannot hold up its return.
+                            refreshJob?.join()
                             refreshJob = null
-                            when (val result = command.result) {
-                                is RoomFetchResult.Success -> {
-                                    room = result.room
-                                    freshness = Freshness.FRESH
-                                    emit(RoomSyncState.Active(roomCode, room, freshness, connection))
-                                }
-                                RoomFetchResult.Failure -> {
-                                    freshness = Freshness.STALE
-                                    emit(RoomSyncState.Active(roomCode, room, freshness, connection))
-                                }
-                                RoomFetchResult.Missing -> {
-                                    emit(RoomSyncState.Missing(roomCode))
-                                    terminal = true
-                                }
-                            }
+                            emit(refreshResultState(command.result, connection))
+                            if (command.result == RoomFetchResult.Missing) terminal = true
                             if (!terminal && refreshPending) {
                                 refreshPending = false
                                 startRefresh()
@@ -143,13 +151,7 @@ class SequentialRoomRepository(
                         is Command.ConnectionChanged -> {
                             connection = command.connection
                             emit(RoomSyncState.Active(roomCode, room, freshness, connection))
-                            if (command.refresh) {
-                                if (refreshJob != null) {
-                                    refreshPending = true
-                                } else {
-                                    startRefresh()
-                                }
-                            }
+                            refreshPending = admitRefresh(command.refresh, refreshPending)
                         }
                         Command.Missing -> {
                             emit(RoomSyncState.Missing(roomCode))
