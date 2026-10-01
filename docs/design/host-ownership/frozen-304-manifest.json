@@ -1,0 +1,193 @@
+{
+  "base": "9454d705a2eddc2669c964a552395f1ede35088a",
+  "branch": "audit/304-atomic-host-inbox",
+  "tree": "e5863aa14ce4d90db83d6b758315cb75cbc61bdc",
+  "patch_sha256": "ea4609b89e1730e59b0730dceb9f26c310ee7b86ae61b54c14fce72d5329f16b",
+  "paths": [
+    {
+      "path": "ARCHITECTURE.md",
+      "sha256": "3ddfa1527ced1617a7d488efa0f8b4a3173288279080221da017c90a0a3d4648",
+      "bytes": 47259
+    },
+    {
+      "path": "android/app/src/androidTest/java/com/qmix/tv/EndpointSettingsStoreInstrumentationTest.kt",
+      "sha256": "725e599b2fbd9d4f4cbeb2c63aa9ebbe308fdab6ad2cc52070544180f9966e8c",
+      "bytes": 5890
+    },
+    {
+      "path": "android/app/src/androidTest/java/com/qmix/tv/HostPostedMainInstrumentationTest.kt",
+      "sha256": "73d02101259c18e8ebdd6e9f4208ab21ecaa1be7a23bcd5d757b530edcb811af",
+      "bytes": 4804
+    },
+    {
+      "path": "android/app/src/androidTest/java/com/qmix/tv/HostSessionControllerInstrumentationTest.kt",
+      "sha256": "9b4fc51f385ae988b6120f4e0daf8e9c43a63c51de73f81749b6213be7ea92df",
+      "bytes": 47081
+    },
+    {
+      "path": "android/app/src/androidTest/java/com/qmix/tv/HostSessionFlowTestSupport.kt",
+      "sha256": "fa93c4f049709e3d6673f525bff898743503c5b52e7af467b430f34b74faaace",
+      "bytes": 6214
+    },
+    {
+      "path": "android/app/src/androidTest/java/com/qmix/tv/MainActivityInstrumentationTest.kt",
+      "sha256": "1d24806b4590e5b9b1f17c677bcc83266f26b4b1c25f3935f62d2cef9acfafb7",
+      "bytes": 27792
+    },
+    {
+      "path": "android/app/src/androidTest/java/com/qmix/tv/QueueAdvancementInstrumentationTest.kt",
+      "sha256": "ee7f32f1a736d098dc5d6d6416acfd4621bfbff9914953e93e1b1c9fad28b3b2",
+      "bytes": 20514
+    },
+    {
+      "path": "android/app/src/androidTest/java/com/qmix/tv/QueueTestFixtures.kt",
+      "sha256": "7219bbb14d6e97f50398c0cf0a190cba3848f381d80a1edbc18614611cccb667",
+      "bytes": 4044
+    },
+    {
+      "path": "android/app/src/main/java/com/qmix/tv/AuthoritativePlaybackCoordinator.kt",
+      "sha256": "c82ded90e0086597f638bd29857b236b099877b15900466808bb85fb1b6d9e2b",
+      "bytes": 23276
+    },
+    {
+      "path": "android/app/src/main/java/com/qmix/tv/HostCloseCredits.kt",
+      "sha256": "ffb7e08b634ce6cee686f61eae0864dba76bc42e6d9b00828cd19e61c0103146",
+      "bytes": 828
+    },
+    {
+      "path": "android/app/src/main/java/com/qmix/tv/HostIntentInbox.kt",
+      "sha256": "08df8d61a2cfd825173645db8a71a9af1f66aabc4e0b8fa2948ab4430a8d9bc9",
+      "bytes": 19520
+    },
+    {
+      "path": "android/app/src/main/java/com/qmix/tv/HostPauseOwner.kt",
+      "sha256": "adc1c40992f7d749dd2cc8408b9967bb7f9fbc14ff20dfbd8db7b39646da8562",
+      "bytes": 3735
+    },
+    {
+      "path": "android/app/src/main/java/com/qmix/tv/HostSessionController.kt",
+      "sha256": "10bd9481f36452003f1fd125c0d1ee546e90bc0627cf0a86b24bc0b6bfd839c7",
+      "bytes": 60018
+    },
+    {
+      "path": "android/app/src/main/java/com/qmix/tv/PlayerStatePublisher.kt",
+      "sha256": "e828ce1aff866c91a51bff73d627c8815b05f6d0656ef3e37a9ec7186af1aedd",
+      "bytes": 14718
+    },
+    {
+      "path": "android/app/src/main/java/com/qmix/tv/QMixApplication.kt",
+      "sha256": "8b86e989570e71f327a4159a25cb884f3c1d3513795d4f2579226cce2ab8180b",
+      "bytes": 7138
+    },
+    {
+      "path": "android/app/src/main/java/com/qmix/tv/QueueAdvancementCoordinator.kt",
+      "sha256": "175cd9413a8d81a9a956b340e2d586bfb0ff9692ef922517d9bba8e49638e131",
+      "bytes": 15536
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/EndpointSettingsTest.kt",
+      "sha256": "70e767b08cc801bb78fd415ae38b64358341e981fe6b127745055800522dce02",
+      "bytes": 12519
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostDeferredPlaybackTest.kt",
+      "sha256": "38a05adcd6465cd9d271d78810027dfe168a79a427b00461d6a99b510b6462cf",
+      "bytes": 8752
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostIntentInboxTest.kt",
+      "sha256": "3dd04c88f9c29679f7d8889bf6f77d6a3c94d97048f0bd5b02efc619adf1c87c",
+      "bytes": 32043
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostPauseOwnerTest.kt",
+      "sha256": "148b67e8e4794a78882507b14128d06871ab653ffd5bbb2132de5d8746236341",
+      "bytes": 6435
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostRoomClosureTest.kt",
+      "sha256": "c0cd4abf6b0dffb3402e72f6aa10c77e9861cfa997028749e90e07e26c6afca1",
+      "bytes": 17825
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostRoomMissingRecoveryTest.kt",
+      "sha256": "98b63a56aadc565f71fdc75b3d2b5f2205e1dae803c119139be23c29e78ab4b2",
+      "bytes": 35168
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionAtomicInboxTest.kt",
+      "sha256": "61a7de31e8e9448ef62b8b6519c01beda7869113232cceebc60e40b3184a1862",
+      "bytes": 71322
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionControllerTest.kt",
+      "sha256": "5a3550b2afcd9fb18fc46e2af452715a355dd3eb4c470b5f2910e5624fe8070f",
+      "bytes": 95836
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionCoverageHeadroomTest.kt",
+      "sha256": "ee8f45bc618a0742d699822ab56fe045f3c07ff8324fb84e99703477c15a3a01",
+      "bytes": 10989
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionFlowTestSupport.kt",
+      "sha256": "11ea53e1f5789e91e816ad5c94b0ad9626a3ddae6857f09e8023558247db2d65",
+      "bytes": 6233
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionJVMBranchTest.kt",
+      "sha256": "e548596a620bb39e1e67188ea66ee18fa8135342b87ce2f008d279e760fd0042",
+      "bytes": 8311
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionLifecycleTest.kt",
+      "sha256": "c09bfbe4918bda677b9c73a3b96b7afa35fda5324fb61a682fddfb61de0d8c77",
+      "bytes": 9735
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionReviewFindingsTest.kt",
+      "sha256": "9558c50503ad2ef75111f6d296dff0f24f265f03aa8ee7b8e24b3f588e3de06e",
+      "bytes": 39980
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionSingleWorkerRegressionTest.kt",
+      "sha256": "1472764f53ac025e583e8ad6041e874ea0f77af707af09d1b410785603fa8014",
+      "bytes": 8788
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionStateFlowMigrationTest.kt",
+      "sha256": "95d8710462c52249b82f58e8f2bd5d241d1afba6e41ed7539089a7d4a2eb71ac",
+      "bytes": 7410
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/HostStateTestSupportTest.kt",
+      "sha256": "7115e31d736577bcdd834d08cc0e3d2ba469f453ed012e57664bd934895f5a7f",
+      "bytes": 4325
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/LiveRoomPresentationTest.kt",
+      "sha256": "4e40aa4d8ae1e1163a372cabb69c2d5e968077f920779ebbec4bcb9c327a3bd3",
+      "bytes": 21665
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/PlayerStatePublisherTest.kt",
+      "sha256": "3a4061a39fc5ff627fe8efaccbbebda45be436e92aa17cd380905cf7babcb0a9",
+      "bytes": 49959
+    },
+    {
+      "path": "android/app/src/test/java/com/qmix/tv/QueueAdvancementCoordinatorTest.kt",
+      "sha256": "ca0bf7ddd0a6876cf597c0c343b0dc22e63beb9eb1967acd7612e2d1b03d4b80",
+      "bytes": 19257
+    },
+    {
+      "path": "docs/host-inbox-test-boundaries.md",
+      "sha256": "92f433cf258c582fb5fabed1cb2098ee32ded52f280fc1a02db93dc1fa4f8301",
+      "bytes": 20470
+    },
+    {
+      "path": "docs/host-intent-inbox.md",
+      "sha256": "ff684cf67aaa85a8767843f9b6581d322aa25211b2649814c0cb28e6fa066055",
+      "bytes": 26113
+    }
+  ]
+}

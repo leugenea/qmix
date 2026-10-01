@@ -1,0 +1,765 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "Derived publication index selecting existing static evidence; no new research or runtime execution",
+  "reviewed_base": "9454d705a2eddc2669c964a552395f1ede35088a",
+  "approval": {
+    "date": "2026-10-01",
+    "issue": 306,
+    "comment_url": "https://github.com/leugenea/qmix/issues/306#issuecomment-5926044159",
+    "decision": "Option B and enumerated v3 scope/policy boundaries approved; sequential continuation; decomposition independently validated before native creation",
+    "runtime_accepted": false
+  },
+  "primary_retrieval_support": [
+    {
+      "source_id": 1,
+      "name": "Job",
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/",
+      "resolved_url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/",
+      "fetched_at": "2026-09-30T20:22:21.649368+00:00",
+      "raw_sha256": "636d2a637179beb12d917c77e04b6f02017d5afaf8d8683dc7b2982b7e35b91b",
+      "text_sha256": "3af7ac0ab1c5d4a11a08274eec1f915eac156860e998d701b710e96e6746f45f",
+      "raw_bytes": 81691,
+      "text_support": "New (optional initial state)falsefalsefalse",
+      "support_line_in_retained_text": 53,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 2,
+      "name": "LAZY",
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-start/-l-a-z-y/",
+      "resolved_url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-start/-l-a-z-y/",
+      "fetched_at": "2026-09-30T20:22:21.578447+00:00",
+      "raw_sha256": "25bb70224af61e127ccbedb8dac6d763316a715f92b397ff0473ddbe463bc811",
+      "text_sha256": "6070be4061aa83327247e151f608703cc6be48077970639b4574acf15da74e1f",
+      "raw_bytes": 44462,
+      "text_support": "Pitfall: launching a coroutine with LAZY",
+      "support_line_in_retained_text": 46,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 3,
+      "name": "Completion",
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/invoke-on-completion.html",
+      "resolved_url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/invoke-on-completion.html",
+      "fetched_at": "2026-09-30T20:22:21.354745+00:00",
+      "raw_sha256": "a78ab0eb392d2dae7c32605659a5e78ff1821324c3d3d49433a67c2f6b368dbd",
+      "text_sha256": "cf3e71452c235b24660f0074f5d8e07c401d4939b862820d06d5be63fad719f7",
+      "raw_bytes": 41556,
+      "text_support": "This handler can be invoked concurrently with the surrounding code.",
+      "support_line_in_retained_text": 49,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 4,
+      "name": "Channel",
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/-channel/",
+      "resolved_url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/-channel/",
+      "fetched_at": "2026-09-30T20:22:21.577978+00:00",
+      "raw_sha256": "38b4f1f76a17136f3b168dd19fe25e39e1833f882b54671aa061ffc4ddd4917c",
+      "text_sha256": "70f5f93494d8bfc6f15e562459913a1106c3abe7673d08b9a5eb1bdf8818e660",
+      "raw_bytes": 50657,
+      "text_support": "onUndeliveredElement is called synchronously in an arbitrary context.",
+      "support_line_in_retained_text": 66,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 5,
+      "name": "trySend",
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/-send-channel/try-send.html",
+      "resolved_url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/-send-channel/try-send.html",
+      "fetched_at": "2026-09-30T20:22:21.617303+00:00",
+      "raw_sha256": "9dd8749f82a98281cc2bb68e530fb3e8898b29069b0a4a2412f36d77d64bcb52",
+      "text_sha256": "643388cebe850f84578932df37ba8b89b57d7c33aa651d2a3e92c26bab56f8e8",
+      "raw_bytes": 41697,
+      "text_support": "trySend never suspends and never throws exceptions.",
+      "support_line_in_retained_text": 43,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 6,
+      "name": "select",
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.selects/select.html",
+      "resolved_url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.selects/select.html",
+      "fetched_at": "2026-09-30T20:22:21.499787+00:00",
+      "raw_sha256": "358683fc8e178a02fcc77e909d1997de8d845ed38d574a2e73ba25d218c67ab2",
+      "text_sha256": "1e88991cf94fbc5957ce13317a22b5c41d89d96d48b571cee16b4235f38512d6",
+      "raw_bytes": 43880,
+      "text_support": "This select function is biased to the first clause.",
+      "support_line_in_retained_text": 44,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 7,
+      "name": "selectUnbiased",
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.selects/select-unbiased.html",
+      "resolved_url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.selects/select-unbiased.html",
+      "fetched_at": "2026-09-30T20:22:21.847741+00:00",
+      "raw_sha256": "ad3b010be47d18a25bdffb150bcb6c7581d971f179106822d3a52bb8225d78dc",
+      "text_sha256": "eb63a23022f896baf9f552db00e39c74b11f1bfbdb6f719b2d390a099f7578b8",
+      "raw_bytes": 40507,
+      "text_support": "randomly shuffles the clauses before checking if they are selectable",
+      "support_line_in_retained_text": 43,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 8,
+      "name": "runTest",
+      "url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/kotlinx.coroutines.test/run-test.html",
+      "resolved_url": "https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-test/kotlinx.coroutines.test/run-test.html",
+      "fetched_at": "2026-09-30T20:22:21.939875+00:00",
+      "raw_sha256": "a527f728eb1d18065f4036d1ca2e9daab9449a4ddb07bb32b361738cb8c04823",
+      "text_sha256": "b6437660a4520c542cffe39615abaef13d30fa1df0b24e129e81f01ac0017c9e",
+      "raw_bytes": 63774,
+      "text_support": "child coroutines are not executed in parallel to the test body.",
+      "support_line_in_retained_text": 56,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 9,
+      "name": "Lincheck",
+      "url": "https://kotlinlang.org/docs/lincheck-guide.html",
+      "resolved_url": "https://kotlinlang.org/docs/lincheck-guide.html",
+      "fetched_at": "2026-09-30T20:22:21.904238+00:00",
+      "raw_sha256": "164b375ee6b237ae2e72180ca17ed578ab21ba2e8bc1f7e40e23648ee0800e8c",
+      "text_sha256": "454b7c50a0215fdc35d42b1466df94f9c7df16cbe697c8a7f6d3f52a13d4c2c9",
+      "raw_bytes": 12277,
+      "text_support": "Lincheck is a framework for testing concurrent code on the JVM.",
+      "support_line_in_retained_text": 4,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 10,
+      "name": "LincheckStrategies",
+      "url": "https://kotlinlang.org/docs/lincheck-testing-strategies.html",
+      "resolved_url": "https://kotlinlang.org/docs/lincheck-testing-strategies.html",
+      "fetched_at": "2026-09-30T20:22:21.847787+00:00",
+      "raw_sha256": "6bd33dd581d0195c369f31dd94ebe268b0769a96023fa373f0df1881d59e8f27",
+      "text_sha256": "574678c4cb2631526a8708410264136bb15c0eb683e1d1c0935482c46f1b01b4",
+      "raw_bytes": 13420,
+      "text_support": "does not simulate and cannot catch bugs related to instruction reordering",
+      "support_line_in_retained_text": 15,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 11,
+      "name": "Media3Thread",
+      "url": "https://developer.android.com/media/media3/exoplayer/hello-world",
+      "resolved_url": "https://developer.android.com/media/media3/exoplayer/hello-world",
+      "fetched_at": "2026-09-30T20:22:22.970772+00:00",
+      "raw_sha256": "08bcb5fc6a7bf25bd66f6764e4c074389ebf440ed0f800fcb4e0bc0734a2f7f8",
+      "text_sha256": "1bb9ba7f8038921d848ca2b6488caead7412edaa1288986391b2f958b7c68294",
+      "raw_bytes": 338265,
+      "text_support": "ExoPlayer instances must be accessed from a single application thread.",
+      "support_line_in_retained_text": 643,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 12,
+      "name": "MediaPeriodId",
+      "url": "https://developer.android.com/reference/androidx/media3/exoplayer/source/MediaSource.MediaPeriodId",
+      "resolved_url": "https://developer.android.com/reference/androidx/media3/exoplayer/source/MediaSource.MediaPeriodId",
+      "fetched_at": "2026-09-30T20:22:25.121165+00:00",
+      "raw_sha256": "97b8c403034c2b6c9fe69aab3b083934e11f631e896d08a81de9fd16650ac9a0",
+      "text_sha256": "b5f1bad4aa7cfb4f972ceef85f72ac62ac834a25785d0c15325d76e9d50ad87c",
+      "raw_bytes": 3025919,
+      "text_support": "The sequence number of the window in the buffered sequence of windows",
+      "support_line_in_retained_text": 11638,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 13,
+      "name": "ExoPlayerInternal-1.11.1",
+      "url": "https://raw.githubusercontent.com/androidx/media/1.11.1/libraries/exoplayer/src/main/java/androidx/media3/exoplayer/ExoPlayerImplInternal.java",
+      "resolved_url": "https://raw.githubusercontent.com/androidx/media/1.11.1/libraries/exoplayer/src/main/java/androidx/media3/exoplayer/ExoPlayerImplInternal.java",
+      "fetched_at": "2026-09-30T20:22:22.612262+00:00",
+      "raw_sha256": "04a94e1cdec874af904090f452abd6e68143c01a0e1aa5dda2b0b8d7b7a58516",
+      "text_sha256": "143789205a2157502fb4835609f21640ac4c922283b8b8dee7ae2f66907ae850",
+      "raw_bytes": 196522,
+      "text_support": "Return immediately to not send playback info updates after release.",
+      "support_line_in_retained_text": 803,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 14,
+      "name": "AkkaPatterns",
+      "url": "https://doc.akka.io/libraries/akka-core/current/typed/interaction-patterns.html",
+      "resolved_url": "https://doc.akka.io/libraries/akka-core/current/typed/interaction-patterns.html",
+      "fetched_at": "2026-09-30T20:22:22.442998+00:00",
+      "raw_sha256": "1f7b2fa7c916cbc29be4f91ab63c81298d7ee764b250be5fbc55ce29e765471b",
+      "text_sha256": "5a626ca2e79569734db2c4d8f65814dd11a601d44defff9f430f28c074b41424",
+      "raw_bytes": 158796,
+      "text_support": "Message exchange with Actors follow a few common patterns",
+      "support_line_in_retained_text": 166,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 15,
+      "name": "Job-1.9.0",
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/1.9.0/kotlinx-coroutines-core/common/src/Job.kt",
+      "resolved_url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/1.9.0/kotlinx-coroutines-core/common/src/Job.kt",
+      "fetched_at": "2026-09-30T20:22:22.591003+00:00",
+      "raw_sha256": "23042f8626956589bfd20ee9431fce5faa6770f58b5c2e29f719129849f6504c",
+      "text_sha256": "69b9fe39f729009de3eb3530f7e40bf28737f28454fb8e1c14fd4b0193619a2d",
+      "raw_bytes": 30636,
+      "text_support": "A background job. Conceptually, a job is a cancellable thing with a life-cycle",
+      "support_line_in_retained_text": 10,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 16,
+      "name": "CoroutineStart-1.9.0",
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/1.9.0/kotlinx-coroutines-core/common/src/CoroutineStart.kt",
+      "resolved_url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/1.9.0/kotlinx-coroutines-core/common/src/CoroutineStart.kt",
+      "fetched_at": "2026-09-30T20:22:22.442664+00:00",
+      "raw_sha256": "9df59f4965653b91ae93440ea1b3e9a546d1acbb2bb3037fef4ba8ec4b038a58",
+      "text_sha256": "26d615974feac7500b336bcf489c8578873f63dbf8b1cd47d280c81b0c5db9c1",
+      "raw_bytes": 16640,
+      "text_support": "Defines start options for coroutines builders.",
+      "support_line_in_retained_text": 5,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 17,
+      "name": "Channel-1.9.0",
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/d8d6f8f37978b8e202d93b34f23f101df9c5724d/kotlinx-coroutines-core/common/src/channels/Channel.kt",
+      "resolved_url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/d8d6f8f37978b8e202d93b34f23f101df9c5724d/kotlinx-coroutines-core/common/src/channels/Channel.kt",
+      "fetched_at": "2026-09-30T20:56:42.225722+00:00",
+      "raw_sha256": "bdaf7764a48a444199ef68433cbbe2b2a283ec592d39c0f1f30ddc4549123556",
+      "text_sha256": "bdaf7764a48a444199ef68433cbbe2b2a283ec592d39c0f1f30ddc4549123556",
+      "raw_bytes": 43596,
+      "text_support": "* it does not call `onUndeliveredElement` that was installed for this channel.",
+      "support_line_in_retained_text": 75,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 18,
+      "name": "Select-1.9.0",
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/d8d6f8f37978b8e202d93b34f23f101df9c5724d/kotlinx-coroutines-core/common/src/selects/Select.kt",
+      "resolved_url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/d8d6f8f37978b8e202d93b34f23f101df9c5724d/kotlinx-coroutines-core/common/src/selects/Select.kt",
+      "fetched_at": "2026-09-30T20:56:43.640790+00:00",
+      "raw_sha256": "cc9fafce25579abdc6cb2334524e5ca6d2e76ba4279dd6799b75f5c95e647737",
+      "text_sha256": "cc9fafce25579abdc6cb2334524e5ca6d2e76ba4279dd6799b75f5c95e647737",
+      "raw_bytes": 45792,
+      "text_support": "* This select function is _biased_ to the first clause. When multiple clauses can be selected at the same time,",
+      "support_line_in_retained_text": 22,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 19,
+      "name": "TestBuilders-1.9.0",
+      "url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/d8d6f8f37978b8e202d93b34f23f101df9c5724d/kotlinx-coroutines-test/common/src/TestBuilders.kt",
+      "resolved_url": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/d8d6f8f37978b8e202d93b34f23f101df9c5724d/kotlinx-coroutines-test/common/src/TestBuilders.kt",
+      "fetched_at": "2026-09-30T20:56:45.005169+00:00",
+      "raw_sha256": "83df1b58feffeee9c54d9bade29b73b67ea3459ecb02a9e8c4cc4b8a5ce33639",
+      "text_sha256": "83df1b58feffeee9c54d9bade29b73b67ea3459ecb02a9e8c4cc4b8a5ce33639",
+      "raw_bytes": 26729,
+      "text_support": "* Because of this, child coroutines are not executed in parallel to the test body.",
+      "support_line_in_retained_text": 59,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    },
+    {
+      "source_id": 20,
+      "name": "MediaSource-1.11.1",
+      "url": "https://raw.githubusercontent.com/androidx/media/8c6678b657ede1e7883fc164ef73ed483c7796c3/libraries/exoplayer/src/main/java/androidx/media3/exoplayer/source/MediaSource.java",
+      "resolved_url": "https://raw.githubusercontent.com/androidx/media/8c6678b657ede1e7883fc164ef73ed483c7796c3/libraries/exoplayer/src/main/java/androidx/media3/exoplayer/source/MediaSource.java",
+      "fetched_at": "2026-09-30T20:56:46.375919+00:00",
+      "raw_sha256": "1cb4ad187cd41e722a6d0b8230c22716a3583679d0396fcbda42e9a848f085c6",
+      "text_sha256": "1cb4ad187cd41e722a6d0b8230c22716a3583679d0396fcbda42e9a848f085c6",
+      "raw_bytes": 23769,
+      "text_support": "* The sequence number of the window in the buffered sequence of windows this media period is",
+      "support_line_in_retained_text": 228,
+      "support_verbatim_checked_at_publication": true,
+      "text_capture_published": false,
+      "line_unit": "retained extracted text except raw pinned sources17-20; not generic GitHub line anchors"
+    }
+  ],
+  "version_pins": [
+    {
+      "repo": "androidx/media",
+      "tag": "1.11.1",
+      "ref_sha": "915b73c447aed6471aa33380a95126121a79375d",
+      "commit_sha": "8c6678b657ede1e7883fc164ef73ed483c7796c3",
+      "type": "commit"
+    },
+    {
+      "repo": "Kotlin/kotlinx.coroutines",
+      "tag": "1.9.0",
+      "ref_sha": "d8d6f8f37978b8e202d93b34f23f101df9c5724d",
+      "commit_sha": "d8d6f8f37978b8e202d93b34f23f101df9c5724d",
+      "type": "commit"
+    }
+  ],
+  "source_evidence": [
+    {
+      "sha256": "175cd9413a8d81a9a956b340e2d586bfb0ff9692ef922517d9bba8e49638e131",
+      "bytes": 15536,
+      "kind": "frozen_candidate",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/QueueAdvancementCoordinator.kt"
+    },
+    {
+      "sha256": "e828ce1aff866c91a51bff73d627c8815b05f6d0656ef3e37a9ec7186af1aedd",
+      "bytes": 14718,
+      "kind": "frozen_candidate",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/PlayerStatePublisher.kt"
+    },
+    {
+      "sha256": "10bd9481f36452003f1fd125c0d1ee546e90bc0627cf0a86b24bc0b6bfd839c7",
+      "bytes": 60018,
+      "kind": "frozen_candidate",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/HostSessionController.kt"
+    },
+    {
+      "sha256": "c82ded90e0086597f638bd29857b236b099877b15900466808bb85fb1b6d9e2b",
+      "bytes": 23276,
+      "kind": "frozen_candidate",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/AuthoritativePlaybackCoordinator.kt"
+    },
+    {
+      "sha256": "8b86e989570e71f327a4159a25cb884f3c1d3513795d4f2579226cce2ab8180b",
+      "bytes": 7138,
+      "kind": "frozen_candidate",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/QMixApplication.kt"
+    },
+    {
+      "sha256": "adc1c40992f7d749dd2cc8408b9967bb7f9fbc14ff20dfbd8db7b39646da8562",
+      "bytes": 3735,
+      "kind": "frozen_candidate",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/HostPauseOwner.kt"
+    },
+    {
+      "sha256": "96078bec160fa3739b5337228569613437834b5025232147ea84aaba7d12b901",
+      "bytes": 10620,
+      "kind": "clean_main",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/QueueAdvancementCoordinator.kt"
+    },
+    {
+      "sha256": "9690f7084f518f466a3035f9d6ec028f7374dd6e9db6f48fb0da01e31b664f16",
+      "bytes": 13204,
+      "kind": "clean_main",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/PlayerStatePublisher.kt"
+    },
+    {
+      "sha256": "1da22db2ae242bf368f58374886b6dc29f9c8c13c8c972811e4956aad6924e64",
+      "bytes": 36620,
+      "kind": "clean_main",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/HostSessionController.kt"
+    },
+    {
+      "sha256": "232a67074527b848aa02464add22232a7946880dd1cf0a14b5b16851c4808a53",
+      "bytes": 6975,
+      "kind": "clean_main",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/QMixApplication.kt"
+    },
+    {
+      "sha256": "9ba4e87e572e1341f2089e73e319bb270cea945195419c11502cab93db0b151d",
+      "bytes": 8593,
+      "kind": "clean_main",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/RoomRepository.kt"
+    },
+    {
+      "sha256": "159d99176ee4460ec778046e6972986cbc2829c0824b2c6a2f9226acc2d85c0c",
+      "bytes": 11129,
+      "kind": "clean_main",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/RoomApiClient.kt"
+    },
+    {
+      "sha256": "261889c83fafbaa960d9f4fb6986e6a1cabaa5e54368827eb7e3a7ce60b861a2",
+      "bytes": 2677,
+      "kind": "clean_main",
+      "read_kind": "Source text inspected; focal paths reread, not executed",
+      "path": "android/app/src/main/java/com/qmix/tv/OkHttpRoomEventStream.kt"
+    }
+  ],
+  "legacy_inventory": {
+    "section_byte_identical": true,
+    "section_sha256": "cf0fbcf9db200769b64ef7b55facf2b889ef929355696991112e7f991c2ad926",
+    "rows": 71,
+    "unique_cases": 71,
+    "suites": 15,
+    "numbers_exact": true,
+    "stale_rows": [
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ],
+    "all_meanings_retained": true,
+    "assertion_equivalence_proved": false,
+    "suites_executed": false
+  },
+  "legacy_whole_suite_provenance": [
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/androidTest/java/com/qmix/tv/EndpointSettingsStoreInstrumentationTest.kt",
+      "sha256": "725e599b2fbd9d4f4cbeb2c63aa9ebbe308fdab6ad2cc52070544180f9966e8c",
+      "bytes": 5890,
+      "lines": 166
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/androidTest/java/com/qmix/tv/HostSessionControllerInstrumentationTest.kt",
+      "sha256": "9b4fc51f385ae988b6120f4e0daf8e9c43a63c51de73f81749b6213be7ea92df",
+      "bytes": 47081,
+      "lines": 986
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/androidTest/java/com/qmix/tv/MainActivityInstrumentationTest.kt",
+      "sha256": "1d24806b4590e5b9b1f17c677bcc83266f26b4b1c25f3935f62d2cef9acfafb7",
+      "bytes": 27792,
+      "lines": 572
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/androidTest/java/com/qmix/tv/QueueAdvancementInstrumentationTest.kt",
+      "sha256": "ee7f32f1a736d098dc5d6d6416acfd4621bfbff9914953e93e1b1c9fad28b3b2",
+      "bytes": 20514,
+      "lines": 467
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/EndpointSettingsTest.kt",
+      "sha256": "70e767b08cc801bb78fd415ae38b64358341e981fe6b127745055800522dce02",
+      "bytes": 12519,
+      "lines": 302
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/HostRoomClosureTest.kt",
+      "sha256": "c0cd4abf6b0dffb3402e72f6aa10c77e9861cfa997028749e90e07e26c6afca1",
+      "bytes": 17825,
+      "lines": 370
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/HostRoomMissingRecoveryTest.kt",
+      "sha256": "98b63a56aadc565f71fdc75b3d2b5f2205e1dae803c119139be23c29e78ab4b2",
+      "bytes": 35168,
+      "lines": 639
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionControllerTest.kt",
+      "sha256": "5a3550b2afcd9fb18fc46e2af452715a355dd3eb4c470b5f2910e5624fe8070f",
+      "bytes": 95836,
+      "lines": 2022
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionCoverageHeadroomTest.kt",
+      "sha256": "ee8f45bc618a0742d699822ab56fe045f3c07ff8324fb84e99703477c15a3a01",
+      "bytes": 10989,
+      "lines": 231
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionJVMBranchTest.kt",
+      "sha256": "e548596a620bb39e1e67188ea66ee18fa8135342b87ce2f008d279e760fd0042",
+      "bytes": 8311,
+      "lines": 157
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionLifecycleTest.kt",
+      "sha256": "c09bfbe4918bda677b9c73a3b96b7afa35fda5324fb61a682fddfb61de0d8c77",
+      "bytes": 9735,
+      "lines": 207
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionReviewFindingsTest.kt",
+      "sha256": "9558c50503ad2ef75111f6d296dff0f24f265f03aa8ee7b8e24b3f588e3de06e",
+      "bytes": 39980,
+      "lines": 751
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionSingleWorkerRegressionTest.kt",
+      "sha256": "1472764f53ac025e583e8ad6041e874ea0f77af707af09d1b410785603fa8014",
+      "bytes": 8788,
+      "lines": 173
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionStateFlowMigrationTest.kt",
+      "sha256": "95d8710462c52249b82f58e8f2bd5d241d1afba6e41ed7539089a7d4a2eb71ac",
+      "bytes": 7410,
+      "lines": 144
+    },
+    {
+      "snapshot": "candidate",
+      "path": "android/app/src/test/java/com/qmix/tv/LiveRoomPresentationTest.kt",
+      "sha256": "4e40aa4d8ae1e1163a372cabb69c2d5e968077f920779ebbec4bcb9c327a3bd3",
+      "bytes": 21665,
+      "lines": 478
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/androidTest/java/com/qmix/tv/EndpointSettingsStoreInstrumentationTest.kt",
+      "sha256": "aa12dd6cfd4a94b92719dddf98c4a04a2e3c56213b6ec5caddb95eb17615ab42",
+      "bytes": 5729,
+      "lines": 164
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/androidTest/java/com/qmix/tv/HostSessionControllerInstrumentationTest.kt",
+      "sha256": "803cb776922856cd07d4319c809c061a44c6c8a391dadc4ca029561980ca5440",
+      "bytes": 44137,
+      "lines": 955
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/androidTest/java/com/qmix/tv/MainActivityInstrumentationTest.kt",
+      "sha256": "18731e39fb427aa52a3ab83f47ae29a684d31fde3292c50c34ae0d341fea12cd",
+      "bytes": 26431,
+      "lines": 607
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/androidTest/java/com/qmix/tv/QueueAdvancementInstrumentationTest.kt",
+      "sha256": "ccde68931a0d0c4dc0a946cc2033bbfb595eb9dc292c6beeba0fd66d619af2c8",
+      "bytes": 19096,
+      "lines": 449
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/EndpointSettingsTest.kt",
+      "sha256": "4df112afd6816ca0e07506b8b15391e24ce735178fdd360e2f32738ea0ebff05",
+      "bytes": 12478,
+      "lines": 301
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/HostRoomClosureTest.kt",
+      "sha256": "11b98bb2862df20f1bc8086b49e15f93f719af58f9e82dba6f9d7e134fa7f1b1",
+      "bytes": 17207,
+      "lines": 363
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/HostRoomMissingRecoveryTest.kt",
+      "sha256": "c536c51d226dab5782da35ac0e49cc9362d6c1cf0132662e57c62da4bdb716e7",
+      "bytes": 34012,
+      "lines": 629
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionControllerTest.kt",
+      "sha256": "0592c18c2eb9cdb57e6d4a1e736c85e4757a9e04df7b2b29e949a87af87e0b46",
+      "bytes": 89829,
+      "lines": 1959
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionCoverageHeadroomTest.kt",
+      "sha256": "10bd9276b81f294cada69d7eefddbee6b8f46ce6621f6a553be2d43c7ea7601e",
+      "bytes": 10888,
+      "lines": 230
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionJVMBranchTest.kt",
+      "sha256": "d9e23db90568d7d94bd8cdb55bfbeb338fd6cd24ed3c4af4a1a3150e9e440979",
+      "bytes": 7706,
+      "lines": 148
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionLifecycleTest.kt",
+      "sha256": "528ea868820b7c0ca9f4076211bebadd5af72349b620c89a7049cf1b7c53054d",
+      "bytes": 9147,
+      "lines": 199
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionReviewFindingsTest.kt",
+      "sha256": "5f37d39bdcc898a505fe9983db5450e5d985ab467bf172a6a9e2abd70942d63b",
+      "bytes": 39220,
+      "lines": 743
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionSingleWorkerRegressionTest.kt",
+      "sha256": "c63fbcd3f526b3cd3e6faab37267729d48c215a437bd39bc575e4424274866c7",
+      "bytes": 8045,
+      "lines": 165
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/HostSessionStateFlowMigrationTest.kt",
+      "sha256": "6cb1c9d75e5fd4e802196b81e3512780105eceec1133a5aabdcfd2f7f1a14a27",
+      "bytes": 6986,
+      "lines": 139
+    },
+    {
+      "snapshot": "main",
+      "path": "android/app/src/test/java/com/qmix/tv/LiveRoomPresentationTest.kt",
+      "sha256": "1d9c1c4b043a2d361251cfe863d9556436cff659d506b68fb9dc642e9627d64d",
+      "bytes": 20366,
+      "lines": 460
+    }
+  ],
+  "static_review": {
+    "passed": true,
+    "blocking_findings": 0,
+    "runtime_verified": false,
+    "completed_at": "2026-10-01T06:24:37.595865+00:00",
+    "sha256": "9f4f3308d0fa3880cb6eac9b293b058680319a049b970dff23288508db4c766a",
+    "review_classes": [
+      {
+        "id": "INBOX-DISPOSAL-HANDOFF",
+        "classification": "source_static",
+        "mapped": true,
+        "locations": "matrices-v3.md:205",
+        "runtime_reproduced": false
+      },
+      {
+        "id": "PLAYBACK-F1",
+        "classification": "source_static",
+        "mapped": true,
+        "locations": "matrices-v3.md:206",
+        "runtime_reproduced": false
+      },
+      {
+        "id": "PLAYBACK-F2",
+        "classification": "source_static",
+        "mapped": true,
+        "locations": "matrices-v3.md:207",
+        "runtime_reproduced": false
+      },
+      {
+        "id": "PLAYBACK-F3",
+        "classification": "source_static",
+        "mapped": true,
+        "locations": "matrices-v3.md:208",
+        "runtime_reproduced": false
+      },
+      {
+        "id": "FT-T6",
+        "classification": "harness_or_evidence_static",
+        "mapped": true,
+        "locations": "matrices-v3.md:209",
+        "runtime_reproduced": false
+      },
+      {
+        "id": "FT-T1-NATIVE",
+        "classification": "harness_or_evidence_static",
+        "mapped": true,
+        "locations": "matrices-v3.md:210",
+        "runtime_reproduced": false
+      },
+      {
+        "id": "FT-T2-PAUSE",
+        "classification": "harness_or_evidence_static",
+        "mapped": true,
+        "locations": "matrices-v3.md:211",
+        "runtime_reproduced": false
+      },
+      {
+        "id": "FT-E1",
+        "classification": "harness_or_evidence_static",
+        "mapped": true,
+        "locations": "matrices-v3.md:212",
+        "runtime_reproduced": false
+      }
+    ],
+    "v2_reassessment": [
+      {
+        "id": "D306-V2-FINAL-ACK-CYCLE",
+        "status": "closed_in_exact_v3_paper_protocol",
+        "locations": [
+          "design-v3.md:49-59",
+          "matrices-v3.md:122-143"
+        ],
+        "basis": "Bounded H returns independently of own T/F; noMoreSequences plus retained original T/F/X loans; terminal-dependent successor commits only existing intent, with later separate charged birth. Static traces above close original wait-for cycle, not executed runtime proof."
+      },
+      {
+        "id": "V2-PHYSICAL-SLOT-UNIT",
+        "status": "clarified_in_exact_v3_paper_protocol",
+        "locations": [
+          "matrices-v3.md:81-100"
+        ],
+        "basis": "Explicit Job+one registration/Call metadata bundles, per-family mapping, single predecessor terminal routing, standalone owned parent subscription and independently recomputed176."
+      },
+      {
+        "id": "V2-FOUR-STAGE-QUANTUM",
+        "status": "clarified_in_exact_v3_paper_protocol",
+        "locations": [
+          "design-v3.md:71-83",
+          "matrices-v3.md:160-172"
+        ],
+        "basis": "Nine independently counted healthy stages;1960 withdrawn;4410 plus separately bounded dispatch/entry, not first-service490 or wall-clock proof."
+      }
+    ]
+  },
+  "earlier_reviews": [
+    {
+      "filename": "design-independent-review.json",
+      "sha256": "7159b32ee7e682c944ae8f2167f7680b8caa7913329c51f331688d25fa2870b9",
+      "passed": false,
+      "completed": null,
+      "published_full_report": false
+    },
+    {
+      "filename": "design-v2-independent-review.json",
+      "sha256": "4dbab4ec57882464ca66c7f0e7a9d743a9bec0d8d87b75578319eeeb6e621288",
+      "passed": false,
+      "completed": true,
+      "published_full_report": false
+    }
+  ],
+  "transformation_rule": "Select listed fields verbatim from retained JSON; normalize source path roots to repository-relative variant/kind paths, keep capture locators as historical provenance; add locally verified quote locators without re-fetching. No source conclusions, verdicts or artifact prose rewritten."
+}

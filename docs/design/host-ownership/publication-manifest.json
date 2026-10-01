@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "issue": 306,
+  "decision_date": "2026-10-01",
+  "maintained_text_language": "English",
+  "runtime_changes": false,
+  "reviewed_base": "9454d705a2eddc2669c964a552395f1ede35088a",
+  "published_files": [
+    {
+      "path": "README.md",
+      "sha256": "bed3db5692e14c47e9e3ef37c48874332568a36ab91d20cb1d8bc4d49acddd4d",
+      "bytes": 4461,
+      "publication_mode": "new_publication_wrapper",
+      "source_artifact": null
+    },
+    {
+      "path": "decision.md",
+      "sha256": "ca3d492cb3d50f74668f6106d4998ba6573a40967f6e013615d727f4f634314d",
+      "bytes": 8318,
+      "publication_mode": "new_publication_wrapper",
+      "source_artifact": null
+    },
+    {
+      "path": "delivery-checks-v3.json",
+      "sha256": "ada7fcebdc81d7bbd158df31294357d9c437bf6a71733e6ed5bcc10f30454514",
+      "bytes": 47387,
+      "publication_mode": "exact_copy",
+      "source_artifact": "delivery-checks-v3.json"
+    },
+    {
+      "path": "design-v3-independent-review.json",
+      "sha256": "9f4f3308d0fa3880cb6eac9b293b058680319a049b970dff23288508db4c766a",
+      "bytes": 68603,
+      "publication_mode": "exact_copy",
+      "source_artifact": "design-v3-independent-review.json"
+    },
+    {
+      "path": "design-v3.md",
+      "sha256": "cd21825f4ee3b234c79edb94ff6a9a920aff6576a7f538a18ecdb8c213827c93",
+      "bytes": 31715,
+      "publication_mode": "exact_copy",
+      "source_artifact": "design-v3.md"
+    },
+    {
+      "path": "frozen-304-manifest.json",
+      "sha256": "323c8d42987f94ab35152d744d5ca0af140efe42c432ff7ff82a51916512d081",
+      "bytes": 7656,
+      "publication_mode": "exact_copy",
+      "source_artifact": "frozen-304-manifest.json"
+    },
+    {
+      "path": "matrices-v3.md",
+      "sha256": "f07c4cb970eb6ab5e0eb4d6f00bc17f727a8057d8d865e8cdef0a1ea25800065",
+      "bytes": 83711,
+      "publication_mode": "exact_copy",
+      "source_artifact": "matrices-v3.md"
+    },
+    {
+      "path": "publication-evidence.json",
+      "sha256": "436677264769880c55c2bdb2c963895aa4f3fe4851365f4562b070d9604d6aba",
+      "bytes": 35813,
+      "publication_mode": "derived_evidence_index",
+      "source_artifact": null
+    },
+    {
+      "path": "sources-ledger.json",
+      "sha256": "d9e8fc95062a08d5e22bcb0c8d98b2f0da19d79c3e869199102c6b996956092f",
+      "bytes": 7778,
+      "publication_mode": "exact_copy",
+      "source_artifact": "sources-ledger.json"
+    },
+    {
+      "path": "sources.md",
+      "sha256": "e76fccfdb4aaaf34bb5f75508806793a0b6d9a3bd6d4f1038f903d2d93c8890a",
+      "bytes": 7884,
+      "publication_mode": "exact_copy",
+      "source_artifact": "sources.md"
+    }
+  ],
+  "manifest_self_hash": "Excluded to avoid self-reference; complete worktree handoff manifest outside repo hashes this file",
+  "original_prose_normalization": false,
+  "exact_copy_rule": "UTF-8 content copied without textual or newline transformation; exact raw-byte SHA-256 compared to original task artifact",
+  "derived_evidence_inputs": [
+    {
+      "filename": "primary-fetch-manifest.json",
+      "sha256": "eac5773d76804ce1b3c4fd1de36bc406b68a37c444c8babdc8cba603da71e8e5"
+    },
+    {
+      "filename": "primary-extra-fetch-manifest.json",
+      "sha256": "32c9df492c0aecfb57c3135727ba8f8a0e7b3b5a70cc814a53931f992235f395"
+    },
+    {
+      "filename": "primary-version-pins.json",
+      "sha256": "6a983171bab41e2eb11357c51e2b24965f7daf05412a66dc8d71af4eb4abc21f"
+    },
+    {
+      "filename": "sources-ledger.json",
+      "sha256": "d9e8fc95062a08d5e22bcb0c8d98b2f0da19d79c3e869199102c6b996956092f"
+    },
+    {
+      "filename": "legacy-71-read-checks.json",
+      "sha256": "7ab616c6ca93ebc72623f2c090f8889374c91bf37766c6bea3252349b3d42562"
+    },
+    {
+      "filename": "design-v3-independent-review.json",
+      "sha256": "9f4f3308d0fa3880cb6eac9b293b058680319a049b970dff23288508db4c766a"
+    },
+    {
+      "filename": "design-v2-independent-review.json",
+      "sha256": "4dbab4ec57882464ca66c7f0e7a9d743a9bec0d8d87b75578319eeeb6e621288"
+    },
+    {
+      "filename": "design-independent-review.json",
+      "sha256": "7159b32ee7e682c944ae8f2167f7680b8caa7913329c51f331688d25fa2870b9"
+    }
+  ],
+  "derived_evidence_transformations": [
+    "Select primary retrieval URL/version/time/raw and text digest/byte metadata; omit raw full-page/code captures and task-local text paths.",
+    "Verify retained ledger quotations against original captured text and record exact extracted-text line; no new retrieval or semantic quote substitution.",
+    "Select exact v3 source evidence, legacy inventory and whole-suite fingerprint provenance; map clean-main source_root/tv/*.kt to complete repository-relative android/app/src/main/java/com/qmix/tv/*.kt and frozen source_root paths to repository-relative paths, keeping original SHA-256/byte values and source kind.",
+    "Select exact review verdict/date/eight-class/v2-disposition fields; preserve original review as a separate exact file.",
+    "Prior failed reviews retained by filename/hash/verdict, not copied as duplicate mass reports."
+  ],
+  "not_published": [
+    "Raw runtime/cache/log material",
+    "Frozen patch and source archive",
+    "Whole primary webpage/library source captures",
+    "Full repository source dumps",
+    "Historical v1/v2 author documents and full failed reports",
+    "Live issue/project/journal raw snapshots",
+    "Implementation drafts, which remain task-only"
+  ],
+  "historical_reference_rule": "Code-formatted local paths/filenames in exact historical artifacts are provenance, not active repository links; README and decision link every maintained publication dependency."
+}
