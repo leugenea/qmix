@@ -1293,6 +1293,237 @@ class SequentialRoomRepositoryTest {
         }
     }
 
+    /** qmix#308: Success drains after the original event and periodic send attempts. */
+    @Test
+    fun child_free_success_result_drains_with_coexisting_event_and_periodic_sends() = runTest {
+        val first = roomState("ABCD", "bounded-first")
+        assertCoexistingHeldResultDrain(RoomFetchResult.Success(first), active(first, Freshness.FRESH, LiveConnection.CONNECTED))
+    }
+
+    /** qmix#308: Failure remains public as STALE before the coalesced FRESH recovery. */
+    @Test
+    fun child_free_failure_result_recovers_after_coexisting_event_and_periodic_sends() = runTest {
+        assertCoexistingHeldResultDrain(RoomFetchResult.Failure, active(freshness = Freshness.STALE, connection = LiveConnection.CONNECTED))
+    }
+
+    private suspend fun TestScope.assertCoexistingHeldResultDrain(
+        firstResult: RoomFetchResult,
+        firstExpected: RoomSyncState.Active,
+    ) {
+        val fixture = Fixture(this)
+        val collectorEntered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val collectorReturnTailReached = CompletableDeferred<Unit>()
+        val releaseInvalidations = CompletableDeferred<Unit>()
+        val releaseFourth = CompletableDeferred<Unit>()
+        val scriptStopped = CompletableDeferred<Unit>()
+        val naturalCollectReturned = CompletableDeferred<Unit>()
+        var collectionJob: Job? = null
+        var primaryFailure: Throwable? = null
+        // Protect script, cold observe and LAZY allocation before any subject work can start.
+        try {
+            fixture.events.script = { connection ->
+                emit(RoomEventStreamEvent.Opened)
+                releaseInvalidations.await()
+                // The inherited UNLIMITED mailbox is allocated but receives no inputs.
+                connection.emitWithReceipt(this, RoomEventStreamEvent.Event("queue_snapshot"), connection.firstReached, connection.firstReturned)
+                connection.emitWithReceipt(this, RoomEventStreamEvent.Event("queue_updated"), connection.secondReached, connection.secondReturned)
+                connection.emitWithReceipt(this, RoomEventStreamEvent.Event("track_changed"), connection.thirdReached, connection.thirdReturned)
+                releaseFourth.await()
+                connection.emitWithReceipt(this, RoomEventStreamEvent.Event("player_state"), connection.fourthReached, connection.fourthReturned)
+                scriptStopped.complete(Unit)
+                awaitCancellation()
+            }
+            val job = launch(StandardTestDispatcher(testScheduler), start = CoroutineStart.LAZY) {
+                fixture.repository.observe("ABCD").collect { state ->
+                    fixture.observed += state
+                    if (state == active(connection = LiveConnection.CONNECTED)) {
+                        collectorEntered.complete(Unit)
+                        releaseCollector.await()
+                        collectorReturnTailReached.complete(Unit)
+                    }
+                }
+                naturalCollectReturned.complete(Unit)
+            }
+            collectionJob = job
+            job.start()
+            awaitRefreshPhase("coexisting CONNECTED collector entered", fixture::commandLastState) { collectorEntered.await() }
+            awaitRefreshPhase("coexisting initial GET entered", fixture::commandLastState) { fixture.fetcher.initialEntered.await() }
+            runCurrent()
+            val request = fixture.fetcher.requests.single()
+            val connection = fixture.events.connections.single()
+            val initialProducer = request.producer
+            val eventProducer = connection.producer
+            val owner = requireNotNull(initialProducer.parent)
+            assertSame("original event and refresh share the owner", owner, eventProducer.parent)
+            val periodic = owner.children.single { it !== eventProducer && it !== initialProducer }
+            assertEquals(setOf(eventProducer, initialProducer, periodic), owner.children.toSet())
+            assertTrue(eventProducer.isActive)
+            assertTrue(eventProducer.children.none())
+            assertTrue(initialProducer.isActive)
+            assertTrue(initialProducer.children.none())
+            assertTrue(periodic.isActive)
+            assertTrue(periodic.children.none())
+            assertFalse(request.result.isCompleted)
+            assertFalse(releaseInvalidations.isCompleted)
+            assertFalse(releaseCollector.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals("bootstrap and Opened consumed before any deadline", 0L, testScheduler.currentTime)
+            releaseInvalidations.complete(Unit)
+            awaitRefreshPhase("first inline send returned", fixture::commandLastState) { connection.firstReturned.await() }
+            awaitRefreshPhase("second inline send returned", fixture::commandLastState) { connection.secondReturned.await() }
+            awaitRefreshPhase("third inline send returned", fixture::commandLastState) { connection.thirdReturned.await() }
+            assertFalse(releaseFourth.isCompleted)
+            assertFalse(connection.fourthReached.isCompleted)
+            assertFalse(request.result.isCompleted)
+            assertFalse(collectorReturnTailReached.isCompleted)
+            assertEquals(0L, testScheduler.currentTime)
+            advanceTimeBy(15_000L)
+            runCurrent()
+            releaseFourth.complete(Unit)
+            awaitRefreshPhase("fourth inline send reached after first timer", fixture::commandLastState) { connection.fourthReached.await() }
+            runCurrent()
+            // SOURCE_ASSISTED first timer admission: three actual returns + fourth event hold,
+            // literal Command4, consumed bootstrap/Open, held reducer and incomplete GET exclude other occupants.
+            assertTrue(releaseInvalidations.isCompleted)
+            assertTrue(releaseFourth.isCompleted)
+            assertTrue(eventProducer.isActive)
+            assertTrue(eventProducer.children.none())
+            assertFalse(connection.fourthReturned.isCompleted)
+            assertFalse(scriptStopped.isCompleted)
+            assertFalse(request.result.isCompleted)
+            assertFalse(request.cleanupEntered.isCompleted)
+            assertFalse(releaseCollector.isCompleted)
+            assertFalse(collectorReturnTailReached.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals(15_000L, testScheduler.currentTime)
+            advanceTimeBy(15_000L)
+            runCurrent()
+            // SOURCE_ASSISTED second timer blocked site: due-work quiescence and sequential
+            // delay/send at RoomRepository.kt:123-128; no timer gate, child or private ACK exists.
+            assertEquals(30_000L, testScheduler.currentTime)
+            assertTrue(periodic.isActive)
+            assertFalse(periodic.isCompleted)
+            assertFalse(periodic.isCancelled)
+            assertTrue(periodic.children.none())
+            assertFalse(connection.fourthReturned.isCompleted)
+            assertFalse(request.result.isCompleted)
+            assertFalse(releaseCollector.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            // Pending attempts MUST be fourth event -> second timer -> refresh result.
+            request.result.complete(firstResult)
+            awaitRefreshPhase("initial fetch cleanup entered", fixture::commandLastState) { request.cleanupEntered.await() }
+            awaitRefreshPhase("initial fetch return tail reached", fixture::commandLastState) { request.cleanupReturned.await() }
+            runCurrent()
+            // SOURCE_ASSISTED result hold: fetch tail is not admission; completed result,
+            // child-free active refresh and full held reducer leave only the send at source line95.
+            assertTrue(request.result.isCompleted)
+            assertFalse(request.cancelled)
+            assertTrue(initialProducer.isActive)
+            assertFalse(initialProducer.isCompleted)
+            assertFalse(initialProducer.isCancelled)
+            assertTrue(initialProducer.children.none())
+            assertTrue(eventProducer.isActive)
+            assertTrue(eventProducer.children.none())
+            assertTrue(periodic.isActive)
+            assertTrue(periodic.children.none())
+            assertFalse(connection.fourthReturned.isCompleted)
+            assertFalse(scriptStopped.isCompleted)
+            assertFalse(releaseCollector.isCompleted)
+            assertFalse(collectorReturnTailReached.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals(30_000L, testScheduler.currentTime)
+            releaseCollector.complete(Unit)
+            awaitRefreshPhase("CONNECTED callback return tail", fixture::commandLastState) { collectorReturnTailReached.await() }
+            awaitRefreshPhase("fourth inline send actually returned", fixture::commandLastState) { connection.fourthReturned.await() }
+            awaitRefreshPhase("inline script stopped after fourth return", fixture::commandLastState) { scriptStopped.await() }
+            awaitRefreshPhase("original child-free refresh whole join", fixture::commandLastState) { initialProducer.join() }
+            assertTrue(initialProducer.isCompleted)
+            assertFalse(initialProducer.isCancelled)
+            assertTrue(initialProducer.children.none())
+            awaitRefreshPhase("sole coalesced successor entered", fixture::commandLastState) { fixture.fetcher.successorEntered.await() }
+            runCurrent()
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED), firstExpected), fixture.observed)
+            assertEquals("all invalidations precede result and coalesce once", 2, fixture.fetcher.requests.size)
+            val successor = fixture.fetcher.requests[1]
+            assertSame(owner, successor.producer.parent)
+            val recovered = roomState("ABCD", "bounded-recovery")
+            successor.result.complete(RoomFetchResult.Success(recovered))
+            awaitRefreshPhase("recovery refresh whole join", fixture::commandLastState) { successor.producer.join() }
+            runCurrent()
+            val recoveredStates = listOf(active(), active(connection = LiveConnection.CONNECTED), firstExpected, active(recovered, Freshness.FRESH, LiveConnection.CONNECTED))
+            assertEquals(recoveredStates, fixture.observed)
+            assertTrue(successor.producer.isCompleted)
+            assertFalse(successor.producer.isCancelled)
+            assertTrue(successor.producer.children.none())
+            assertFalse(successor.cancelled)
+            assertEquals(listOf("ABCD", "ABCD"), fixture.fetcher.requests.map(Request::roomCode))
+            assertEquals(30_000L, testScheduler.currentTime)
+            advanceTimeBy(14_999L)
+            runCurrent()
+            assertEquals(44_999L, testScheduler.currentTime)
+            assertEquals("no third GET before resumed timer deadline", 2, fixture.fetcher.requests.size)
+            advanceTimeBy(1L)
+            runCurrent()
+            assertEquals(45_000L, testScheduler.currentTime)
+            assertEquals("actual third GET entry, not an invented timer ACK", 3, fixture.fetcher.requests.size)
+            val thirdRequest = fixture.fetcher.requests[2]
+            assertSame(owner, thirdRequest.producer.parent)
+            assertTrue(thirdRequest.producer.isActive)
+            assertTrue(thirdRequest.producer.children.none())
+            assertFalse(thirdRequest.result.isCompleted)
+            assertTrue(periodic.isActive)
+            assertEquals(setOf(eventProducer, periodic, thirdRequest.producer), owner.children.toSet())
+            thirdRequest.result.complete(RoomFetchResult.Missing)
+            awaitRefreshPhase("third fetch cleanup entered", fixture::commandLastState) { thirdRequest.cleanupEntered.await() }
+            awaitRefreshPhase("third fetch return tail reached", fixture::commandLastState) { thirdRequest.cleanupReturned.await() }
+            awaitRefreshPhase("third refresh whole join", fixture::commandLastState) { thirdRequest.producer.join() }
+            awaitRefreshPhase("public collection returned naturally", fixture::commandLastState) { naturalCollectReturned.await() }
+            awaitRefreshPhase("exact collection natural whole join", fixture::commandLastState) { job.join() }
+            awaitRefreshPhase("actual repository owner whole join", fixture::commandLastState) { owner.join() }
+            awaitRefreshPhase("original event whole join", fixture::commandLastState) { eventProducer.join() }
+            awaitRefreshPhase("original periodic whole join", fixture::commandLastState) { periodic.join() }
+            assertEquals(recoveredStates + RoomSyncState.Missing("ABCD"), fixture.observed)
+            assertEquals(listOf("ABCD", "ABCD", "ABCD"), fixture.fetcher.requests.map(Request::roomCode))
+            assertFalse(thirdRequest.cancelled)
+            assertTrue(thirdRequest.producer.isCompleted)
+            assertFalse(thirdRequest.producer.isCancelled)
+            assertTrue(thirdRequest.producer.children.none())
+            assertTrue(job.isCompleted)
+            assertFalse(job.isCancelled)
+            assertTrue(owner.isCompleted)
+            assertFalse(owner.isCancelled)
+            assertTrue(owner.children.none())
+            assertTrue(eventProducer.isCompleted)
+            assertTrue(periodic.isCompleted)
+            assertTrue(periodic.isCancelled)
+            assertTrue(connection.cleanupEntered.isCompleted)
+            assertTrue(connection.cleanupReturned.isCompleted)
+            assertTrue(connection.cancelled)
+            assertEquals(listOf("ABCD"), fixture.events.connections.map { it.roomCode })
+            assertEquals(45_000L, testScheduler.currentTime)
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            releaseCollector.complete(Unit)
+            releaseInvalidations.complete(Unit)
+            releaseFourth.complete(Unit)
+            try {
+                collectionJob?.let { job ->
+                    job.cancel()
+                    withContext(NonCancellable) {
+                        awaitRefreshPhase("exact collection defensive cleanup join", fixture::commandLastState) { job.join() }
+                    }
+                }
+            } catch (cleanupFailure: Throwable) {
+                val failure = primaryFailure
+                if (failure == null) throw cleanupFailure
+                if (failure !== cleanupFailure) failure.addSuppressed(cleanupFailure)
+            }
+        }
+    }
+
     private class SubtreeHeldFetcher {
         private val fetcher = TestFetcher()
         val requests get() = fetcher.requests
