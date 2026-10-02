@@ -1,6 +1,7 @@
 package com.qmix.tv
 
 import android.content.Context
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.ArrayDeque
@@ -8,18 +9,28 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -70,6 +81,150 @@ class HostSessionControllerInstrumentationTest {
                 else -> MockResponse().setResponseCode(404)
             }
         }
+    }
+
+    /** qmix#312: observer-offered commands must queue, not re-enter the host transition. */
+    @Test
+    fun fresh_live_room_observer_offers_command_without_inline_state_mutation() {
+        routeCreations("host-secret")
+        val owner = SupervisorJob()
+        val scope = CoroutineScope(owner + Dispatchers.Main.immediate)
+        val invitationRepository = RecordingRoomRepository()
+        val liveRepository = RecordingRoomRepository()
+        val repositories = ArrayDeque(listOf(invitationRepository, liveRepository))
+        // Exactly the production QMixApplication mutation lane, including its Main predicate.
+        val mutation = QueueMutationContext(Dispatchers.Main.immediate) {
+            Looper.myLooper() === Looper.getMainLooper()
+        }
+        val controller = HostSessionController(
+            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            initialGuestOrigin = "https://guest.example", roomCollectionScope = scope,
+            roomCollectionContext = Dispatchers.IO, queueMutationContext = mutation,
+            roomRepositoryFactory = { repositories.removeFirst() },
+        )
+        val synchronization = RoomSyncState.Active(
+            "ABCD", RoomState("ABCD", null, emptyList()), Freshness.FRESH, LiveConnection.CONNECTED,
+        )
+        val fresh = HostingState.LiveRoom(GuestInvite("ABCD", "https://guest.example/r/ABCD"), synchronization)
+        val observerCalled = AtomicBoolean()
+        val onMain = AtomicBoolean()
+        val commandOffered = AtomicBoolean()
+        val callbackFailure = AtomicReference<Throwable?>()
+        val inspected = CountDownLatch(1)
+        val releaseObserver = CountDownLatch(1)
+        val callbackFinished = CountDownLatch(1)
+        // Unconfined is only the synchronous public observer; host mutations use real Android Main.
+        val observer = scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+            controller.states.collect { published ->
+                if (published != fresh || !observerCalled.compareAndSet(false, true)) return@collect
+                callbackFailure.set(runCatching {
+                    onMain.set(Looper.myLooper() === Looper.getMainLooper())
+                    assertTrue("fresh LiveRoom observer must run on Android Main", onMain.get())
+                    val before = controller.state
+                    assertEquals("observer must handle actual fresh LiveRoom(commandPending=false)", fresh, before)
+                    commandOffered.set(true)
+                    controller.setCommandPending(true)
+                    val after = controller.state
+                    assertEquals(
+                        "qmix#312: observer-offered setCommandPending(true) mutated host state before observer returned; " +
+                            "origin=StateFlow fresh LiveRoom observer on Android Main; before=$before; after=$after",
+                        before, after,
+                    )
+                }.exceptionOrNull())
+                inspected.countDown()
+                runCatching {
+                    awaitTracerLatch("release fresh LiveRoom observer", releaseObserver, controller, 10)
+                }.onFailure { gateFailure ->
+                    callbackFailure.updateAndGet { it?.apply { addSuppressed(gateFailure) } ?: gateFailure }
+                }
+                callbackFinished.countDown()
+            }
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            runTracerStep("offer createRoom on Android Main", controller) {
+                withContext(Dispatchers.Main.immediate) { controller.createRoom(); Unit }
+            }
+            val request = server.takeRequest(5, TimeUnit.SECONDS)
+            assertEquals("room creation HTTP call", "POST", request?.method)
+            assertEquals("room creation HTTP path", "/rooms", request?.path)
+            runTracerStep("created invitation publication", controller) {
+                controller.states.first { it is HostingState.Invitation }
+            }
+            runTracerStep("offer enterRoom on Android Main", controller) {
+                withContext(Dispatchers.Main.immediate) { controller.enterRoom() }
+            }
+            awaitConditionForTracer("live repository collection armed", controller) {
+                liveRepository.observations == 1
+            }
+            liveRepository.publish(synchronization)
+            awaitTracerLatch("fresh LiveRoom observer inspected command offer", inspected, controller)
+            // Idempotent release precedes every fatal assertion on the observer's results.
+            releaseObserver.countDown()
+            awaitTracerLatch("fresh LiveRoom observer finished", callbackFinished, controller)
+            callbackFailure.get()?.let { throw it }
+            assertTrue("public fresh LiveRoom observer was not called", observerCalled.get())
+            assertTrue("command origin was not Android Main", onMain.get())
+            assertTrue("setCommandPending(true) was not offered", commandOffered.get())
+            runTracerStep("queued command eventually publishes commandPending=true after callback", controller) {
+                controller.states.first { it == fresh.copy(commandPending = true) }
+            }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            releaseObserver.countDown()
+            cleanupTracer(primaryFailure,
+                { runTracerStep("join public observer", controller) { observer.cancelAndJoin() } },
+                { runTracerStep("abandon tracer session on Android Main", controller) {
+                    withContext(Dispatchers.Main.immediate) { controller.abandonRoom() }
+                } },
+                { runTracerStep("session cleanup publishes Setup", controller) {
+                    controller.states.first { it is HostingState.Setup }
+                } },
+                { runTracerStep("cancel and join tracer owner tree", controller) { owner.cancelAndJoin() } },
+                {
+                    assertTrue("tracer owner was not joined", owner.isCompleted)
+                    assertTrue("tracer owner still has children", owner.children.none())
+                    assertTrue("invitation collection cleanup missing",
+                        invitationRepository.observations == 0 || invitationRepository.closed)
+                    assertTrue("live collection cleanup missing",
+                        liveRepository.observations == 0 || liveRepository.closed)
+                },
+            )
+        }
+    }
+
+    private fun awaitTracerLatch(
+        step: String, latch: CountDownLatch, controller: HostSessionController, seconds: Long = 5,
+    ) {
+        if (!latch.await(seconds, TimeUnit.SECONDS)) {
+            throw AssertionError("$step: latch timed out; last state=${controller.state}")
+        }
+    }
+
+    private fun <T> runTracerStep(
+        step: String, controller: HostSessionController, action: suspend CoroutineScope.() -> T,
+    ): T = try {
+        runBlocking { withTimeout(5_000) { action() } }
+    } catch (timeout: TimeoutCancellationException) {
+        throw AssertionError("$step: timed out; last state=${controller.state}", timeout)
+    }
+
+    private fun awaitConditionForTracer(
+        step: String, controller: HostSessionController, predicate: () -> Boolean,
+    ) = runTracerStep(step, controller) {
+        while (!predicate()) kotlinx.coroutines.delay(10)
+    }
+
+    private fun cleanupTracer(primary: Throwable?, vararg steps: () -> Unit) {
+        var failure = primary
+        for (step in steps) {
+            try { step() } catch (cleanupFailure: Throwable) {
+                if (failure == null) failure = cleanupFailure else failure.addSuppressed(cleanupFailure)
+            }
+        }
+        if (primary == null) failure?.let { throw it }
     }
 
     @Test
