@@ -1524,6 +1524,252 @@ class SequentialRoomRepositoryTest {
         }
     }
 
+    /** qmix#308: external cancellation waits for the saturated original event role's cleanup. */
+    @Test
+    fun external_cancellation_of_saturated_roles_waits_for_owned_event_cleanup() = runTest {
+        val cancellation = CancellationException("saturated external cancel")
+        val outcome = assertSaturatedAbortCleanup(cancellation, true, null)
+        assertTrue("actual terminal outcome is cancellation", outcome is CancellationException)
+        assertEquals("original cancellation message survives", cancellation.message, outcome.message)
+    }
+
+    /** qmix#308: a distinct owned-source cleanup failure cannot replace the collector primary. */
+    @Test
+    fun collector_primary_survives_saturated_abort_and_throwing_owned_event_cleanup() = runTest {
+        val primary = RoomApiException(UserMessage.SERVER_UNAVAILABLE)
+        val secondary = RoomApiException(UserMessage.SERVER_UNAVAILABLE)
+        assertTrue("cleanup sentinel is distinct from primary", primary !== secondary)
+        assertSame("actual whole collection preserves collector primary", primary, assertSaturatedAbortCleanup(primary, false, secondary))
+    }
+
+    private suspend fun TestScope.assertSaturatedAbortCleanup(
+        primary: Throwable,
+        cancelExternally: Boolean,
+        cleanupFailure: RoomApiException?,
+    ): Throwable {
+        val fixture = Fixture(this)
+        val collectorEntered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val releaseInvalidations = CompletableDeferred<Unit>()
+        val releaseFourth = CompletableDeferred<Unit>()
+        val abortEntered = CompletableDeferred<Unit>()
+        val scriptCleanupEntered = CompletableDeferred<Unit>()
+        val releaseScriptCleanup = CompletableDeferred<Unit>()
+        val scriptCleanupExitReached = CompletableDeferred<Unit>()
+        var collectionJob: Job? = null
+        var supervisor: Job? = null
+        var primaryFailure: Throwable? = null
+        // Protect all allocations and preserve harness failure independently of the intended abort.
+        try {
+            val supervisorJob = SupervisorJob()
+            supervisor = supervisorJob
+            val scope = CoroutineScope(supervisorJob + StandardTestDispatcher(testScheduler))
+            fixture.events.script = { connection ->
+                try {
+                    emit(RoomEventStreamEvent.Opened)
+                    releaseInvalidations.await()
+                    // Inherited mailbox remains inert: these are three actual inline send returns.
+                    connection.emitWithReceipt(this, RoomEventStreamEvent.Event("queue_snapshot"), connection.firstReached, connection.firstReturned)
+                    connection.emitWithReceipt(this, RoomEventStreamEvent.Event("queue_updated"), connection.secondReached, connection.secondReturned)
+                    connection.emitWithReceipt(this, RoomEventStreamEvent.Event("track_changed"), connection.thirdReached, connection.thirdReturned)
+                    releaseFourth.await()
+                    connection.emitWithReceipt(this, RoomEventStreamEvent.Event("player_state"), connection.fourthReached, connection.fourthReturned)
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) {
+                        scriptCleanupEntered.complete(Unit)
+                        releaseScriptCleanup.await()
+                        scriptCleanupExitReached.complete(Unit)
+                        cleanupFailure?.let { throw it }
+                    }
+                }
+            }
+            val terminal = scope.async(start = CoroutineStart.LAZY) {
+                fixture.repository.observe("ABCD").collect { state ->
+                    fixture.observed += state
+                    if (state == active(connection = LiveConnection.CONNECTED)) {
+                        collectorEntered.complete(Unit)
+                        releaseCollector.await()
+                        abortEntered.complete(Unit)
+                        throw primary
+                    }
+                }
+            }
+            collectionJob = terminal
+            terminal.start()
+            awaitRefreshPhase("abort CONNECTED collector entered", fixture::commandLastState) { collectorEntered.await() }
+            awaitRefreshPhase("abort initial GET entered", fixture::commandLastState) { fixture.fetcher.initialEntered.await() }
+            runCurrent()
+            val request = fixture.fetcher.requests.single()
+            val connection = fixture.events.connections.single()
+            val refresh = request.producer
+            val event = connection.producer
+            val repositoryOwner = requireNotNull(refresh.parent)
+            assertSame("original event and refresh share exact owner", repositoryOwner, event.parent)
+            val periodic = repositoryOwner.children.single { it !== event && it !== refresh }
+            val originalRoles = setOf(refresh, event, periodic)
+            assertEquals(originalRoles, repositoryOwner.children.toSet())
+            assertTrue(refresh.isActive)
+            assertTrue(refresh.children.none())
+            assertTrue(event.isActive)
+            assertTrue(event.children.none())
+            assertTrue(periodic.isActive)
+            assertTrue(periodic.children.none())
+            assertFalse(request.result.isCompleted)
+            assertFalse(releaseInvalidations.isCompleted)
+            assertFalse(releaseCollector.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals("bootstrap and Opened consumed before timers", 0L, testScheduler.currentTime)
+            releaseInvalidations.complete(Unit)
+            awaitRefreshPhase("abort first inline send returned", fixture::commandLastState) { connection.firstReturned.await() }
+            awaitRefreshPhase("abort second inline send returned", fixture::commandLastState) { connection.secondReturned.await() }
+            awaitRefreshPhase("abort third inline send returned", fixture::commandLastState) { connection.thirdReturned.await() }
+            assertFalse(releaseFourth.isCompleted)
+            assertFalse(connection.fourthReached.isCompleted)
+            assertFalse(request.result.isCompleted)
+            assertFalse(abortEntered.isCompleted)
+            assertEquals(0L, testScheduler.currentTime)
+            advanceTimeBy(15_000L)
+            runCurrent()
+            releaseFourth.complete(Unit)
+            awaitRefreshPhase("abort fourth send reached after first timer", fixture::commandLastState) { connection.fourthReached.await() }
+            runCurrent()
+            // SOURCE_ASSISTED timer fills slot4: three real returns, held fourth event, literal4,
+            // consumed bootstrap/Open, held reducer and incomplete GET exclude other occupants.
+            assertTrue(releaseInvalidations.isCompleted)
+            assertTrue(releaseFourth.isCompleted)
+            assertTrue(event.isActive)
+            assertTrue(event.children.none())
+            assertFalse(connection.fourthReturned.isCompleted)
+            assertFalse(request.result.isCompleted)
+            assertFalse(request.cleanupEntered.isCompleted)
+            assertFalse(releaseCollector.isCompleted)
+            assertFalse(abortEntered.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals(15_000L, testScheduler.currentTime)
+            advanceTimeBy(15_000L)
+            runCurrent()
+            // SOURCE_ASSISTED second timer send: due-work quiescence and original sequential
+            // delay/send at RoomRepository.kt123-128, not a clock/count-only or private ACK.
+            assertEquals(30_000L, testScheduler.currentTime)
+            assertEquals(originalRoles, repositoryOwner.children.toSet())
+            assertTrue(periodic.isActive)
+            assertFalse(periodic.isCompleted)
+            assertFalse(periodic.isCancelled)
+            assertTrue(periodic.children.none())
+            assertFalse(connection.fourthReturned.isCompleted)
+            assertFalse(request.result.isCompleted)
+            assertFalse(releaseCollector.isCompleted)
+            request.result.complete(RoomFetchResult.Success(roomState("ABCD", "abort-held-result")))
+            awaitRefreshPhase("abort exact fetch cleanup entered", fixture::commandLastState) { request.cleanupEntered.await() }
+            awaitRefreshPhase("abort exact fetch return tail reached", fixture::commandLastState) { request.cleanupReturned.await() }
+            runCurrent()
+            // SOURCE_ASSISTED refresh send95: real fetch tail is not admission or whole retirement;
+            // completed result + active child-free identities + held reducer exclude other waits.
+            assertTrue(request.result.isCompleted)
+            assertFalse(request.cancelled)
+            assertTrue(refresh.isActive)
+            assertFalse(refresh.isCompleted)
+            assertFalse(refresh.isCancelled)
+            assertTrue(refresh.children.none())
+            assertTrue(event.isActive)
+            assertTrue(event.children.none())
+            assertTrue(periodic.isActive)
+            assertTrue(periodic.children.none())
+            assertEquals(originalRoles, repositoryOwner.children.toSet())
+            assertFalse(connection.fourthReturned.isCompleted)
+            assertFalse(scriptCleanupEntered.isCompleted)
+            assertFalse(releaseCollector.isCompleted)
+            assertFalse(abortEntered.isCompleted)
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals(30_000L, testScheduler.currentTime)
+            if (cancelExternally) {
+                terminal.cancel(primary as CancellationException)
+                runCurrent()
+                assertFalse("external cancellation does not enter collector throw", abortEntered.isCompleted)
+                assertFalse(releaseCollector.isCompleted)
+            } else {
+                releaseCollector.complete(Unit)
+                awaitRefreshPhase("abort collector primary throw reached", fixture::commandLastState) { abortEntered.await() }
+                runCurrent()
+            }
+            awaitRefreshPhase("abort original source NonCancellable cleanup entered", fixture::commandLastState) { scriptCleanupEntered.await() }
+            runCurrent()
+            assertFalse(releaseScriptCleanup.isCompleted)
+            assertFalse(scriptCleanupExitReached.isCompleted)
+            assertTrue("exact event cancellation is pending in owned cleanup", event.isCancelled)
+            assertFalse("whole event cannot retire before source cleanup", event.isCompleted)
+            assertTrue(event.children.none())
+            assertFalse("whole collection still owns source cleanup", terminal.isCompleted)
+            assertFalse(repositoryOwner.isCompleted)
+            assertFalse(connection.cleanupEntered.isCompleted)
+            assertFalse(connection.cleanupReturned.isCompleted)
+            assertFalse(connection.fourthReturned.isCompleted)
+            assertFalse(fixture.fetcher.successorEntered.isCompleted)
+            assertEquals(listOf("ABCD"), fixture.fetcher.requests.map(Request::roomCode))
+            assertEquals(listOf("ABCD"), fixture.events.connections.map { it.roomCode })
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals(30_000L, testScheduler.currentTime)
+            releaseScriptCleanup.complete(Unit)
+            // Exit receipt is the tail BEFORE optional secondary throw, not successful cleanup return.
+            awaitRefreshPhase("abort script cleanup exit tail reached", fixture::commandLastState) { scriptCleanupExitReached.await() }
+            awaitRefreshPhase("abort original source outer cleanup entered", fixture::commandLastState) { connection.cleanupEntered.await() }
+            awaitRefreshPhase("abort original source outer cleanup returned", fixture::commandLastState) { connection.cleanupReturned.await() }
+            awaitRefreshPhase("abort original refresh whole join", fixture::commandLastState) { refresh.join() }
+            awaitRefreshPhase("abort original event whole join", fixture::commandLastState) { event.join() }
+            awaitRefreshPhase("abort original periodic whole join", fixture::commandLastState) { periodic.join() }
+            awaitRefreshPhase("abort exact terminal whole join", fixture::commandLastState) { terminal.join() }
+            awaitRefreshPhase("abort exact repository owner whole join", fixture::commandLastState) { repositoryOwner.join() }
+            assertTrue(refresh.isCompleted)
+            assertTrue(refresh.isCancelled)
+            assertTrue(event.isCompleted)
+            assertTrue(event.isCancelled)
+            assertTrue(periodic.isCompleted)
+            assertTrue(periodic.isCancelled)
+            assertTrue(terminal.isCompleted)
+            assertTrue(terminal.isCancelled)
+            assertTrue(terminal.children.none())
+            assertTrue(repositoryOwner.isCompleted)
+            assertTrue(repositoryOwner.children.none())
+            assertTrue(connection.cancelled)
+            assertFalse(connection.fourthReturned.isCompleted)
+            assertFalse(fixture.fetcher.successorEntered.isCompleted)
+            assertEquals(listOf("ABCD"), fixture.fetcher.requests.map(Request::roomCode))
+            assertEquals(listOf("ABCD"), fixture.events.connections.map { it.roomCode })
+            assertEquals(listOf(active(), active(connection = LiveConnection.CONNECTED)), fixture.observed)
+            assertEquals(30_000L, testScheduler.currentTime)
+            val outcome = try {
+                awaitRefreshPhase("abort actual terminal await outcome", fixture::commandLastState) { terminal.await() }
+                null
+            } catch (caught: Throwable) {
+                caught
+            }
+            return requireNotNull(outcome) { "aborted whole collection unexpectedly succeeded" }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            releaseCollector.complete(Unit)
+            releaseInvalidations.complete(Unit)
+            releaseFourth.complete(Unit)
+            releaseScriptCleanup.complete(Unit)
+            collectionJob?.cancel()
+            supervisor?.cancel()
+            try {
+                withContext(NonCancellable) {
+                    awaitRefreshPhase("abort exact defensive collection and supervisor joins", fixture::commandLastState) {
+                        collectionJob?.join()
+                        supervisor?.join()
+                    }
+                }
+            } catch (cleanup: Throwable) {
+                val failure = primaryFailure
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
     private class SubtreeHeldFetcher {
         private val fetcher = TestFetcher()
         val requests get() = fetcher.requests
