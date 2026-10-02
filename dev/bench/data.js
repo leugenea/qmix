@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790842608657,
+  "lastUpdate": 1790922043447,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2095,6 +2095,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Kotlin CCN > 10",
             "value": 13,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "78eb96692edca100640c95d88cf296eab4769124",
+          "message": "fix(android): bound repository handoff and retain refresh ownership (#310)\n\n* test(android): expose refresh subtree handoff race\n\nFirst reviewed regression tracer for #308. Production is unchanged; hosted expected-RED verification precedes the matching fix.\n\n* fix(android): retain refresh ownership until producer terminal\n\n* test(android): trace four-slot command admission and startup\n\n* test(android): pin approved startup GET priority and retirement\n\n* fix(android): bound repository commands and admit bootstrap first\n\n* test(android): expose downstream fusion of SSE handoff capacity\n\n* fix(android): isolate owned SSE callback handoff capacity\n\n* test(android): characterize saturated child-free missing refresh\n\n* test(android): characterize saturated SSE404 missing retirement\n\n* test(android): characterize callback handoff with rendezvous buffer\n\n* test(android): characterize saturated HTTP404 callback cleanup\n\n* test(android): characterize dispatcher-changing callback handoff\n\n* test(android): characterize cold repeat and terminal callback isolation\n\n* test(android): characterize external callback collection termination\n\n* test(android): characterize coexisting bounded refresh result drain\n\n* test(android): verify saturated abort cleanup and primary preservation",
+          "timestamp": "2026-10-02T09:20:09+03:00",
+          "tree_id": "75c5c85fc82284ac55d9074b9051ee39889d0862",
+          "url": "https://github.com/leugenea/qmix/commit/78eb96692edca100640c95d88cf296eab4769124"
+        },
+        "date": 1790922042513,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.942874200577986,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 25.230237558925733,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 12,
             "unit": "functions"
           },
           {
