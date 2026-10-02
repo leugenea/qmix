@@ -1,9 +1,28 @@
 package com.qmix.tv
 
+import kotlin.coroutines.ContinuationInterceptor
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -12,9 +31,13 @@ import okhttp3.Response
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -153,6 +176,398 @@ class OkHttpRoomEventStreamTest {
 
         assertEquals(RoomEventStreamEvent.Failure(null), event)
         assertEquals(true, source.cancelled)
+    }
+
+    /** qmix#308: preserve the direct default64 prefix and natural source cleanup. */
+    @Test
+    fun direct_callback_handoff_preserves_first_sixty_four_and_source_cleanup() = runTest {
+        assertCallbackHandoff(downstreamBufferCapacity = null)
+    }
+
+    /** qmix#308: caller buffering must not widen the owned callback handoff. */
+    @Test
+    fun downstream_large_buffer_cannot_enlarge_owned_callback_handoff() = runTest {
+        assertCallbackHandoff(downstreamBufferCapacity = 128)
+    }
+
+    @Test
+    fun downstream_rendezvous_buffer_preserves_owned_callback_prefix_and_natural_cleanup() = runTest {
+        assertCallbackHandoff(downstreamBufferCapacity = 0)
+    }
+
+    /** qmix#308: a dropped saturated HTTP404 callback still closes and naturally cleans up. */
+    @Test
+    fun saturated_http_404_callback_preserves_owned_prefix_and_natural_cleanup() = runTest {
+        assertCallbackHandoff(downstreamBufferCapacity = null, terminalFailure404 = true)
+    }
+
+    /** qmix#308: a dispatcher-changing caller must not widen the owned callback handoff. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun dispatcher_changing_flow_on_preserves_owned_callback_prefix_and_natural_cleanup() = runTest {
+        assertCallbackHandoff(downstreamBufferCapacity = null, upstreamDispatcher = StandardTestDispatcher(testScheduler))
+    }
+
+    /** qmix#308: repeated cold collections isolate old callbacks and close on transport failure. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun cold_repeated_throwable_with_http_200_closes_naturally_and_rejects_old_callbacks() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val offline = IllegalStateException("offline")
+        val sources = mutableListOf<RecordingEventSource>()
+        val listeners = mutableListOf<EventSourceListener>()
+        val responses = mutableListOf<Response>()
+        val publicLists = mutableListOf<List<RoomEventStreamEvent>>()
+        var collectionJob: Job? = null
+        var primaryFailure: Throwable? = null
+        try {
+            val factory = OkHttpRoomEventStreamFactory(
+                OkHttpClient(),
+                server.url("/").toString(),
+                connect = { request, listener ->
+                    val source = RecordingEventSource()
+                    val response = Response.Builder()
+                        .request(request)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .build()
+                    sources.add(source)
+                    listeners.add(listener)
+                    responses.add(response)
+                    if (sources.size == 2) {
+                        listeners[0].onEvent(sources[0], null, "late-from-first", "ignored")
+                        listeners[0].onFailure(sources[0], offline, responses[0])
+                        listeners[0].onClosed(sources[0])
+                    }
+                    listener.onOpen(source, response)
+                    listener.onEvent(source, null, "connection-${sources.size}", "ignored")
+                    listener.onFailure(source, offline, response)
+                    source
+                },
+            )
+            val observed = factory.observe("AB CD")
+            val job = launch(dispatcher, start = CoroutineStart.LAZY) {
+                for (index in 1..2) {
+                    val returnedList = observed.toList()
+                    assertEquals(
+                        listOf(
+                            RoomEventStreamEvent.Opened,
+                            RoomEventStreamEvent.Event("connection-$index"),
+                            RoomEventStreamEvent.Failure(null),
+                        ),
+                        returnedList,
+                    )
+                    assertTrue("natural return includes fake cancel return", sources[index - 1].cancelled)
+                    publicLists.add(returnedList)
+                }
+            }
+            collectionJob = job
+            assertTrue("observe and LAZY collection must remain cold", sources.isEmpty())
+            assertTrue(listeners.isEmpty())
+            assertTrue(responses.isEmpty())
+            withContext(CoroutineName("qmix#308 cold repeat natural join hang guard")) {
+                withTimeout(5_000L) {
+                    job.start()
+                    runCurrent()
+                    job.join()
+                }
+            }
+            assertTrue("whole driver joined naturally", job.isCompleted)
+            assertFalse("successful driver was not cancelled", job.isCancelled)
+            assertTrue("whole driver has no remaining children", job.children.none())
+            assertEquals(2, sources.size)
+            assertEquals(2, listeners.size)
+            assertEquals(2, responses.size)
+            assertTrue("each cold collection creates its own source", sources[0] !== sources[1])
+            assertTrue("each cold collection captures its own listener", listeners[0] !== listeners[1])
+            assertTrue("each connection receives its own response", responses[0] !== responses[1])
+            assertTrue("each cold collection builds its own request", responses[0].request !== responses[1].request)
+            assertTrue(sources[0].cancelled)
+            assertTrue(sources[1].cancelled)
+            responses.forEach { response ->
+                assertEquals("/rooms/AB%20CD/events", response.request.url.encodedPath)
+                assertEquals("text/event-stream", response.request.header("Accept"))
+                assertNull(response.request.header("X-Host-Token"))
+            }
+            assertEquals(
+                listOf(
+                    listOf(
+                        RoomEventStreamEvent.Opened,
+                        RoomEventStreamEvent.Event("connection-1"),
+                        RoomEventStreamEvent.Failure(null),
+                    ),
+                    listOf(
+                        RoomEventStreamEvent.Opened,
+                        RoomEventStreamEvent.Event("connection-2"),
+                        RoomEventStreamEvent.Failure(null),
+                    ),
+                ),
+                publicLists,
+            )
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            collectionJob?.cancel()
+            try {
+                withContext(NonCancellable + CoroutineName("qmix#308 cold repeat exact collection cleanup hang guard")) {
+                    withTimeout(5_000L) { collectionJob?.join() }
+                }
+            } catch (cleanupFailure: Throwable) {
+                val failure = primaryFailure
+                if (failure == null) throw cleanupFailure
+                if (failure !== cleanupFailure) failure.addSuppressed(cleanupFailure)
+            }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun external_cancel_then_collector_throw_rejects_old_callbacks_and_cleans_each_cold_collection() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val collectorFailure = RoomApiException(UserMessage.SERVER_UNAVAILABLE)
+        val offline = IllegalStateException("offline")
+        val firstOpened = CompletableDeferred<Unit>()
+        val sources = mutableListOf<RecordingEventSource>()
+        val listeners = mutableListOf<EventSourceListener>()
+        val responses = mutableListOf<Response>()
+        val firstEvents = mutableListOf<RoomEventStreamEvent>()
+        val secondEvents = mutableListOf<RoomEventStreamEvent>()
+        var firstCollectionJob: Job? = null
+        var primaryFailure: Throwable? = null
+        try {
+            val factory = OkHttpRoomEventStreamFactory(
+                OkHttpClient(),
+                server.url("/").toString(),
+                connect = { request, listener ->
+                    val source = RecordingEventSource()
+                    val response = Response.Builder()
+                        .request(request).protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .build()
+                    sources.add(source)
+                    listeners.add(listener)
+                    responses.add(response)
+                    if (sources.size == 2) {
+                        listeners[0].onEvent(sources[0], null, "late-after-cancel", "ignored")
+                        listeners[0].onFailure(sources[0], offline, responses[0])
+                        listeners[0].onClosed(sources[0])
+                    }
+                    listener.onOpen(source, response)
+                    source
+                },
+            )
+            val observed = factory.observe("AB CD")
+            val firstJob = launch(dispatcher, start = CoroutineStart.LAZY) {
+                observed.collect { event ->
+                    assertEquals(RoomEventStreamEvent.Opened, event)
+                    firstEvents.add(event)
+                    firstOpened.complete(Unit)
+                }
+            }
+            firstCollectionJob = firstJob
+            assertTrue("observe and LAZY first collection remain cold", sources.isEmpty())
+            assertTrue(listeners.isEmpty())
+            assertTrue(responses.isEmpty())
+            withContext(CoroutineName("qmix#308 external first cancel and whole join hang guard")) {
+                withTimeout(5_000L) {
+                    firstJob.start()
+                    firstOpened.await()
+                    assertEquals(1, sources.size)
+                    assertEquals(1, listeners.size)
+                    assertEquals(1, responses.size)
+                    assertEquals(listOf(RoomEventStreamEvent.Opened), firstEvents)
+                    assertTrue("first public collection is live before external cancel", firstJob.isActive)
+                    assertFalse(firstJob.isCompleted)
+                    assertFalse(sources[0].cancelled)
+                    firstJob.cancel()
+                    firstJob.join()
+                }
+            }
+            assertTrue("external cancellation joined the exact whole first collection", firstJob.isCompleted)
+            assertTrue(firstJob.isCancelled)
+            assertTrue(firstJob.children.none())
+            assertTrue("first whole join includes fake cancel return", sources[0].cancelled)
+            assertEquals(listOf(RoomEventStreamEvent.Opened), firstEvents)
+            assertEquals(1, sources.size)
+            assertEquals(1, listeners.size)
+            assertEquals(1, responses.size)
+            var caughtFailure: Throwable? = null
+            try {
+                withContext(dispatcher + CoroutineName("qmix#308 second collector throw hang guard")) {
+                    withTimeout(5_000L) {
+                        observed.collect { event ->
+                            secondEvents.add(event)
+                            throw collectorFailure
+                        }
+                    }
+                }
+            } catch (caught: Throwable) {
+                if (caught !== collectorFailure) throw caught
+                caughtFailure = caught
+            }
+            assertSame("collector failure exits the whole structured collection unchanged", collectorFailure, caughtFailure)
+            assertEquals(listOf(RoomEventStreamEvent.Opened), secondEvents)
+            assertEquals(listOf(RoomEventStreamEvent.Opened), firstEvents)
+            assertEquals(2, sources.size)
+            assertEquals(2, listeners.size)
+            assertEquals(2, responses.size)
+            assertTrue(sources[0].cancelled)
+            assertTrue("second structured unwind includes fake cancel return", sources[1].cancelled)
+            assertTrue("each cold collection creates a fresh source", sources[0] !== sources[1])
+            assertTrue("each cold collection captures a fresh listener", listeners[0] !== listeners[1])
+            assertTrue("each connection receives a fresh response", responses[0] !== responses[1])
+            assertTrue("each cold collection builds a fresh request", responses[0].request !== responses[1].request)
+            responses.forEach { response ->
+                assertEquals("/rooms/AB%20CD/events", response.request.url.encodedPath)
+                assertEquals("text/event-stream", response.request.header("Accept"))
+                assertNull(response.request.header("X-Host-Token"))
+            }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            firstCollectionJob?.cancel()
+            try {
+                withContext(NonCancellable + CoroutineName("qmix#308 exact first defensive join hang guard")) {
+                    withTimeout(5_000L) { firstCollectionJob?.join() }
+                }
+            } catch (cleanupFailure: Throwable) {
+                val failure = primaryFailure
+                if (failure == null) throw cleanupFailure
+                if (failure !== cleanupFailure) failure.addSuppressed(cleanupFailure)
+            }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun TestScope.assertCallbackHandoff(downstreamBufferCapacity: Int?, terminalFailure404: Boolean = false, upstreamDispatcher: TestDispatcher? = null) {
+        val rawDefaultBuffer = System.getProperty("kotlinx.coroutines.channels.defaultBuffer")
+        // Pinned coroutines 1.9.0 uses 64 only when the JVM property is absent.
+        // A malformed explicit value remains null, never silently falls back to 64.
+        val effectiveDefaultBuffer = if (rawDefaultBuffer == null) 64L else rawDefaultBuffer.toLongOrNull()
+        val effectiveSource = if (rawDefaultBuffer == null) "pinned 1.9.0 fallback" else "explicit JVM property"
+        println(
+            "qmix#308 defaultBuffer raw=[$rawDefaultBuffer], effective=$effectiveDefaultBuffer, " +
+                "source=$effectiveSource, downstreamBufferCapacity=$downstreamBufferCapacity",
+        )
+        assertEquals("Nonqualifying baseline: effective JVM defaultBuffer must be 64", 64L, effectiveDefaultBuffer)
+
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val source = RecordingEventSource()
+        var requested: Request? = null
+        var sourceToReturn: EventSource? = null
+        val burstReturned = CompletableDeferred<Unit>()
+        val sourceReturnTailReached = CompletableDeferred<Unit>()
+        val collectorEntered = CompletableDeferred<Unit>()
+        val collectorReturnTailReached = CompletableDeferred<Unit>()
+        val naturalCollectReturned = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val events = mutableListOf<RoomEventStreamEvent>()
+        val eventTypes = (1..65).map { "event-${it.toString().padStart(2, '0')}" }
+        var collectionJob: Job? = null
+        var primaryFailure: Throwable? = null
+        // Cleanup is protected before even allocating the LAZY collection Job.
+        try {
+            val factory = OkHttpRoomEventStreamFactory(
+                OkHttpClient(),
+                server.url("/").toString(),
+                connect = { request, listener ->
+                    requested = request
+                    val productionListener = listener
+                    val response = Response.Builder()
+                        .request(request)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .build()
+                    // The first receive is pending; this single-dispatcher burst never yields.
+                    productionListener.onOpen(source, response)
+                    eventTypes.forEach { type ->
+                        productionListener.onEvent(source, "ignored", type, "ignored")
+                    }
+                    if (terminalFailure404) {
+                        productionListener.onFailure(
+                            source, null, response.newBuilder().code(404).message("Not Found").build(),
+                        )
+                    } else {
+                        productionListener.onClosed(source)
+                    }
+                    // These are callback/return-tail receipts, not admission acknowledgements.
+                    burstReturned.complete(Unit)
+                    sourceToReturn = source
+                    sourceReturnTailReached.complete(Unit)
+                    source
+                },
+            )
+            val observed = if (upstreamDispatcher != null) {
+                assertFalse("flowOn dispatcher must differ from the public collector", upstreamDispatcher === dispatcher)
+                factory.observe("AB CD").onEach {
+                    assertSame("public upstream runs on the selected flowOn dispatcher", upstreamDispatcher, currentCoroutineContext()[ContinuationInterceptor])
+                }.flowOn(upstreamDispatcher)
+            } else {
+                factory.observe("AB CD")
+            }
+            val publicFlow = if (downstreamBufferCapacity != null) observed.buffer(downstreamBufferCapacity) else observed
+            val job = launch(dispatcher, start = CoroutineStart.LAZY) {
+                publicFlow.collect { event ->
+                    assertSame("public collector retains its original dispatcher", dispatcher, currentCoroutineContext()[ContinuationInterceptor])
+                    events.add(event)
+                    if (event == RoomEventStreamEvent.Opened) {
+                        collectorEntered.complete(Unit)
+                        releaseCollector.await()
+                        collectorReturnTailReached.complete(Unit)
+                    }
+                }
+                naturalCollectReturned.complete(Unit)
+            }
+            collectionJob = job
+            assertNull("observe and LAZY collection must remain cold", requested)
+            withContext(CoroutineName("qmix#308 natural collection hang guard")) {
+                withTimeout(5_000L) {
+                    job.start()
+                    runCurrent()
+                    collectorEntered.await()
+                    assertTrue("inline callback burst returned", burstReturned.isCompleted)
+                    assertTrue("exact source return tail reached", sourceReturnTailReached.isCompleted)
+                    assertEquals(listOf(RoomEventStreamEvent.Opened), events)
+                    releaseCollector.complete(Unit)
+                    runCurrent()
+                    collectorReturnTailReached.await()
+                    naturalCollectReturned.await()
+                    job.join()
+                }
+            }
+            assertTrue("whole collection joined naturally", job.isCompleted)
+            assertFalse("successful collection was not cancelled", job.isCancelled)
+            assertSame("the exact source is returned by injected connect", source, sourceToReturn)
+            assertTrue("natural whole join includes fake cancel return", source.cancelled)
+            assertEquals("/rooms/AB%20CD/events", requested?.url?.encodedPath)
+            assertEquals("text/event-stream", requested?.header("Accept"))
+            assertNull(requested?.header("X-Host-Token"))
+            // Only this naturally completed public list proves admission, never callback receipts.
+            assertEquals(
+                "qmix#308 owned callback handoff must preserve exactly Opened and the first 64 events",
+                listOf(RoomEventStreamEvent.Opened) +
+                    (1..64).map { RoomEventStreamEvent.Event("event-${it.toString().padStart(2, '0')}") },
+                events,
+            )
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            releaseCollector.complete(Unit)
+            collectionJob?.cancel()
+            try {
+                withContext(NonCancellable + CoroutineName("qmix#308 exact collection cleanup hang guard")) {
+                    withTimeout(5_000L) { collectionJob?.join() }
+                }
+            } catch (cleanupFailure: Throwable) {
+                primaryFailure?.addSuppressed(cleanupFailure) ?: throw cleanupFailure
+            }
+        }
     }
 
     private class RecordingEventSource : EventSource {
