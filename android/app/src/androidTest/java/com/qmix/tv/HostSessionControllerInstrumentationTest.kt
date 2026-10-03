@@ -494,7 +494,12 @@ class HostSessionControllerInstrumentationTest {
 
         ).also { controllers.add(it) }
         val observed = java.util.concurrent.CopyOnWriteArrayList<HostingState>()
-        subscriptions += controller.collectStatesForTest(observer = observed::add)
+        val receipts = Channel<HostingState>(Channel.UNLIMITED)
+        subscriptions += controller.collectStatesForTest { state ->
+            observed.add(state)
+            // A separate StateFlow wait cannot acknowledge delivery to this observer.
+            receipts.trySend(state)
+        }
         subscriptions += controller.collectStatesForTest(isolateFailures = true) { state ->
             if (state is HostingState.LiveRoom && state.commandPending) {
                 error("observer failure")
@@ -522,12 +527,14 @@ class HostSessionControllerInstrumentationTest {
         controller.awaitStateForTest("pending primary action publication") { (it as? HostingState.LiveRoom)?.commandPending == true }
         assertEquals(1, primaryActions)
         assertFalse((controller.state as HostingState.LiveRoom).isPrimaryActionEnabled)
+        awaitPresentationReceipt("pending primary action observer receipt", receipts, ready.copy(commandPending = true))
         assertTrue((observed.last() as HostingState.LiveRoom).commandPending)
 
         controller.setCommandPending(false)
         controller.onInvite()
         controller.awaitStateForTest("invite becomes visible") { (it as? HostingState.LiveRoom)?.invitationVisible == true }
         assertTrue((controller.state as HostingState.LiveRoom).invitationVisible)
+        awaitPresentationReceipt("visible invite observer receipt", receipts, ready.copy(invitationVisible = true))
         assertTrue((observed.last() as HostingState.LiveRoom).invitationVisible)
         controller.onInvite()
         val exits = AtomicInteger()
@@ -535,12 +542,15 @@ class HostSessionControllerInstrumentationTest {
         controller.awaitStateForTest("first Back dismisses invite without exit") { (it as? HostingState.LiveRoom)?.invitationVisible == false }
         assertEquals("dismiss invite must not exit Activity", 0, exits.get())
         assertFalse((controller.state as HostingState.LiveRoom).invitationVisible)
+        awaitPresentationReceipt("first Back dismissed invite observer receipt", receipts, ready)
         assertFalse((observed.last() as HostingState.LiveRoom).invitationVisible)
         controller.onBack { exits.incrementAndGet() }
         awaitConditionForTest("Back exit effect after cleanup") { exits.get() == 1 }
         controller.awaitSetupForTest("live_room_presentation_handlers_publish_and_close_the_application_session: joined cleanup 3")
         assertTrue(repository.closed)
         assertTrue(controller.state is HostingState.Setup)
+        awaitPresentationReceipt("joined cleanup Setup observer receipt", receipts,
+            HostingState.Setup(server.url("/").toString().trimEnd('/'), "https://guest.example"))
         assertTrue(observed.last() is HostingState.Setup)
         controller.onBack { exits.incrementAndGet() }
         controller.updateSettings("https://after-back.example", "https://guest.example")
@@ -549,6 +559,23 @@ class HostSessionControllerInstrumentationTest {
         }
         assertEquals("Back outside room must not exit again", 1, exits.get())
         assertEquals(listOf(LiveRoomPrimaryAction.START, LiveRoomPrimaryAction.NEXT), LiveRoomPrimaryAction.entries)
+    }
+
+    private fun awaitPresentationReceipt(
+        step: String, receipts: Channel<HostingState>, expected: HostingState,
+    ) {
+        var lastReceipt: HostingState? = null
+        try {
+            runBlocking {
+                withTimeout(5_000) {
+                    do {
+                        lastReceipt = receipts.receive()
+                    } while (lastReceipt != expected)
+                }
+            }
+        } catch (timeout: TimeoutCancellationException) {
+            throw AssertionError("$step: timed out; expected=$expected; last observer receipt=$lastReceipt", timeout)
+        }
     }
 
     @Test
