@@ -38,6 +38,43 @@ cd android
 ./gradlew --no-daemon :app:connectedDebugAndroidTest
 ```
 
+## Shared TV Material presentation (qmix#315)
+
+`HostingScreen` owns the plain `QMixTvTheme` root: pinned TV Material dark
+roles, typography and shapes, plus an inherited `onBackground` content color.
+TV Buttons retain their own state-specific content provider, real focus,
+D-pad activation and enabledness; the root must not overwrite Button text.
+The existing real-HostingScreen inherited-label oracle remains independent of
+the same-widget Setup history.
+
+`Qmix70ScreenshotTest` holds one production `SetupScreen` call across default,
+focused, held-center and pending/disabled states. It checks native text at
+4.5:1, the actually relied-upon focused container/root adjacency at 3:1, a
+non-color native extent cue, stable widget/layout/root identity, and callbacks
+(0 held, 1 released, 0 disabled delta). Disabled text/container/outline are
+numerically exempt, but must remain distinct and semantically disabled; their
+ordered color and content/surface alpha layers are recorded separately.
+
+Hosted API 36 TV CI prepares `/data/local/tmp/qmix70/write-capture.sh`, then
+runs the unchanged combined coverage command. Native screenshots and pixel
+oracles use the same bitmap. A checked PNG write commits a pending-oracle
+ledger receipt before visual assertions; only all oracles and postcapture
+receipts promote it. Collection pulls partial evidence while the emulator is
+alive, preserves any original Gradle failure, and fails a green Gradle run if
+collection/validation fails. Local standalone capture requires that prepared
+writer and checkout provenance; absent preparation is a failure, not a skip.
+
+The existing `android-tv-test-reports` artifact includes
+`app/build/reports/qmix70/`: collector-owned planned/completed names, actual
+PNG decoding/dimensions and hashes, observed locale/density/configuration,
+checkout/event/nullable PR-head identities, run/attempt, source/resource/config/
+test/APK and canonical JUnit provenance. Unavailable failed-build outputs are
+reported as unavailable. These four representative frames contain only fixed
+`.example` fixture settings and are diagnostic evidence, not approved final
+#70 images or an EN/RU matrix. Screen-specific geometry/adoption and the final
+representative gallery remain separate units; this contract does not change
+navigation, callbacks, palette, dependencies or the 95% coverage gate.
+
 ## Backend and guest web app addresses
 
 The first setup screen is intentionally blank. Enter the backend API base URL
