@@ -4,7 +4,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -35,6 +34,8 @@ class HostSessionSingleWorkerRegressionTest {
         val releaseCleanup = CountDownLatch(1)
         val secondRecovery = CountDownLatch(1)
         val attempts = AtomicInteger()
+        val cleanupCompleted = AtomicBoolean(false)
+        val overlappingRecovery = AtomicBoolean(false)
         val factories = AtomicInteger()
         val mutation = QueueMutationContext(Dispatchers.Default.limitedParallelism(1))
         lateinit var controller: HostSessionController
@@ -58,14 +59,16 @@ class HostSessionSingleWorkerRegressionTest {
                     finally { withContext(NonCancellable + Dispatchers.IO) {
                         cleanup.countDown()
                         check(releaseCleanup.await(10, TimeUnit.SECONDS))
+                        cleanupCompleted.set(true)
                     } }
                 } else {
+                    if (!cleanupCompleted.get()) overlappingRecovery.set(true)
                     secondRecovery.countDown()
                     RoomFetchResult.Failure
                 }
             } })
         try {
-            assertTrue(controller.createRoom())
+            controller.createRoom()
             controller.awaitCreatedForTest()
             assertTrue("factory restart did not begin recovery", firstRecovery.await(5, TimeUnit.SECONDS))
             // Enter cancels the invitation's recovery; another foreground restart
@@ -74,13 +77,16 @@ class HostSessionSingleWorkerRegressionTest {
             assertTrue("enter did not cancel recovery", cleanup.await(5, TimeUnit.SECONDS))
             controller.onHostStopped()
             controller.onHostStarted()
-            // Recovery uses Unconfined: any admission on the mutation lane starts inline.
-            // Drain that lane while cleanup is held, then inspect the attempted starts.
-            mutation.run { Unit }
+            val pending = controller.awaitStateForTest("entry waits for invitation recovery cleanup") {
+                it is HostingState.LiveRoom && it.foregroundRecoveryPending
+            } as HostingState.LiveRoom
             assertEquals("a second recovery overlapped cancellation", 1, attempts.get())
-            assertEquals(1L, secondRecovery.count)
+            assertEquals("entry installed a collection before cleanup", 1, factories.get())
+            assertEquals(false, pending.isPrimaryActionEnabled)
             releaseCleanup.countDown()
             assertTrue("recovery did not resume after cleanup", secondRecovery.await(5, TimeUnit.SECONDS))
+            assertTrue(cleanupCompleted.get())
+            assertEquals("replacement recovery raced old cleanup", false, overlappingRecovery.get())
         } finally {
             releaseCleanup.countDown()
             controller.endRoom()
@@ -96,30 +102,42 @@ class HostSessionSingleWorkerRegressionTest {
             listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
         val restarted = CountDownLatch(1)
         val observerRestarted = CountDownLatch(1)
-        val staleCollection = CountDownLatch(1)
-        val liveFactory = CountDownLatch(1)
+        val resumedCollection = CountDownLatch(1)
+        val collectionCleanup = CountDownLatch(1)
+        val releaseCleanup = CountDownLatch(1)
+        val cleanupCompleted = AtomicBoolean(false)
+        val overlap = AtomicBoolean(false)
+        val liveCollection = CountDownLatch(1)
         val mutation = QueueMutationContext(Dispatchers.Default.limitedParallelism(1))
         val factories = AtomicInteger()
         val recoveries = AtomicInteger()
         val restartedOnce = AtomicBoolean()
-        val events = ConcurrentLinkedQueue<String>()
         val controller = HostSessionController(OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", roomCollectionScope = scope,
             queueMutationContext = mutation, foregroundRecoveryContext = Dispatchers.IO,
+            roomCollectionContext = Dispatchers.Unconfined,
             roomRepositoryFactory = {
                 val generation = factories.incrementAndGet()
-                events.add("factory $generation observer=${restartedOnce.get()}")
-                if (generation > 2) staleCollection.countDown()
                 object : RoomRepository {
                     override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
-                        if (generation == 2) liveFactory.countDown()
-                        kotlinx.coroutines.awaitCancellation()
+                        if (generation == 2) liveCollection.countDown()
+                        if (generation == 3) {
+                            // This handler may collect before its observer's queued Stop is processed.
+                            try {
+                                resumedCollection.countDown()
+                                kotlinx.coroutines.awaitCancellation()
+                            } finally { withContext(NonCancellable + Dispatchers.IO) {
+                                collectionCleanup.countDown()
+                                check(releaseCleanup.await(10, TimeUnit.SECONDS))
+                                cleanupCompleted.set(true)
+                            } }
+                        } else kotlinx.coroutines.awaitCancellation()
                     }
                 }
             }, foregroundReconcilerFactory = { { _: String ->
-                events.add("recovery ${recoveries.incrementAndGet()}")
-                if (recoveries.get() == 1) RoomFetchResult.Success(recovered)
+                if (recoveries.incrementAndGet() == 1) RoomFetchResult.Success(recovered)
                 else {
+                    if (!cleanupCompleted.get()) overlap.set(true)
                     restarted.countDown()
                     kotlinx.coroutines.awaitCancellation()
                 }
@@ -135,21 +153,29 @@ class HostSessionSingleWorkerRegressionTest {
             }
         }
         try {
-            assertTrue(controller.createRoom())
+            controller.createRoom()
             controller.awaitCreatedForTest()
             controller.enterRoom()
-            assertTrue("live collection never started", liveFactory.await(5, TimeUnit.SECONDS))
+            assertTrue("live collection never started", liveCollection.await(5, TimeUnit.SECONDS))
             controller.onHostStopped()
             controller.onHostStarted()
-            assertTrue("observer did not restart the host", observerRestarted.await(5, TimeUnit.SECONDS))
-            // The observer runs inside the old recovery's publication. Its signal puts
-            // this mutation-lane drain behind the rest of that completion callback.
-            mutation.run { Unit }
-            assertTrue("observer did not start a new recovery", restarted.await(5, TimeUnit.SECONDS))
-            assertEquals("stale recovery started a collection: $events", 1L, staleCollection.count)
-            assertEquals(2, factories.get())
+            assertTrue("observer did not queue restart", observerRestarted.await(5, TimeUnit.SECONDS))
+            assertTrue("recovery did not finish starting its collection", resumedCollection.await(5, TimeUnit.SECONDS))
+            assertTrue("queued Stop did not cancel that collection", collectionCleanup.await(5, TimeUnit.SECONDS))
+            val stopped = controller.awaitStateForTest("queued Stop closes recovered room") {
+                (it as? HostingState.LiveRoom)?.foregroundRecoveryPending == true
+            } as HostingState.LiveRoom
+            assertEquals("FIFO recovery may install exactly one collection", 3, factories.get())
+            assertEquals("new recovery started before predecessor cleanup", 1, recoveries.get())
+            assertEquals(false, stopped.isPrimaryActionEnabled)
+            releaseCleanup.countDown()
+            assertTrue("queued Start did not recover after full cleanup", restarted.await(5, TimeUnit.SECONDS))
+            assertTrue(cleanupCompleted.get())
+            assertEquals("restarted recovery overlapped old collection", false, overlap.get())
+            assertEquals(3, factories.get())
             assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
         } finally {
+            releaseCleanup.countDown()
             observation.close()
             controller.endRoom()
             scope.cancel()

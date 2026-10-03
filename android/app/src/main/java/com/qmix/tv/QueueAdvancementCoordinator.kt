@@ -7,6 +7,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
@@ -38,6 +39,7 @@ class QueueMutationContext(
     // The marker identifies this context's executing action, not merely a thread in a
     // shared dispatcher pool. Nested synchronous calls must not dispatch onto themselves.
     private val executing = ThreadLocal<Boolean>()
+    val coroutineContext get() = dispatcher + executing.asContextElement(true)
 
     fun isOnContext(): Boolean = executing.get() == true || isCurrent()
     private fun <T> marked(action: () -> T): T {
@@ -103,6 +105,8 @@ class QueueAdvancementCoordinator(
         updateRoom(room)
         if (pending?.needsReconciliation == true && operation?.isActive != true) startOperation(commandRequired = false)
     }
+
+    internal fun foregroundWorkers(): List<Job> = sessionJob.children.toList()
 
     fun onForegroundLost(): Unit = mutationContext.run {
         if (!sessionJob.isActive || !foregroundReady) return@run

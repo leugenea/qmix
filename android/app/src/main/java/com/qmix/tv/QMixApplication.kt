@@ -24,8 +24,10 @@ internal fun currentPlaybackStreamUrl(backendUrl: String, roomCode: String): Str
 class QMixApplication : Application() {
     // Process-owned parent for #178, #180, #181, and #182; session coordinators own child Jobs.
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val finalNetworkScope = CoroutineScope(applicationScope.coroutineContext + Dispatchers.IO)
-    private val queueMutationContext = QueueMutationContext(Dispatchers.Main.immediate) {
+    private val finalNetworkScope = CoroutineScope(
+        applicationScope.coroutineContext + SupervisorJob(applicationScope.coroutineContext[kotlinx.coroutines.Job]) + Dispatchers.IO,
+    )
+    private val queueMutationContext = QueueMutationContext(Dispatchers.Main) {
         Looper.myLooper() === Looper.getMainLooper()
     }
 

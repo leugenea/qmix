@@ -193,7 +193,7 @@ class HostingScreenInstrumentationTest {
                     GuestInvite("WXYZ", "https://guest.example/r/WXYZ"), roomReplacementNotice = true,
                 )
             }
-            override fun onBack() = LiveRoomBackResult.IGNORED
+            override fun onBack(onExit: () -> Unit) = Unit
         }
         composeRule.setContent {
             HostingScreen(state.value, { _, _ -> }, {}, {}, liveRoomHandler = handler)
@@ -261,11 +261,11 @@ class HostingScreenInstrumentationTest {
                 inviteActions++
                 state.value = state.value.copy(invitationVisible = true)
             }
-            override fun onBack(): LiveRoomBackResult = if (state.value.invitationVisible) {
+            override fun onBack(onExit: () -> Unit) = if (state.value.invitationVisible) {
                 state.value = state.value.copy(invitationVisible = false)
-                LiveRoomBackResult.HANDLED
+                Unit
             } else {
-                LiveRoomBackResult.EXIT_ACTIVITY
+                onExit()
             }
         }
         composeRule.setContent {
@@ -523,7 +523,7 @@ class HostingScreenInstrumentationTest {
             override fun onSeekBy(offsetMs: Long) { seeks += offsetMs }
             override fun onRetryCurrent() { retries++ }
             override fun onInvite() = Unit
-            override fun onBack() = LiveRoomBackResult.IGNORED
+            override fun onBack(onExit: () -> Unit) = Unit
         }
         composeRule.setContent {
             HostingScreen(

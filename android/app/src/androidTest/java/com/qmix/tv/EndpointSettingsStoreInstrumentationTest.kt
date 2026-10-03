@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.cancelAndJoin
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -18,6 +19,8 @@ import org.junit.runner.RunWith
 class EndpointSettingsStoreInstrumentationTest {
     private lateinit var context: Context
     private lateinit var preferences: SharedPreferences
+    private val owner = kotlinx.coroutines.SupervisorJob()
+    private val roomScope = kotlinx.coroutines.CoroutineScope(owner + kotlinx.coroutines.Dispatchers.Main.immediate)
 
     @Before
     fun setUp() {
@@ -31,7 +34,15 @@ class EndpointSettingsStoreInstrumentationTest {
 
     @After
     fun tearDown() {
-        assertTrue(preferences.edit().clear().commit())
+        try {
+            try {
+                kotlinx.coroutines.runBlocking { kotlinx.coroutines.withTimeout(5_000) { owner.cancelAndJoin() } }
+            } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+                throw AssertionError("join native endpoint acknowledgement test root: timed out", timeout)
+            }
+        } finally {
+            assertTrue(preferences.edit().clear().commit())
+        }
     }
 
     @Test
@@ -137,12 +148,19 @@ class EndpointSettingsStoreInstrumentationTest {
         val controller = HostSessionController(
             OkHttpClient(),
             settingsPersistence = failingStore,
+            roomCollectionScope = roomScope,
         )
         controller.updateSettings(backend, guestOrigin)
-        assertTrue(controller.createRoom())
+        controller.createRoom()
+        controller.awaitStateForTest(step = "failed acknowledgement: HTTP warning published") {
+            it is HostingState.HttpWarning
+        }
         assertEquals(HostingState.HttpWarning(backend, guestOrigin), controller.state)
 
-        assertFalse(controller.confirmHttpWarning())
+        controller.confirmHttpWarning()
+        controller.awaitStateForTest(step = "failed acknowledgement: rollback error published") {
+            it is HostingState.Error
+        }
 
         assertEquals(
             HostingState.Error(UserMessage.PERSISTENCE_ERROR, backend, guestOrigin),

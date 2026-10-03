@@ -7,8 +7,9 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -31,7 +32,13 @@ class QueueAdvancementInstrumentationTest {
 
     @org.junit.After
     fun cancelQueueScope() {
-        try { queueScope.cancel() } finally { mutationLane.close() }
+        try {
+            try {
+                runBlocking { kotlinx.coroutines.withTimeout(5_000) { queueScope.coroutineContext[Job]!!.cancelAndJoin() } }
+            } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+                throw AssertionError("join native queue test root: timed out", timeout)
+            }
+        } finally { mutationLane.close() }
     }
 
     private lateinit var server: MockWebServer
@@ -49,39 +56,55 @@ class QueueAdvancementInstrumentationTest {
 
     @Test
     fun production_application_constructs_queue_advancement_dependencies_for_a_live_room() {
-        server.enqueue(
-            MockResponse().setResponseCode(201).setBody(
-                """{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""",
-            ),
-        )
-        // Invitation and LiveRoom each start their own observation generation.
-        repeat(2) {
-            server.enqueue(
-                MockResponse().setResponseCode(200).setBody(
-                    """{"code":"ABCD","current":null,"queue":[]}""",
-                ),
-            )
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse = when {
+                request.method == "POST" && request.path == "/rooms" ->
+                    MockResponse().setResponseCode(201).setBody(
+                        """{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""",
+                    )
+                request.method == "DELETE" && request.path == "/rooms/ABCD" ->
+                    MockResponse().setResponseCode(204)
+                request.method == "GET" && request.path == "/rooms/ABCD" ->
+                    MockResponse().setResponseCode(200).setBody(
+                        """{"code":"ABCD","current":null,"queue":[]}""",
+                    )
+                request.method == "GET" && request.path == "/rooms/ABCD/events" ->
+                    MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE)
+                else -> MockResponse().setResponseCode(404)
+            }
         }
         val application = ApplicationProvider.getApplicationContext<QMixApplication>()
         val controller = application.hostSession
+        val endpoints = HostingState.Setup(server.url("/").toString(), "https://guest.example")
+        // A distinct edit proves the queued reset ran even if the singleton began in Setup.
+        val resetGuestOrigin = if (controller.state == endpoints) "https://reset.guest.example" else endpoints.guestOrigin
         controller.endRoom()
-        controller.awaitSetupForTest()
-        controller.updateSettings(server.url("/").toString(), "https://guest.example")
+        controller.updateSettings(endpoints.backendUrl, resetGuestOrigin)
+        controller.awaitStateForTest(step = "application wiring: prior session ended and distinct endpoints edited") {
+            it == HostingState.Setup(endpoints.backendUrl, resetGuestOrigin)
+        }
+        controller.updateSettings(endpoints.backendUrl, endpoints.guestOrigin)
         val invited = CountDownLatch(1)
         val subscription = controller.collectStatesForTest { if (it is HostingState.Invitation) invited.countDown() }
         try {
-            assertTrue(controller.createRoom())
-            if (controller.state is HostingState.HttpWarning) {
-                assertTrue(controller.confirmHttpWarning())
+            controller.createRoom()
+            val admission = controller.awaitStateForTest(step = "application wiring: creation admission") {
+                it is HostingState.HttpWarning || it is HostingState.Invitation || it is HostingState.Error
             }
-            assertTrue(invited.await(5, TimeUnit.SECONDS))
+            if (admission is HostingState.HttpWarning) {
+                controller.confirmHttpWarning()
+            }
+            assertTrue("application wiring: invitation subscription was not notified", invited.await(5, TimeUnit.SECONDS))
 
             controller.enterRoom()
-
+            controller.awaitStateForTest(step = "application wiring: live room published") {
+                it is HostingState.LiveRoom
+            }
             assertTrue(controller.state is HostingState.LiveRoom)
         } finally {
             subscription.close()
             controller.endRoom()
+            controller.awaitSetupForTest(step = "application wiring: room teardown joined")
         }
     }
 
@@ -142,8 +165,15 @@ class QueueAdvancementInstrumentationTest {
         assertTrue(dispatchFailure.requestExplicitAdvance())
         assertTrue(dispatchFailure.state.pending)
         assertTrue("reconciler was not entered", fetchReady.await(5, TimeUnit.SECONDS))
+        val dispatchWorkers = dispatchFailure.foregroundWorkers()
+        assertTrue("dispatch failure: reconciliation must own a reached job", dispatchWorkers.isNotEmpty())
         checkNotNull(fetchCallback)(RoomFetchResult.Missing)
-        mutationLane.context.run { Unit } // Observe the queued settlement after the callback.
+        awaitConditionForTest(step = "dispatch failure: missing-room reconciliation settled") {
+            !dispatchFailure.state.pending && dispatchFailure.state.lastOutcome == QueueAdvanceOutcome.REJECTED
+        }
+        awaitConditionForTest(step = "dispatch failure: reconciliation jobs completed") {
+            dispatchWorkers.all { it.isCompleted }
+        }
         assertFalse(dispatchFailure.state.pending)
         assertEquals(QueueAdvanceOutcome.REJECTED, dispatchFailure.state.lastOutcome)
 
@@ -193,8 +223,8 @@ class QueueAdvancementInstrumentationTest {
                 )
             },
         )
-        assertTrue(controller.createRoom())
-        controller.awaitCreatedForTest()
+        controller.createRoom()
+        controller.awaitCreatedForTest(step = "host queue session: invitation published")
         repository.awaitInvitationObservationForTest()
         controller.enterRoom()
         repository.awaitLiveObservationForTest()
@@ -211,18 +241,27 @@ class QueueAdvancementInstrumentationTest {
             ),
         )
 
-        controller.awaitStateForTest {
+        controller.awaitStateForTest(step = "queue routing: authoritative current and queue published") {
             ((it as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active)
                 ?.room?.current?.trackId == "current"
         }
         controller.onStartOrNext()
-        assertFalse(controller.onPlaybackEnded("current"))
+        controller.onPlaybackEnded("current")
+        controller.onInvite()
+        controller.awaitStateForTest(step = "queue routing: invitation opened after explicit and ended inputs") {
+            (it as? HostingState.LiveRoom)?.invitationVisible == true
+        }
+        awaitConditionForTest(step = "queue routing: one command reached the transport") { commands.size == 1 }
         assertEquals(1, commands.size)
         controller.endRoom()
+        controller.awaitSetupForTest(step = "queue routing: command and session teardown joined")
         commands.single()(QueueAdvanceCommandResult.Indeterminate)
         controller.onStartOrNext()
+        controller.updateSettings("https://replacement.example", "https://guest.example")
+        controller.awaitStateForTest(step = "queue routing: setup edit follows late callback and out-of-room input") {
+            it == HostingState.Setup("https://replacement.example", "https://guest.example")
+        }
         assertEquals(1, commands.size)
-        controller.awaitSetupForTest()
     }
 
     @Test
@@ -279,16 +318,17 @@ class QueueAdvancementInstrumentationTest {
             },
         )
 
-        assertTrue(controller.createRoom())
-        controller.awaitCreatedForTest()
+        controller.createRoom()
+        controller.awaitCreatedForTest(step = "host queue session: invitation published")
         repository.awaitInvitationObservationForTest()
         controller.enterRoom()
         repository.awaitLiveObservationForTest()
         repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+        controller.awaitStateForTest(step = "playback controls: selected track buffering") { (it as? HostingState.LiveRoom)?.playback?.status ==
             LocalPlaybackStatus.BUFFERING }
-        awaitConditionForTest { playback.prepared.map(PlaybackMedia::trackId) == listOf("current") }
-        mutationLane.context.awaitLaneIdleForTest() // prepare() has returned; the listener and play() have settled.
+        awaitConditionForTest(step = "playback controls: first prepare and play completed") {
+            playback.prepared.map(PlaybackMedia::trackId) == listOf("current") && playback.playCount == 1
+        }
         assertEquals(listOf("current"), playback.prepared.map(PlaybackMedia::trackId))
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
 
@@ -302,11 +342,14 @@ class QueueAdvancementInstrumentationTest {
                 isSeekable = true,
             ),
         )
-        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+        controller.awaitStateForTest(step = "playback controls: playing timeline published") { (it as? HostingState.LiveRoom)?.playback?.status ==
             LocalPlaybackStatus.PLAYING }
         assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
         controller.onSeekBy(Long.MIN_VALUE)
         controller.onSeekBy(Long.MAX_VALUE)
+        awaitConditionForTest(step = "playback controls: seek calls clamped to both bounds") {
+            playback.seeks == listOf(0L, 60_000L)
+        }
         assertEquals(listOf(0L, 60_000L), playback.seeks)
         playback.emit(
             PlaybackState(
@@ -318,7 +361,21 @@ class QueueAdvancementInstrumentationTest {
                 isSeekable = true,
             ),
         )
+        controller.awaitStateForTest(step = "playback controls: unknown duration published") {
+            (it as? HostingState.LiveRoom)?.playback?.let {
+                it.status == LocalPlaybackStatus.PLAYING && it.durationMs == null && it.isSeekable
+            } == true
+        }
         controller.onSeekBy(10_000)
+        controller.onInvite()
+        controller.awaitStateForTest(step = "playback controls: invitation opened after unknown-duration seek") {
+            (it as? HostingState.LiveRoom)?.invitationVisible == true
+        }
+        assertEquals(listOf(0L, 60_000L), playback.seeks)
+        controller.onBack { }
+        controller.awaitStateForTest(step = "playback controls: invitation dismissed without ending room") {
+            (it as? HostingState.LiveRoom)?.invitationVisible == false
+        }
         playback.emit(
             PlaybackState(
                 "current",
@@ -329,13 +386,19 @@ class QueueAdvancementInstrumentationTest {
                 isSeekable = false,
             ),
         )
+        controller.awaitStateForTest(step = "playback controls: unseekable known timeline published") {
+            (it as? HostingState.LiveRoom)?.playback?.let {
+                it.status == LocalPlaybackStatus.PLAYING && it.durationMs == 60_000L && !it.isSeekable
+            } == true
+        }
         controller.onSeekBy(10_000)
-        assertEquals(listOf(0L, 60_000L), playback.seeks)
         controller.onPlayPause()
-        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+        controller.awaitStateForTest(step = "playback controls: toggle paused after unseekable seek") { (it as? HostingState.LiveRoom)?.playback?.status ==
             LocalPlaybackStatus.PAUSED }
+        assertEquals(listOf(0L, 60_000L), playback.seeks)
         assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
         controller.onPlayPause()
+        awaitConditionForTest(step = "playback controls: explicit toggle resumed engine") { playback.playCount == 2 }
         assertEquals(2, playback.playCount)
         playback.emit(
             PlaybackState(
@@ -344,22 +407,26 @@ class QueueAdvancementInstrumentationTest {
                 error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
             ),
         )
-        controller.awaitStateForTest { (it as? HostingState.LiveRoom)?.playback?.status ==
+        controller.awaitStateForTest(step = "playback controls: recoverable player error published") { (it as? HostingState.LiveRoom)?.playback?.status ==
             LocalPlaybackStatus.ERROR }
         controller.onRetryCurrent()
-        awaitConditionForTest { retryRequests.size == 1 }
+        awaitConditionForTest(step = "playback controls: retry reached authoritative fetch") { retryRequests.size == 1 }
         assertEquals(listOf("ABCD"), retryRequests)
         checkNotNull(retry)(RoomFetchResult.Success(selected))
-        awaitConditionForTest { playback.prepared.size == 2 }
-        mutationLane.context.awaitLaneIdleForTest() // The retry's prepare/play pair has settled before ENDED.
+        awaitConditionForTest(step = "playback controls: retry prepare and play completed") {
+            playback.prepared.size == 2 && playback.playCount == 3
+        }
+        controller.awaitStateForTest(step = "playback controls: retry buffering published") {
+            (it as? HostingState.LiveRoom)?.playback?.status == LocalPlaybackStatus.BUFFERING
+        }
         assertEquals(listOf("current", "current"), playback.prepared.map(PlaybackMedia::trackId))
 
         playback.emit(PlaybackState("current", PlaybackStatus.ENDED))
-        awaitConditionForTest { commands.size == 1 }
+        awaitConditionForTest(step = "playback controls: ended reached one advance command") { commands.size == 1 }
         assertEquals(1, commands.size)
         controller.endRoom()
+        controller.awaitSetupForTest(step = "playback controls: all session workers joined")
         assertEquals(2, playback.pauseCount)
-        controller.awaitSetupForTest()
     }
 
     /** qmix#178: the same application factory used by the host owns HTTP command and GET Jobs. */
@@ -372,11 +439,13 @@ class QueueAdvancementInstrumentationTest {
             """{"code":"ABCD","current":{"track_id":"two","pos_sec":0,"state":"playing","title":"Two","artist":""},"queue":[]}""",
         ))
         val settled = CountDownLatch(1)
+        val observerLoopers = CopyOnWriteArrayList<android.os.Looper?>()
+        var commandWorkers = emptyList<Job>()
         val application = ApplicationProvider.getApplicationContext<QMixApplication>()
         val coordinator = application.createQueueCoordinator(
             OkHttpClient(), server.url("/").toString(), RoomCredentials("ABCD", "fixture", "/r/ABCD"),
             observer = { state ->
-                assertEquals(android.os.Looper.getMainLooper(), android.os.Looper.myLooper())
+                observerLoopers += android.os.Looper.myLooper()
                 if (state.lastOutcome == QueueAdvanceOutcome.ADVANCED) settled.countDown()
             },
         )
@@ -387,10 +456,20 @@ class QueueAdvancementInstrumentationTest {
                 assertTrue(coordinator.requestExplicitAdvance())
                 assertFalse(coordinator.requestExplicitAdvance())
                 assertFalse(coordinator.onPlaybackEnded("two"))
+                commandWorkers = coordinator.foregroundWorkers()
             }
-            assertTrue(settled.await(5, TimeUnit.SECONDS))
-            assertEquals("/rooms/ABCD/skip", server.takeRequest().path)
-            assertEquals("/rooms/ABCD", server.takeRequest().path)
+            assertTrue("production queue wiring: admitted command must own a job", commandWorkers.isNotEmpty())
+            assertTrue("production queue wiring: advanced notification not delivered", settled.await(5, TimeUnit.SECONDS))
+            awaitConditionForTest(step = "production queue wiring: command and reconciliation jobs completed") {
+                commandWorkers.all { it.isCompleted }
+            }
+            observerLoopers.forEach { assertEquals(android.os.Looper.getMainLooper(), it) }
+            assertEquals("/rooms/ABCD/skip", checkNotNull(server.takeRequest(5, TimeUnit.SECONDS)) {
+                "production queue wiring: skip request not recorded"
+            }.path)
+            assertEquals("/rooms/ABCD", checkNotNull(server.takeRequest(5, TimeUnit.SECONDS)) {
+                "production queue wiring: reconciliation request not recorded"
+            }.path)
             assertEquals(2, server.requestCount)
         } finally { coordinator.close() }
     }
@@ -420,13 +499,13 @@ class QueueAdvancementInstrumentationTest {
     }
 
     private class RecordingPlaybackEngine : PlaybackEngine {
-        override var state = PlaybackState()
+        @Volatile override var state = PlaybackState()
             private set
         val prepared = CopyOnWriteArrayList<PlaybackMedia>()
         val seeks = CopyOnWriteArrayList<Long>()
         @Volatile var playCount = 0
         @Volatile var pauseCount = 0
-        private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
+        private val listeners = CopyOnWriteArrayList<(PlaybackState) -> Unit>()
 
         override fun prepare(media: PlaybackMedia) {
             prepared += media

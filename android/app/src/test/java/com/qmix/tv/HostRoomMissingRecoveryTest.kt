@@ -46,7 +46,6 @@ class HostRoomMissingRecoveryTest {
         host.repository.publish("ABCD", RoomSyncState.Missing("ABCD"))
         assertTrue("old collection did not begin cancellation", host.repository.oldCleanupStarted.await(5, TimeUnit.SECONDS))
         // The new POST must wait for the old collection's full cleanup, not just cancel().
-        host.mutation.mutationContext.awaitLaneIdleForTest()
         assertEquals("replacement started before worker join", 1, host.server.requestCount)
         host.repository.releaseOldCleanup.complete(Unit)
 
@@ -63,9 +62,10 @@ class HostRoomMissingRecoveryTest {
         assertEquals("/rooms", initialRequest?.path)
         assertEquals("POST", replacementRequest?.method)
         assertEquals("/rooms", replacementRequest?.path)
-        assertFalse(host.controller.createRoom())
+        host.controller.createRoom()
         assertEquals(2, host.server.requestCount)
         host.controller.enterRoom()
+        host.controller.awaitRoomStateForTest { it.invite.code == "WXYZ" }
         assertEquals("WXYZ", (host.controller.state as HostingState.LiveRoom).invite.code)
     }
 
@@ -89,7 +89,6 @@ class HostRoomMissingRecoveryTest {
         assertTrue(host.repository.oldCleanupStarted.await(5, TimeUnit.SECONDS))
         host.repository.releaseOldCleanup.complete(Unit)
         assertTrue(host.repository.oldCleanupDoneSignal.await(5, TimeUnit.SECONDS))
-        host.mutation.mutationContext.awaitLaneIdleForTest()
         assertEquals("a used room was silently replaced", 1, host.server.requestCount)
 
         host.controller.onNewRoom()
@@ -110,9 +109,8 @@ class HostRoomMissingRecoveryTest {
         assertNotNull("replacement failure must be visible and recoverable", failed.replacementError)
         assertEquals(RoomSyncState.Missing("ABCD"), failed.synchronization)
         assertTrue(host.repository.oldCleanupDone.get())
-        host.mutation.mutationContext.awaitLaneIdleForTest()
         assertEquals("automatic create retried after a definitive failure", 2, host.server.requestCount)
-        assertFalse(host.controller.createRoom())
+        host.controller.createRoom()
         assertEquals(2, host.server.requestCount)
 
         host.server.enqueue(created("WXYZ", "manual-token"))
@@ -138,7 +136,6 @@ class HostRoomMissingRecoveryTest {
         val missing = host.controller.awaitRoomStateForTest { it.invite.code == "WXYZ" &&
             it.synchronization == RoomSyncState.Missing("WXYZ") }
         assertFalse(missing.isPrimaryActionEnabled)
-        host.mutation.mutationContext.awaitLaneIdleForTest()
         assertEquals("unvalidated automatic replacement looped", 2, host.server.requestCount)
         host.controller.onHostStopped()
         host.controller.onHostStarted()
@@ -208,21 +205,43 @@ class HostRoomMissingRecoveryTest {
         assertEquals(3, host.server.requestCount)
     }
 
-    @Test fun home_during_old_worker_join_defers_replacement_post_until_return() = withHost { host ->
-        host.server.enqueue(created("WXYZ", "replacement-token"))
+    @Test fun home_queued_during_missing_join_does_not_preempt_replacement_and_requires_fresh_return() = withHost { host ->
+        val postStarted = CountDownLatch(1)
+        val releasePost = CountDownLatch(1)
         host.startLiveRoom()
-        host.repository.publish("ABCD", RoomSyncState.Missing("ABCD"))
-        assertTrue(host.repository.oldCleanupStarted.await(5, TimeUnit.SECONDS))
-        host.controller.onHostStopped()
-        host.repository.releaseOldCleanup.complete(Unit)
-        assertTrue(host.repository.oldCleanupDoneSignal.await(5, TimeUnit.SECONDS))
-        host.mutation.mutationContext.awaitLaneIdleForTest()
-        assertEquals("backgrounded old-worker finalizer posted a replacement", 1, host.server.requestCount)
-        host.controller.onHostStarted()
-        host.awaitState("deferred foreground replacement") {
-            it is HostingState.Invitation && it.invite.code == "WXYZ"
+        host.server.takeRequest(5, TimeUnit.SECONDS)
+        host.server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                postStarted.countDown()
+                check(releasePost.await(5, TimeUnit.SECONDS)) { "replacement POST release gate" }
+                return created("WXYZ", "replacement-token")
+            }
         }
-        assertEquals(2, host.server.requestCount)
+        try {
+            host.repository.publish("ABCD", RoomSyncState.Missing("ABCD"))
+            assertTrue("Missing cleanup started", host.repository.oldCleanupStarted.await(5, TimeUnit.SECONDS))
+            host.controller.onHostStopped()
+            host.repository.releaseOldCleanup.complete(Unit)
+            assertTrue("Missing completes replacement admission before queued Stop", postStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(host.repository.oldCleanupDone.get())
+            assertEquals(2, host.server.requestCount)
+            releasePost.countDown()
+            val invitation = host.awaitState("replacement retains processed Stop recovery requirement") {
+                (it as? HostingState.Invitation)?.let { value ->
+                    value.invite.code == "WXYZ" && value.foregroundRecoveryPending
+                } == true
+            } as HostingState.Invitation
+            assertTrue(invitation.roomReplacementNotice)
+            assertEquals("no background replacement subscription", 0, host.repository.observationCount("WXYZ"))
+            host.server.dispatcher = okhttp3.mockwebserver.QueueDispatcher()
+            host.server.enqueue(MockResponse().setBody("""{"code":"WXYZ","current":null,"queue":[]}"""))
+            host.controller.onHostStarted()
+            host.awaitState("return performs fresh replacement GET") {
+                (it as? HostingState.Invitation)?.foregroundRecoveryPending == false
+            }
+            host.repository.awaitSubscriber("WXYZ")
+            assertEquals(3, host.server.requestCount)
+        } finally { releasePost.countDown() }
     }
 
     @Test fun home_during_pending_replacement_post_checks_new_room_only_on_return() = withHost { host ->
@@ -288,7 +307,6 @@ class HostRoomMissingRecoveryTest {
             it.invite.code == "WXYZ" &&
                 (it.synchronization as? RoomSyncState.Active)?.freshness == Freshness.FRESH
         }
-        host.mutation.mutationContext.awaitLaneIdleForTest()
         assertEquals("WXYZ", (host.controller.state as HostingState.LiveRoom).invite.code)
         assertEquals(2, host.server.requestCount)
     }
@@ -356,7 +374,6 @@ class HostRoomMissingRecoveryTest {
         host.controller.awaitRoomStateForTest { it.synchronization == RoomSyncState.Missing("ABCD") }
         host.repository.releaseOldCleanup.complete(Unit)
         assertTrue(host.repository.oldCleanupDoneSignal.await(5, TimeUnit.SECONDS))
-        host.mutation.mutationContext.awaitLaneIdleForTest()
         assertEquals("current-only history was forgotten", 1, host.server.requestCount)
     }
 
@@ -387,7 +404,6 @@ class HostRoomMissingRecoveryTest {
         val failed = host.controller.awaitRoomStateForTest { it.replacementError != null }
         assertEquals(RoomSyncState.Missing("ABCD"), failed.synchronization)
         assertEquals(2, host.server.requestCount)
-        host.mutation.mutationContext.awaitLaneIdleForTest()
         assertEquals(2, host.server.requestCount)
     }
 
@@ -406,7 +422,6 @@ class HostRoomMissingRecoveryTest {
         host.repository.publish("WXYZ", RoomSyncState.Missing("ABCD"))
         host.repository.awaitDelivered("WXYZ", generation = 1, count = 1)
         assertTrue(host.controller.state is HostingState.Invitation)
-        host.mutation.mutationContext.awaitLaneIdleForTest()
         assertEquals(2, host.server.requestCount)
     }
 
@@ -419,7 +434,6 @@ class HostRoomMissingRecoveryTest {
         host.repository.awaitSubscriber("ABCD", generation = 2)
         host.repository.publish("ABCD", RoomSyncState.Missing("ABCD"))
         host.controller.awaitRoomStateForTest { it.synchronization is RoomSyncState.Missing }
-        host.mutation.mutationContext.awaitLaneIdleForTest()
         assertEquals(1, host.server.requestCount)
     }
 
@@ -510,7 +524,7 @@ class HostRoomMissingRecoveryTest {
         val controller: HostSessionController,
     ) {
         fun startInvitation() {
-            assertTrue(controller.createRoom())
+            controller.createRoom()
             controller.awaitCreatedForTest()
             assertEquals("ABCD", (controller.state as HostingState.Invitation).invite.code)
             repository.awaitSubscriber("ABCD")

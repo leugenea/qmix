@@ -50,7 +50,7 @@ class AndroidLoggingTest {
         ShadowLog.clear()
         val application = ApplicationProvider.getApplicationContext<QMixApplication>()
 
-        application.hostSession.collectStatesForTest { throw IllegalStateException("token=do-not-log") }
+        application.hostSession.collectStatesForTest(isolateFailures = true) { throw IllegalStateException("token=do-not-log") }.close()
 
         assertEquals(false, ShadowLog.getLogsForTag(QMIX_LOG_TAG).toString().contains("do-not-log"))
     }

@@ -76,8 +76,8 @@ class EndpointSettingsTest {
         assertEquals(previous, EndpointSettingsStore(context).load())
         assertEquals(
             HostingState.Setup(previous.backendUrl, previous.guestOrigin),
-            HostSessionController(
-                okhttp3.OkHttpClient(),
+            HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined),
+                httpClient = okhttp3.OkHttpClient(),
                 settingsPersistence = EndpointSettingsStore(context),
             ).state,
         )
@@ -195,12 +195,13 @@ class EndpointSettingsTest {
         assertFalse(failingStore.isHttpWarningAcknowledged())
         assertFalse(EndpointSettingsStore(context).isHttpWarningAcknowledged())
 
-        val controller = HostSessionController(
-            okhttp3.OkHttpClient(),
+        val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined),
+            httpClient = okhttp3.OkHttpClient(),
             settingsPersistence = EndpointSettingsStore(context),
         )
         controller.updateSettings("http://192.168.1.20:8180", "https://guest.example")
-        assertTrue(controller.createRoom())
+        controller.createRoom()
+        controller.awaitStateForTest("failed acknowledgement reprompts HTTP warning") { it is HostingState.HttpWarning }
         assertTrue(controller.state is HostingState.HttpWarning)
     }
 

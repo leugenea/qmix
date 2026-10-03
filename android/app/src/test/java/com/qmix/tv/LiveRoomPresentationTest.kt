@@ -29,6 +29,11 @@ import org.robolectric.annotation.Config
 class LiveRoomPresentationTest {
     private val roomScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private lateinit var server: MockWebServer
+    private val observations = mutableListOf<AutoCloseable>()
+
+    private fun HostSessionController.observeForTest(
+        isolateFailures: Boolean = false, observer: (HostingState) -> Unit,
+    ): AutoCloseable = collectStatesForTest(isolateFailures, observer).also(observations::add)
 
     @Before
     fun setUp() {
@@ -38,8 +43,14 @@ class LiveRoomPresentationTest {
 
     @After
     fun tearDown() {
-        roomScope.cancel()
-        server.shutdown()
+        var failure: Throwable? = null
+        for (observation in observations) {
+            try { observation.close() } catch (error: Throwable) {
+                if (failure == null) failure = error else failure.addSuppressed(error)
+            }
+        }
+        try { roomScope.cancel() } finally { server.shutdown() }
+        failure?.let { throw it }
     }
 
     @Test
@@ -126,7 +137,7 @@ class LiveRoomPresentationTest {
         val loadingDelivered = java.util.concurrent.CountDownLatch(1)
         val freshDelivered = java.util.concurrent.CountDownLatch(1)
         val staleDelivered = java.util.concurrent.CountDownLatch(1)
-        controller.collectStatesForTest { state ->
+        controller.observeForTest { state ->
             observed += state
             val sync = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
             if (sync?.freshness == Freshness.LOADING) loadingDelivered.countDown()
@@ -160,7 +171,7 @@ class LiveRoomPresentationTest {
         val observed = mutableListOf<HostingState>()
         val reconnectDelivered = java.util.concurrent.CountDownLatch(1)
         val missingDelivered = java.util.concurrent.CountDownLatch(1)
-        controller.collectStatesForTest { state ->
+        controller.observeForTest { state ->
             observed += state
             val sync = (state as? HostingState.LiveRoom)?.synchronization
             if ((sync as? RoomSyncState.Active)?.connection == LiveConnection.RECONNECTING) reconnectDelivered.countDown()
@@ -193,9 +204,9 @@ class LiveRoomPresentationTest {
         createAndEnter(controller)
         repository.awaitLiveObservationForTest()
         val observed = mutableListOf<HostingState>()
-        controller.collectStatesForTest(observed::add)
+        controller.observeForTest(observer = observed::add)
 
-        assertEquals(LiveRoomBackResult.EXIT_ACTIVITY, controller.onBack())
+        controller.onBack()
         assertTrue(controller.awaitSetupForTest())
         val countAfterBack = observed.size
         repository.publish(active(RoomState("ABCD", null, emptyList())))
@@ -214,18 +225,23 @@ class LiveRoomPresentationTest {
         repository.awaitLiveObservationForTest()
         val queued = QueuedTrack("track-1", "https://example/1", "Title", "Artist", 0, "fixture")
         repository.publish(active(RoomState("ABCD", null, listOf(queued))))
+        controller.awaitRoomStateForTest { it.isPrimaryActionEnabled }
 
         controller.onStartOrNext()
         controller.setCommandPending(true)
         controller.onStartOrNext()
         controller.onInvite()
+        controller.awaitRoomStateForTest { it.invitationVisible && it.commandPending }
 
         assertEquals(1, commands)
         assertTrue((controller.state as HostingState.LiveRoom).invitationVisible)
-        assertEquals(LiveRoomBackResult.HANDLED, controller.onBack())
+        controller.onBack()
+        controller.awaitRoomStateForTest { !it.invitationVisible }
         assertFalse((controller.state as HostingState.LiveRoom).invitationVisible)
         assertFalse(repository.closed)
-        assertEquals(LiveRoomBackResult.EXIT_ACTIVITY, controller.onBack())
+        val exited = java.util.concurrent.CountDownLatch(1)
+        controller.onBack { exited.countDown() }
+        assertTrue("Back exit outcome", exited.await(5, java.util.concurrent.TimeUnit.SECONDS))
         assertTrue(repository.closed)
         assertTrue(controller.awaitSetupForTest())
     }
@@ -235,24 +251,34 @@ class LiveRoomPresentationTest {
         val repository = RecordingRoomRepository()
         var commands = 0
         val controller = createController(repository, onStartOrNext = { commands++ })
-        val observed = mutableListOf<HostingState>()
-        controller.collectStatesForTest(observed::add)
+        val observed = java.util.concurrent.CopyOnWriteArrayList<HostingState>()
+        val liveDelivered = java.util.concurrent.CountDownLatch(1)
+        val inviteDelivered = java.util.concurrent.CountDownLatch(1)
+        controller.observeForTest { state ->
+            observed += state
+            if (state is HostingState.LiveRoom) {
+                if (state.invitationVisible) inviteDelivered.countDown() else liveDelivered.countDown()
+            }
+        }
 
         controller.setCommandPending(true)
         controller.onStartOrNext()
         controller.onInvite()
-        assertEquals(LiveRoomBackResult.IGNORED, controller.onBack())
+        controller.onBack()
 
         assertEquals(0, commands)
         assertEquals(1, observed.size)
 
         createAndEnter(controller)
+        assertTrue("initial LiveRoom delivered to the counted observer", liveDelivered.await(5, java.util.concurrent.TimeUnit.SECONDS))
         val countBeforeDuplicateInputs = observed.size
         controller.setCommandPending(false)
         controller.onInvite()
         controller.onInvite()
         controller.setCommandPending(false)
 
+        controller.awaitRoomStateForTest { it.invitationVisible }
+        assertTrue("Invite delivered to the counted observer", inviteDelivered.await(5, java.util.concurrent.TimeUnit.SECONDS))
         assertEquals(countBeforeDuplicateInputs + 1, observed.size)
     }
 
@@ -280,8 +306,8 @@ class LiveRoomPresentationTest {
     fun returned_subscription_is_closed_when_a_synchronous_callback_ends_the_session() {
         val repository = SynchronousRoomRepository()
         lateinit var controller: HostSessionController
-        controller = HostSessionController(
-            OkHttpClient(),
+        controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined),
+            httpClient = OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
 
@@ -289,15 +315,15 @@ class LiveRoomPresentationTest {
             roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
         )
-        controller.collectStatesForTest { state ->
+        controller.observeForTest { state ->
             val active = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
             if (active?.freshness == Freshness.FRESH) controller.onBack()
         }
 
         createAndEnter(controller)
 
-        assertTrue(repository.closed)
         assertTrue(controller.awaitSetupForTest())
+        assertTrue(repository.closed)
     }
 
     @Test
@@ -318,8 +344,8 @@ class LiveRoomPresentationTest {
         val secondInvitation = RecordingRoomRepository()
         val second = RecordingRoomRepository()
         val repositories = ArrayDeque(listOf(firstInvitation, first, secondInvitation, second))
-        val controller = HostSessionController(
-            OkHttpClient(),
+        val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined),
+            httpClient = OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
 
@@ -352,36 +378,38 @@ class LiveRoomPresentationTest {
         val delivered = mutableListOf<Boolean>()
         val delivery = java.util.concurrent.CountDownLatch(1)
         var madePending = false
-        controller.collectStatesForTest { state ->
+        controller.observeForTest { state ->
             val active = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
             if (active?.freshness == Freshness.FRESH && !madePending) {
                 madePending = true
                 controller.setCommandPending(true)
             }
         }
-        controller.collectStatesForTest { state ->
+        controller.observeForTest { state ->
             val active = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
             if (active?.freshness == Freshness.FRESH) {
                 delivered += state.commandPending
-                delivery.countDown()
+                if (state.commandPending) delivery.countDown()
             }
         }
 
         createAndEnter(controller)
         repository.awaitLiveObservationForTest()
-        controller.collectStatesForTest { state -> if (state is HostingState.LiveRoom) error("observer failure") }
+        controller.observeForTest(isolateFailures = true) { state -> if (state is HostingState.LiveRoom) error("observer failure") }
         repository.publish(active(RoomState("ABCD", null, emptyList())))
 
         assertTrue(delivery.await(5, java.util.concurrent.TimeUnit.SECONDS))
-        assertEquals(listOf(true), delivered)
+        assertEquals("the fresh publication precedes the observer-offered command", listOf(false, true), delivered)
         assertTrue((controller.state as HostingState.LiveRoom).commandPending)
     }
+
+    private val repositories = mutableMapOf<HostSessionController, RecordingRoomRepository>()
 
     private fun createController(
         repository: RecordingRoomRepository,
         onStartOrNext: () -> Unit = {},
-    ): HostSessionController = HostSessionController(
-        OkHttpClient(),
+    ): HostSessionController = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined),
+        httpClient = OkHttpClient(),
         initialBackendUrl = server.url("/").toString(),
         initialGuestOrigin = "https://guest.example",
 
@@ -390,16 +418,19 @@ class LiveRoomPresentationTest {
         roomCollectionContext = Dispatchers.Unconfined,
         primaryActionHandler = onStartOrNext,
 
-    )
+    ).also { repositories[it] = repository }
 
     private fun createAndEnter(controller: HostSessionController, enqueueCreation: Boolean = true) {
         if (enqueueCreation) server.enqueue(
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
         )
-        assertTrue(controller.createRoom())
+        controller.createRoom()
         controller.awaitCreatedForTest()
+        // The invitation collector must actually start before Enter cancels it.
+        repositories[controller]?.awaitObservationForTest()
         controller.enterRoom()
+        controller.awaitRoomStateForTest { true }
     }
 
     private fun active(

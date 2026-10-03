@@ -30,7 +30,7 @@ import org.robolectric.annotation.Config
 class HostSessionStateFlowMigrationTest {
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun settings_and_warning_are_visible_to_independent_collectors() = runTest {
-        val controller = HostSessionController(OkHttpClient(), settingsPersistence = object : EndpointSettingsPersistence {
+        val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler)), roomCollectionScope = backgroundScope, httpClient = OkHttpClient(), settingsPersistence = object : EndpointSettingsPersistence {
             override fun load() = EndpointSettings.EMPTY
             override fun save(settings: EndpointSettings) = Unit
             override fun isHttpWarningAcknowledged() = false
@@ -41,6 +41,7 @@ class HostSessionStateFlowMigrationTest {
         backgroundScope.launch(Dispatchers.Unconfined) { controller.states.take(3).toList(first) }
         backgroundScope.launch(Dispatchers.Unconfined) { controller.states.take(3).toList(second) }
         controller.updateSettings("http://192.168.1.20:8180", "https://guest.example")
+        runCurrent()
         controller.createRoom()
         runCurrent()
         val expected = listOf(
@@ -52,6 +53,7 @@ class HostSessionStateFlowMigrationTest {
         assertEquals(expected, second)
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun cancelled_warning_never_creates_a_request_or_allows_duplicate_admission() = runTest {
         val persistence = object : EndpointSettingsPersistence {
             override fun load() = EndpointSettings.EMPTY
@@ -59,20 +61,23 @@ class HostSessionStateFlowMigrationTest {
             override fun isHttpWarningAcknowledged() = false
             override fun acknowledgeHttpWarning() = Unit
         }
-        val controller = HostSessionController(OkHttpClient(), settingsPersistence = persistence)
+        val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler)), roomCollectionScope = backgroundScope, httpClient = OkHttpClient(), settingsPersistence = persistence)
         val seen = mutableListOf<HostingState>()
         backgroundScope.launch(Dispatchers.Unconfined) { controller.states.collect { seen += it } }
         controller.updateSettings("http://192.168.1.20:8180", "https://guest.example")
-        assertTrue(controller.createRoom())
-        assertFalse(controller.createRoom())
+        runCurrent()
+        controller.createRoom()
+        controller.createRoom()
         controller.cancelHttpWarning()
+        runCurrent()
         assertTrue(controller.state is HostingState.Setup)
         assertEquals(1, seen.count { it is HostingState.HttpWarning })
         assertFalse(seen.any { it is HostingState.Pending || it is HostingState.Invitation })
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun failing_collector_does_not_stop_state_production_or_another_collector() = runTest {
-        val controller = HostSessionController(OkHttpClient())
+        val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler)), roomCollectionScope = backgroundScope, httpClient = OkHttpClient())
         var failures = 0
         backgroundScope.launch(Dispatchers.Unconfined) {
             try { controller.states.collect { throw IllegalStateException("collector failed") } }
@@ -81,10 +86,12 @@ class HostSessionStateFlowMigrationTest {
         val seen = mutableListOf<HostingState>()
         backgroundScope.launch(Dispatchers.Unconfined) { controller.states.take(2).toList(seen) }
         controller.updateSettings("https://api.example", "https://guest.example")
+        runCurrent()
         assertEquals(1, failures)
         assertEquals(listOf(HostingState.Setup("", ""), controller.state), seen)
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun ending_then_creating_a_new_session_preserves_only_the_new_invitation() = runTest {
         val server = MockWebServer()
         server.start()
@@ -104,21 +111,24 @@ class HostSessionStateFlowMigrationTest {
                     else -> MockResponse().setResponseCode(404)
                 }
             }
-            val controller = HostSessionController(
-                OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+            val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler)),
+                httpClient = OkHttpClient(), initialBackendUrl = server.url("/").toString(),
                 initialGuestOrigin = "https://guest.example", roomCollectionScope = backgroundScope,
             )
-            assertTrue(controller.createRoom())
-            assertFalse(controller.createRoom())
+            controller.createRoom()
+            controller.createRoom()
+            runCurrent()
             withContext(Dispatchers.IO) {
                 withTimeout(5_000) { controller.states.first { it is HostingState.Invitation } }
             }
             controller.endRoom()
+            runCurrent()
             assertTrue(controller.state is HostingState.Ending || controller.state is HostingState.Setup)
             withContext(Dispatchers.IO) {
                 withTimeout(5_000) { controller.states.first { it is HostingState.Setup } }
             }
-            assertTrue(controller.createRoom())
+            controller.createRoom()
+            runCurrent()
             val second = withContext(Dispatchers.IO) {
                 withTimeout(5_000) {
                     controller.states.first { it is HostingState.Invitation && it.invite.code == "WXYZ" }

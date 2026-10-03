@@ -136,7 +136,7 @@ class Media3PlaybackInstrumentationTest {
                     mutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
                         Looper.myLooper() === Looper.getMainLooper()
                     },
-                    advanceAfterEnded = advancement::onPlaybackEnded,
+                    advanceAfterEnded = { advancement.onPlaybackEnded(it); Unit },
                 ),
             )
         }

@@ -37,6 +37,7 @@ import org.robolectric.annotation.Config
 class HostRoomClosureTest {
     private lateinit var server: MockWebServer
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val networkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val deletes = LinkedBlockingQueue<Pair<String, String>>()
     private val deleteCount = AtomicInteger()
     private val repository = GenerationalRoomRepository()
@@ -48,6 +49,7 @@ class HostRoomClosureTest {
 
     @After fun tearDown() {
         scope.cancel()
+        networkScope.cancel()
         server.shutdown()
     }
 
@@ -57,13 +59,13 @@ class HostRoomClosureTest {
             deletes.put(code to token)
         },
         playback: PlaybackCoordinatorFactory? = null,
-        closeScope: CoroutineScope = scope,
+        closeScope: CoroutineScope = networkScope,
         logger: QMixComponentLogger = QMixComponentLogger.noOp(QMixLogComponent.ROOM_API_CREATION),
     ): HostSessionController {
         server.enqueue(MockResponse().setResponseCode(201)
             .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""))
-        return HostSessionController(
-            OkHttpClient(), initialBackendUrl = server.url("/").toString(),
+        return HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Default.limitedParallelism(1)),
+            httpClient = OkHttpClient(), initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example", roomRepositoryFactory = { repository },
             roomCollectionScope = scope, roomCollectionContext = Dispatchers.IO,
             roomApiLogger = logger,
@@ -71,13 +73,13 @@ class HostRoomClosureTest {
             roomCloseScope = closeScope,
             roomCloseCommandFactory = { RoomCloseCommand(delete) },
         ).also {
-            assertTrue(it.createRoom())
+            it.createRoom()
             it.awaitCreatedForTest()
         }
     }
 
     private fun drainCloseScope() = runBlocking {
-        withTimeout(5_000) { scope.coroutineContext[kotlinx.coroutines.Job]!!.children.toList().joinAll() }
+        withTimeout(5_000) { networkScope.coroutineContext[kotlinx.coroutines.Job]!!.children.toList().joinAll() }
     }
 
     private fun expectDelete() {
@@ -101,7 +103,7 @@ class HostRoomClosureTest {
         repository.awaitGeneration()
         controller.enterRoom()
         repository.awaitGeneration() // invitation and live are distinct observers (#264).
-        assertEquals(LiveRoomBackResult.EXIT_ACTIVITY, controller.onBack())
+        controller.onBack()
         assertTrue(controller.awaitSetupForTest())
         expectDelete()
         drainCloseScope()
@@ -113,7 +115,8 @@ class HostRoomClosureTest {
         controller.enterRoom()
         repository.awaitGeneration() // live observer (#264)
         controller.onHostStopped()
-        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        controller.awaitRoomStateForTest { it.foregroundRecoveryPending }
+        controller.awaitRoomStateForTest { it.foregroundRecoveryPending }
         controller.abandonRoom()
         assertTrue(controller.awaitSetupForTest())
         drainCloseScope()
@@ -135,7 +138,8 @@ class HostRoomClosureTest {
         controller.enterRoom()
         repository.awaitGeneration()
         controller.onHostStopped()
-        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+        controller.awaitRoomStateForTest { it.foregroundRecoveryPending }
+        controller.awaitRoomStateForTest { it.foregroundRecoveryPending }
         controller.abandonRoom()
         assertTrue(controller.awaitSetupForTest())
         drainCloseScope()
@@ -314,7 +318,7 @@ class HostRoomClosureTest {
         try {
             startPlaying(controller, engine)
             assertEquals("older report entered; last observed=${reports.toList()}", PlayerReportState.PLAYING,
-                reports.peek()?.state)
+                reports.poll(5, TimeUnit.SECONDS)?.also { reports.put(it) }?.state)
             controller.endRoom()
             val close = deletes.poll(2, TimeUnit.SECONDS)
             assertEquals("prompt DELETE before hung report settles; state=${controller.state}, reports=${reports.toList()}",
@@ -322,8 +326,7 @@ class HostRoomClosureTest {
             assertEquals("one DELETE; last observed=$close, state=${controller.state}", 1, deleteCount.get())
             assertEquals("explicit end sends no final PAUSED; last observed=${reports.toList()}",
                 listOf(PlayerReportState.PLAYING), reports.toList().map { it.state })
-            // Keep the cancellation-ignoring report blocked beyond the old 2.5-second join.
-            runBlocking { kotlinx.coroutines.delay(2_600) }
+            controller.awaitStateForTest("explicit end while predecessor report is blocked") { it is HostingState.Ending }
             assertEquals("DELETE remains unique past old join; state=${controller.state}, reports=${reports.toList()}",
                 1, deleteCount.get())
         } finally {

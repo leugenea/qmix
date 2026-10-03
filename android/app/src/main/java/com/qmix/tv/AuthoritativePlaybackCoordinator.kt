@@ -17,7 +17,7 @@ class AuthoritativePlaybackCoordinator(
     private val reconciler: suspend (String) -> RoomFetchResult,
     parentScope: CoroutineScope,
     private val mutationContext: QueueMutationContext,
-    private val advanceAfterEnded: (String) -> Boolean,
+    private val advanceAfterEnded: (String) -> Unit,
     private val observer: (LocalPlaybackState) -> Unit = {},
     statePublisherFactory: ((PlayerStatePublisher.Listener) -> PlayerStatePublisher)? = null,
 ) : AutoCloseable {
@@ -70,6 +70,9 @@ class AuthoritativePlaybackCoordinator(
             applyAuthoritativeRoom(room)
         }
     }
+
+    internal fun foregroundWorkers(): List<Job> =
+        sessionJob.children.toList() + statePublisher?.foregroundWorkers().orEmpty()
 
     fun onForegroundLost(): Unit = mutationContext.run {
         if (!sessionJob.isActive || !foregroundReady) return@run

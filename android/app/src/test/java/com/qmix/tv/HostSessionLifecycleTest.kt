@@ -39,7 +39,7 @@ class HostSessionLifecycleTest {
             override fun onPlay() { actions += "play" }
             override fun onPause() { actions += "pause" }
             override fun onInvite() = Unit
-            override fun onBack() = LiveRoomBackResult.IGNORED
+            override fun onBack(onExit: () -> Unit) = Unit
         }
 
         assertTrue(dispatchPlaybackMediaKey(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE), handler))
@@ -61,8 +61,8 @@ class HostSessionLifecycleTest {
     @Test
     fun activity_host_session_provider_lease_restores_application_state() {
         val application = ApplicationProvider.getApplicationContext<QMixApplication>()
-        val first = HostSessionController(OkHttpClient())
-        val second = HostSessionController(OkHttpClient())
+        val first = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined), httpClient = OkHttpClient())
+        val second = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined), httpClient = OkHttpClient())
         val firstLease = application.installActivityHostSessionProvider { first }
         try {
             assertSame(first, application.hostSessionForActivity())
@@ -146,34 +146,25 @@ class HostSessionLifecycleTest {
                 observation = controller.collectStatesForTest { state ->
                     if (state is HostingState.Invitation) invitationReady.countDown()
                 }
-                assertTrue(controller.createRoom())
-                if (controller.state is HostingState.HttpWarning) {
-                    assertTrue(controller.confirmHttpWarning())
-                }
+                controller.createRoom()
             }
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            while (invitationReady.count != 0L && System.nanoTime() < deadline) {
-                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-                invitationReady.await(10, TimeUnit.MILLISECONDS)
+            awaitMain("creation security decision") {
+                controller.state is HostingState.HttpWarning || controller.state is HostingState.Invitation
             }
-            assertEquals(0L, invitationReady.count)
-
-            scenario.onActivity {
-                controller.enterRoom()
-                assertTrue(controller.state is HostingState.LiveRoom)
+            if (controller.state is HostingState.HttpWarning) {
+                scenario.onActivity { controller.confirmHttpWarning() }
             }
+            awaitMain("invitation ready") { invitationReady.count == 0L }
+            scenario.onActivity { controller.enterRoom() }
+            awaitMain("live room entered") { controller.state is HostingState.LiveRoom }
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            lateinit var shownActivity: MainActivity
             scenario.onActivity { activity ->
+                shownActivity = activity
                 activity.onBackPressedDispatcher.onBackPressed()
-                assertTrue(activity.isFinishing)
             }
-
-            val readyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            while (controller.state !is HostingState.Setup && System.nanoTime() < readyDeadline) {
-                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-                Thread.yield()
-            }
-            assertTrue(controller.state is HostingState.Setup)
+            awaitMain("Back UI exit effect") { shownActivity.isFinishing }
+            awaitMain("host cleanup Setup") { controller.state is HostingState.Setup }
             val creation = checkNotNull(creations.poll(5, TimeUnit.SECONDS))
             val deletion = checkNotNull(deletions.poll(5, TimeUnit.SECONDS))
             assertEquals("POST", creation.method)
@@ -194,6 +185,15 @@ class HostSessionLifecycleTest {
             scenario.close()
             server.shutdown()
         }
+    }
+
+    private fun awaitMain(step: String, predicate: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (!predicate() && System.nanoTime() < deadline) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            Thread.yield()
+        }
+        assertTrue("$step: Android Main boundary not reached", predicate())
     }
 
 }

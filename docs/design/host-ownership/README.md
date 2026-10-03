@@ -1,9 +1,12 @@
-# Future host ownership design — approved Option B
+# Retired host ownership design archive
 
-**Status: owner-approved design, not implemented or runtime-accepted.** The
-October 1, 2026 decision approves Option B and the enumerated scope/policy choices.
-Canonical main at `9454d705a2eddc2669c964a552395f1ede35088a` does **not** implement
-this protocol. This publication changes documentation only.
+**Status: superseded by qmix#312; historical evidence only.** The October 1,
+2026 Option B decision and its paper protocol are not the current implementation
+contract. The owner selected a simpler sequential FIFO host loop instead; see
+[the current architecture](../../../ARCHITECTURE.md#sequential-android-host-ownership-qmix312).
+The versioned artifacts below retain their original bytes and reviews, not an
+obligation to adopt a ledger, shared authority gate, bounded inbox or admission
+reservations.
 
 Start with the [decision and current status](decision.md). Then read the exact
 reviewed [design-v3.md](design-v3.md) and [matrices-v3.md](matrices-v3.md).
@@ -50,22 +53,12 @@ versioned primary-source URLs and canonical main source references remain
 traceable. The frozen unmerged candidate is identified by its manifest and
 patch digest, never by a fabricated commit or runtime result.
 
-## Adoption boundary
+## Historical adoption boundary
 
-Issue [#306](https://github.com/leugenea/qmix/issues/306) owns this design/docs
-publication. [#277](https://github.com/leugenea/qmix/issues/277) retains final
-assembled behavior, metric and evidence acceptance. Replacement implementation
-drafts and native dependency changes require independent validation before
-creation. [#304](https://github.com/leugenea/qmix/issues/304) remains open/frozen
-until a complete approved replacement graph exists;
-[#305](https://github.com/leugenea/qmix/issues/305) retains later demonstrated
-simplification and final metrics. No safety obligation is deferred to LEAN.
-
-Production adoption needs one coherent activation of actual host/coordinator
-G authority and all allocation/retirement contracts, not an unused ledger,
-optional no-op ownership adapter or partially migrated head. If those seams
-cannot fit a focused unit without mixed authority, stop for an explicit delivery
-size/compatibility-stage decision. That is an implementation-planning boundary,
-not permission to reopen the approved protocol or add another paper task by
-default. Full source/runtime regressions, independent exact-snapshot review,
-hosted JVM/lint/API 36 TV and combined instruction coverage remain mandatory.
+The adoption instructions, issue dispositions and implementation constraints in
+this archive describe the abandoned Option B delivery path. They are superseded
+by the canonical [#312](https://github.com/leugenea/qmix/issues/312) contract and
+must not be imported into its implementation. Static paper review is not native
+runtime, coverage or final-candidate acceptance evidence. Final independent
+full-snapshot review and hosted Android/JVM/coverage gates remain separate checks
+of the actual sequential-loop candidate.

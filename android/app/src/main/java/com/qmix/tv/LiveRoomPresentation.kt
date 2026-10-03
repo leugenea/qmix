@@ -3,9 +3,7 @@ package com.qmix.tv
 import androidx.annotation.StringRes
 
 internal fun handleLiveRoomBack(handler: LiveRoomHandler, onExitLiveRoom: () -> Unit) {
-    if (handler.onBack() == LiveRoomBackResult.EXIT_ACTIVITY) {
-        onExitLiveRoom()
-    }
+    handler.onBack(onExitLiveRoom)
 }
 
 internal fun formatDuration(durationSeconds: Int, unknownDuration: String): String {
