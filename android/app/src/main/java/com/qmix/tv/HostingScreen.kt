@@ -2,7 +2,6 @@ package com.qmix.tv
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
-import androidx.tv.material3.MaterialTheme
 
 @Composable
 internal fun HostingScreen(
@@ -16,7 +15,7 @@ internal fun HostingScreen(
     liveRoomHandler: LiveRoomHandler = NoOpLiveRoomHandler,
     onExitLiveRoom: () -> Unit = {},
 ) {
-    MaterialTheme {
+    QMixTvTheme {
         when (state) {
             HostingState.Ending -> Unit // Later host commands stay queued while owned cleanup joins.
             is HostingState.Setup -> SetupScreen(state, false, null, onSettingsChanged, onCreate)
