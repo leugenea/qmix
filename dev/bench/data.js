@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791026523710,
+  "lastUpdate": 1791061654120,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2252,6 +2252,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Kotlin erosion",
             "value": 27.072137245784884,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "157b039e928359343dd7e8abfc62e576023fb746",
+          "message": "fix(android): shared TV Material theme and native presentation evidence (#316)\n\n* test(android): trace native Setup text readability\n\n* fix(android): provide inherited dark TV content color\n\n* test(android): capture native TV states and synchronize cleanup receipt\n\n* test(android): fix native snapshot synchronization and background oracle\n\n* test(android): establish stable unfocused native capture fixture",
+          "timestamp": "2026-10-04T00:06:56+03:00",
+          "tree_id": "0cee48618cb6e5c5ff5ff499afcc9634e421d6bb",
+          "url": "https://github.com/leugenea/qmix/commit/157b039e928359343dd7e8abfc62e576023fb746"
+        },
+        "date": 1791061652564,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.942874200577986,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 27.04886321300034,
             "unit": "%"
           },
           {
