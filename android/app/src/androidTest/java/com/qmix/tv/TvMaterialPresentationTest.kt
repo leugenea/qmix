@@ -153,23 +153,41 @@ class TvMaterialPresentationTest {
         composeRule.waitForIdle()
     }
 
-    private fun pixelSamples(width: Int, height: Int, sample: (Int, Int) -> Color?): List<Color> {
-        val colors = mutableListOf<Color>()
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                sample(x, y)?.let { colors.add(it) }
-            }
+}
+
+// Geometry-independent native helpers shared with the same-widget capture history.
+internal fun pixelSamples(width: Int, height: Int, sample: (Int, Int) -> Color?): List<Color> {
+    val colors = mutableListOf<Color>()
+    for (y in 0 until height) {
+        for (x in 0 until width) {
+            sample(x, y)?.let { colors.add(it) }
         }
-        return colors
     }
+    return colors
+}
 
-    private fun colorDistance(first: Color, second: Color): Float = maxOf(
-        abs(first.red - second.red), abs(first.green - second.green), abs(first.blue - second.blue),
-    )
+internal fun colorDistance(first: Color, second: Color): Float = maxOf(
+    abs(first.red - second.red), abs(first.green - second.green), abs(first.blue - second.blue),
+)
 
-    private fun contrast(first: Color, second: Color): Double {
-        val firstLuminance = first.luminance().toDouble()
-        val secondLuminance = second.luminance().toDouble()
-        return (maxOf(firstLuminance, secondLuminance) + 0.05) / (minOf(firstLuminance, secondLuminance) + 0.05)
+internal fun contrast(first: Color, second: Color): Double {
+    val firstLuminance = first.luminance().toDouble()
+    val secondLuminance = second.luminance().toDouble()
+    return (maxOf(firstLuminance, secondLuminance) + 0.05) / (minOf(firstLuminance, secondLuminance) + 0.05)
+}
+
+internal data class NativeGlyphEvidence(val foreground: Color, val background: Color, val cores: Int, val ratio: Double)
+
+internal fun nativeGlyphEvidence(glyphs: List<Color>, background: Color, resolved: Color, active: Boolean): NativeGlyphEvidence {
+    assertTrue("NATIVE_GLYPH: missing character-box pixels", glyphs.isNotEmpty())
+    val foreground = glyphs.maxBy { contrast(it, background) }
+    val cores = glyphs.count { colorDistance(it, foreground) <= 2f / 255f }
+    assertTrue("NATIVE_GLYPH: missing visible full-coverage cores", cores >= 5 && colorDistance(foreground, background) > 4f / 255f)
+    assertTrue("NATIVE_GLYPH: unresolved Text layout color", resolved != Color.Unspecified && resolved.alpha > 0f)
+    val ratio = contrast(foreground, background)
+    if (active) {
+        assertTrue("NATIVE_GLYPH: core/style mismatch", colorDistance(foreground, resolved.compositeOver(background)) <= 3f / 255f)
+        assertTrue("NATIVE_GLYPH: active text requires >=4.5; measured=$ratio", ratio >= 4.5)
     }
+    return NativeGlyphEvidence(foreground, background, cores, ratio)
 }

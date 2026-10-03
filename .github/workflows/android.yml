@@ -187,7 +187,525 @@ jobs:
           adb -s emulator-5554 shell settings put global window_animation_scale 0.0
           adb -s emulator-5554 shell settings put global transition_animation_scale 0.0
           adb -s emulator-5554 shell settings put global animator_duration_scale 0.0
-          ./gradlew --no-daemon :app:jacocoDebugCoverageVerification
+          # qmix#315: keep collection failures separate from the unchanged Gradle gate.
+          capture_dir=app/build/reports/qmix70
+          helper_dir="$RUNNER_TEMP/qmix70-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          capture_rc=0
+          # Positional parameters expand in the bounded child shell, not here.
+          # shellcheck disable=SC2016
+          capture_error() {
+            capture_rc=1
+            if ! timeout --kill-after=2 5 sh -c '
+              printf "QMIX70 capture failure: %s (exit %s)\n" "$2" "$3" >&2
+              printf "%s\t%s\n" "$2" "$3" >> "$1"
+            ' sh "$capture_dir/errors.log" "$1" "$2"; then
+              capture_rc=1
+            fi
+          }
+          # Positional parameters expand in the bounded child shell, not here.
+          # shellcheck disable=SC2016
+          capture_run() {
+            local phase=$1 seconds=$2 rc
+            shift 2
+            if timeout --kill-after=5 "$seconds" "$@" >> "$capture_dir/$phase.log" 2>&1; then
+              rc=0
+            else
+              rc=$?
+              capture_error "$phase" "$rc"
+            fi
+            if ! timeout --kill-after=2 5 sh -c 'printf "%s\t%s\n" "$2" "$3" >> "$1"' \
+                sh "$capture_dir/operations.tsv" "$phase" "$rc"; then
+              capture_error "record-$phase" 1
+            fi
+            capture_last_rc=$rc
+            return 0
+          }
+          if ! timeout --kill-after=2 10 mkdir "$capture_dir"; then
+            capture_error fresh-host-directory 1
+          fi
+          capture_run fresh-helper-directory 10 mkdir "$helper_dir"
+          # Noclobber also preserves helpers from an interrupted/repeated preparation.
+          # Expand the output argument only inside the bounded child shell.
+          # shellcheck disable=SC2016
+          capture_run writer-source 10 sh -c 'set -C; cat > "$1"' sh "$helper_dir/write-capture.sh" <<'QMIX70_WRITER'
+          #!/system/bin/sh
+          set -eu
+          [ "$#" -eq 2 ] || exit 2
+          name=$1
+          count=$2
+          case "$name" in
+            [a-z0-9]*.png|[a-z0-9]*.json) ;;
+            *) exit 2 ;;
+          esac
+          case "$name" in *[!a-z0-9.-]*) exit 2 ;; esac
+          [ "${#name}" -le 120 ] || exit 2
+          case "$count" in
+            ''|0*|*[!0-9]*) exit 2 ;;
+          esac
+          [ "${#count}" -le 8 ] || exit 2
+          [ "$count" -gt 0 ] && [ "$count" -le 33554432 ] || exit 2
+          base=/data/local/tmp/qmix70
+          [ -d "$base" ] && [ ! -L "$base" ] || exit 2
+          part="$base/$name.part"
+          [ ! -L "$part" ] || exit 2
+          rc=0
+          trap 'rc=$?; rm -f "$part" || :; exit "$rc"' 0
+          trap 'exit 1' HUP INT TERM
+          umask 077
+          cat > "$part"
+          actual=$(wc -c < "$part")
+          [ "$actual" -eq "$count" ] || exit 3
+          mv -f "$part" "$base/$name"
+          printf 'QMIX70_OK %s %s\n' "$name" "$count"
+          QMIX70_WRITER
+          # Expand the output argument only inside the bounded child shell.
+          # shellcheck disable=SC2016
+          capture_run parser-source 10 sh -c 'set -C; cat > "$1"' sh "$helper_dir/capture.py" <<'QMIX70_PY'
+          import hashlib
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+          import traceback
+          import xml.etree.ElementTree as ET
+
+          ROOT = Path(os.environ["GITHUB_WORKSPACE"])
+          OUT = Path(sys.argv[2]).resolve()
+          SHA = re.compile(r"[0-9a-f]{40}")
+          HASH = re.compile(r"[0-9a-f]{64}")
+          NAME = re.compile(r"[a-z0-9][a-z0-9.-]*\.png")
+          BASE_KEYS = {"name", "state", "enabled", "focused", "callbacks", "keyDown"}
+          FRAME_KEYS = BASE_KEYS | {
+              "width", "height", "sha256", "locale", "density", "fontScale", "api",
+              "buttonId", "layoutIdentity", "rootIdentity", "oraclePassed", "evidence",
+          }
+
+
+          def require(ok, message):
+              if not ok:
+                  raise ValueError(message)
+
+
+          def unique_object(pairs):
+              result = {}
+              for key, value in pairs:
+                  require(key not in result, f"duplicate JSON key: {key}")
+                  result[key] = value
+              return result
+
+
+          def reject_constant(value):
+              raise ValueError(f"nonfinite JSON constant: {value}")
+
+
+          def read_json(path):
+              require(path.is_file() and not path.is_symlink(), f"not a regular JSON file: {path}")
+              require(path.stat().st_size <= 4 * 1024 * 1024, f"oversize JSON: {path}")
+              return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+
+
+          def digest(path):
+              h = hashlib.sha256()
+              with path.open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+
+          def file_receipt(path):
+              if not path.is_file():
+                  return {"path": str(path.relative_to(ROOT)), "status": "unavailable", "sha256": None}
+              require(not path.is_symlink(), f"symlink artifact: {path}")
+              return {"path": str(path.relative_to(ROOT)), "status": "available",
+                      "sha256": digest(path), "bytes": path.stat().st_size}
+
+
+          def git_value(*args):
+              return subprocess.check_output(["git", "--no-optional-locks", "-C", str(ROOT), *args],
+                                             timeout=10, text=True).strip()
+
+
+          def source_group(patterns):
+              files = set()
+              for pattern in patterns:
+                  files.update(p for p in ROOT.glob(pattern) if p.is_file())
+              return {"status": "available" if files else "unavailable",
+                      "files": [file_receipt(p) for p in sorted(files)]}
+
+
+          def source_hashes():
+              return {
+                  "source": source_group(["android/app/src/main/java/**/*"]),
+                  "resources": source_group(["android/app/src/*/res/**/*", "android/app/src/*/AndroidManifest.xml"]),
+                  "test": source_group(["android/app/src/androidTest/**/*", "android/app/src/test/**/*"]),
+                  "config": source_group([
+                      ".github/workflows/android.yml", "android/*.kts", "android/gradle.properties",
+                      "android/gradlew", "android/gradlew.bat", "android/gradle/**/*",
+                      "android/app/*.kts", "android/app/proguard-rules.pro", "internal/buildinfo/**/*",
+                      "go.mod", "go.sum",
+                  ]),
+              }
+
+
+          def checkout_provenance():
+              event = read_json(Path(os.environ["GITHUB_EVENT_PATH"]))
+              head = event.get("pull_request", {}).get("head", {}).get("sha")
+              checkout = git_value("rev-parse", "HEAD")
+              tree = git_value("rev-parse", "HEAD^{tree}")
+              event_sha = os.environ["GITHUB_SHA"]
+              require(SHA.fullmatch(checkout) and SHA.fullmatch(tree), "invalid checkout identity")
+              require(SHA.fullmatch(event_sha), "invalid event SHA")
+              require(head is None or isinstance(head, str) and SHA.fullmatch(head), "invalid PR head SHA")
+              return {"checkoutSha": checkout, "checkoutTree": tree, "eventSha": event_sha,
+                      "prHeadSha": head, "eventName": os.environ["GITHUB_EVENT_NAME"],
+                      "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                      "job": os.environ["GITHUB_JOB"], "artifactName": "android-tv-test-reports"}
+
+
+          def persist(path, value):
+              with path.open("x", encoding="utf-8") as stream:
+                  json.dump(value, stream, indent=2, sort_keys=True, allow_nan=False)
+                  stream.write("\n")
+
+
+          def attempt(report, label, operation):
+              try:
+                  value = operation()
+                  report[label] = value
+                  return value
+              except Exception as error:
+                  report[label] = {"status": "unavailable", "error": f"{type(error).__name__}: {error}"}
+                  report["errors"].append(f"{label}: {type(error).__name__}: {error}")
+                  traceback.print_exc()
+                  return None
+
+
+          def exact_keys(value, keys, label):
+              require(type(value) is dict and set(value) == keys, f"{label}: wrong object keys")
+
+
+          def integer(value, minimum, label):
+              require(type(value) is int and value >= minimum, f"{label}: invalid integer")
+
+
+          def positive_number(value, label):
+              require(type(value) in (int, float) and math.isfinite(value) and value > 0,
+                      f"{label}: invalid positive number")
+
+
+          def checkpoint(value, keys):
+              exact_keys(value, keys, "checkpoint")
+              require(type(value["name"]) is str and NAME.fullmatch(value["name"]), "unsafe PNG name")
+              require(type(value["state"]) is str and bool(value["state"]), "missing checkpoint state")
+              for key in ("enabled", "focused", "keyDown"):
+                  require(type(value[key]) is bool, f"{key}: not Boolean")
+              integer(value["callbacks"], 0, "callbacks")
+
+
+          def indexed_frames(values, keys):
+              require(type(values) is list and 0 < len(values) <= 32, "invalid frame list")
+              result = {}
+              for value in values:
+                  checkpoint(value, keys)
+                  name = value["name"]
+                  require(name not in result, f"duplicate frame: {name}")
+                  result[name] = value
+              return result
+
+
+          def numeric_evidence(value):
+              if type(value) is dict:
+                  return sum(numeric_evidence(item) for item in value.values())
+              if type(value) is list:
+                  return sum(numeric_evidence(item) for item in value)
+              if type(value) in (int, float):
+                  require(math.isfinite(value), "nonfinite native numeric evidence")
+                  return 1
+              require(value is None or type(value) in (str, bool), "invalid evidence value")
+              return 0
+
+
+          def frame_metadata(frame):
+              integer(frame["width"], 1, "width")
+              integer(frame["height"], 1, "height")
+              integer(frame["api"], 1, "API")
+              integer(frame["buttonId"], 0, "buttonId")
+              for key in ("layoutIdentity", "rootIdentity"):
+                  integer(frame[key], 1, key)
+              for key in ("density", "fontScale"):
+                  positive_number(frame[key], key)
+              require(type(frame["locale"]) is str and bool(frame["locale"]), "unavailable native locale")
+              require(type(frame["sha256"]) is str and HASH.fullmatch(frame["sha256"]), "invalid PNG hash")
+              require(type(frame["oraclePassed"]) is bool and frame["oraclePassed"], "native oracle did not pass")
+              require(type(frame["evidence"]) is dict and bool(frame["evidence"]), "missing native evidence")
+              require(numeric_evidence(frame["evidence"]) > 0, "missing numeric native evidence")
+
+
+          def ledger_contract(ledger, checkout):
+              exact_keys(ledger, {"schema", "captureSha", "planned", "completed", "receipts", "failure"}, "ledger")
+              require(type(ledger["schema"]) is int and ledger["schema"] == 1, "unsupported ledger schema")
+              require(ledger["captureSha"] == checkout["checkoutSha"], "capture/checkout SHA mismatch")
+              require(ledger["failure"] is None, "native capture recorded failure")
+              exact_keys(ledger["receipts"], {"releaseCallbacks", "disabledDelta"}, "receipts")
+              integer(ledger["receipts"]["releaseCallbacks"], 0, "releaseCallbacks")
+              integer(ledger["receipts"]["disabledDelta"], 0, "disabledDelta")
+              require(ledger["receipts"] == {"releaseCallbacks": 1, "disabledDelta": 0}, "missing postcapture receipts")
+              planned = indexed_frames(ledger["planned"], BASE_KEYS)
+              completed = indexed_frames(ledger["completed"], FRAME_KEYS)
+              require(planned.keys() == completed.keys(), "planned/completed PNG sets differ")
+              for name, frame in completed.items():
+                  require({key: frame[key] for key in BASE_KEYS} == planned[name], f"checkpoint mismatch: {name}")
+                  frame_metadata(frame)
+              return completed
+
+
+          def observed_display():
+              text = (OUT / "display-size.log").read_text(encoding="utf-8")
+              physical = re.findall(r"^Physical size: ([0-9]+)x([0-9]+)\s*$", text, re.M)
+              override = re.findall(r"^Override size: ([0-9]+)x([0-9]+)\s*$", text, re.M)
+              require(len(physical) == 1 and len(override) <= 1, "ambiguous observed wm size")
+              observed = tuple(map(int, (override or physical)[0]))
+              require(observed == (1920, 1080), f"observed display is not target: {observed}")
+              return {"width": observed[0], "height": observed[1], "raw": text}
+
+
+          def host_observations():
+              return {"display": observed_display(),
+                      "densityRaw": (OUT / "display-density.log").read_text(),
+                      "fontScaleRaw": (OUT / "device-font-scale.log").read_text(),
+                      "apiRaw": (OUT / "device-api.log").read_text()}
+
+
+          def device_inventory(device, completed):
+              files = list(device.iterdir())
+              require(all(p.is_file() and not p.is_symlink() for p in files), "nonregular device evidence entry")
+              expected = set(completed) | {"ledger.json", "provenance.json", "write-capture.sh"}
+              require({p.name for p in files} == expected, "device filesystem differs from completed PNG set/control files")
+              return [file_receipt(p) for p in sorted(files)]
+
+
+          def decode_png(path):
+              require(0 < path.stat().st_size <= 32 * 1024 * 1024, f"invalid PNG byte size: {path.name}")
+              output = subprocess.check_output(
+                  [str(Path(os.environ["JAVA_HOME"]) / "bin/java"), "--source", "17", "-Xmx128m",
+                   "-Djava.awt.headless=true", sys.argv[3], str(path)], timeout=30, text=True)
+              parts = output.rstrip("\n").split("\t")
+              require(len(parts) == 3 and parts[0] == "png", f"unexpected ImageIO output: {output!r}")
+              return {"format": parts[0], "width": int(parts[1]), "height": int(parts[2])}
+
+
+          def frame_receipt(device, frame, display):
+              path = device / frame["name"]
+              image = decode_png(path)
+              require((image["width"], image["height"]) == (frame["width"], frame["height"]), "PNG/ledger dimensions differ")
+              require((image["width"], image["height"]) == (display["width"], display["height"]), "PNG/observed display dimensions differ")
+              require(digest(path) == frame["sha256"], f"PNG byte hash mismatch: {path.name}")
+              return {"checkpoint": frame, "decoded": image, "file": file_receipt(path)}
+
+
+          def identity_contract(frames):
+              identities = {(f["buttonId"], f["layoutIdentity"], f["rootIdentity"]) for f in frames.values()}
+              require(len(identities) == 1, "widget/layout/root identity changed between captures")
+              configs = {(f["locale"], f["density"], f["fontScale"], f["api"]) for f in frames.values()}
+              require(len(configs) == 1, "native configuration changed between captures")
+              observed_api = (OUT / "device-api.log").read_text().strip()
+              require(str(next(iter(frames.values()))["api"]) == observed_api == "36", "native/observed target API mismatch")
+              return {"buttonLayoutRoot": list(next(iter(identities))), "nativeConfiguration": list(next(iter(configs)))}
+
+
+          def matching_cases(path):
+              require(path.stat().st_size <= 32 * 1024 * 1024, f"oversize JUnit: {path}")
+              tree = ET.parse(path)
+              return [case for case in tree.iter("testcase")
+                      if case.get("classname") == "com.qmix.tv.Qmix70ScreenshotTest"
+                      and case.get("name") == "shared_setup_button_states_contrast_and_captures"]
+
+
+          def junit_receipts(report):
+              directory = ROOT / "android/app/build/outputs/androidTest-results/connected"
+              files = sorted(directory.rglob("*.xml"))
+              inventory = []
+              matches = []
+              for path in files:
+                  receipt = attempt(report, f"junitHash:{path.relative_to(ROOT)}", lambda p=path: file_receipt(p))
+                  inventory.append(receipt)
+                  cases = attempt(report, f"junitParse:{path.relative_to(ROOT)}", lambda p=path: matching_cases(p))
+                  for case in cases or []:
+                      matches.append({"file": receipt, "classname": case.get("classname"), "name": case.get("name"),
+                                      "passed": not any(child.tag in {"failure", "error", "skipped"} for child in case)})
+              # Never serialize ElementTree objects into the final receipt.
+              report_keys = [key for key in report if key.startswith("junitParse:")]
+              for key in report_keys:
+                  if type(report[key]) is list:
+                      report[key] = {"matchingCases": len(report[key])}
+              return {"status": "available" if files else "unavailable", "inventory": inventory, "collector": matches}
+
+
+          def junit_contract(value):
+              matches = value["collector"]
+              require(len(matches) == 1 and matches[0]["passed"], "canonical collector JUnit absent, duplicated, skipped or failed")
+              return matches[0]
+
+
+          def operation_receipts():
+              rows = []
+              for line in (OUT / "operations.tsv").read_text().splitlines():
+                  phase, rc = line.split("\t")
+                  rows.append({"phase": phase, "exit": int(rc)})
+              require(bool(rows), "missing capture-operation receipts")
+              return rows
+
+
+          def capture_failure_log():
+              path = OUT / "errors.log"
+              return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+          def validate_capture(report, before, checkout):
+              require(before is not None and checkout is not None, "checkout provenance unavailable")
+              require(not report["captureFailureLog"], "a capture failure was already recorded")
+              require(before["identity"] == checkout, "checkout/event/run identity changed during capture")
+              require(before["sourceHashes"] == report["sourceHashes"], "source/resource/config/test bytes changed during capture")
+              require(all(group["status"] == "available" for group in report["sourceHashes"].values()), "source provenance unavailable")
+              device = OUT / "device"
+              pushed = read_json(device / "provenance.json")
+              require(pushed == before, "pulled provenance differs from prepared provenance")
+              require(digest(device / "write-capture.sh") == before["writerSha256"], "device writer hash differs")
+              ledger = read_json(device / "ledger.json")
+              frames = ledger_contract(ledger, checkout)
+              report["deviceInventory"] = device_inventory(device, frames)
+              report["identityContract"] = identity_contract(frames)
+              display = observed_display()
+              report["observedDisplay"] = display
+              report["frames"] = []
+              for frame in frames.values():
+                  receipt = attempt(report, f"decode:{frame['name']}", lambda f=frame: frame_receipt(device, f, display))
+                  report["frames"].append(receipt)
+              report["canonicalJUnit"] = junit_contract(report["junit"])
+              require(all(row["exit"] == 0 for row in report["operations"]), "a capture operation failed")
+              return {"status": "passed" if not report["errors"] else "failed"}
+
+
+          def prepare():
+              identity = checkout_provenance()
+              provenance = {**identity, "identity": identity, "schema": 1, "sourceHashes": source_hashes(),
+                            "writerSha256": digest(Path(sys.argv[3]))}
+              persist(OUT / "provenance.json", provenance)
+
+
+          def finalize():
+              report = {"schema": 1, "errors": [], "gradleExit": int(sys.argv[4]),
+                        "purpose": "diagnostic native captures; not final publication"}
+              before = attempt(report, "preparedProvenance", lambda: read_json(OUT / "provenance.json"))
+              checkout = attempt(report, "identity", checkout_provenance)
+              attempt(report, "sourceHashes", source_hashes)
+              attempt(report, "operations", operation_receipts)
+              attempt(report, "captureFailureLog", capture_failure_log)
+              attempt(report, "hostDeviceObservations", host_observations)
+              attempt(report, "appApk", lambda: file_receipt(ROOT / "android/app/build/outputs/apk/debug/app-debug.apk"))
+              attempt(report, "testApk", lambda: file_receipt(ROOT / "android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"))
+              attempt(report, "junit", lambda: junit_receipts(report))
+              attempt(report, "rawLedger", lambda: file_receipt(OUT / "device/ledger.json"))
+              attempt(report, "nativeLedger", lambda: read_json(OUT / "device/ledger.json"))
+              attempt(report, "validation", lambda: validate_capture(report, before, checkout))
+              attempt(report, "apkValidation", lambda: require(
+                  report["appApk"].get("status") == report["testApk"].get("status") == "available",
+                  "app/test APK provenance unavailable"))
+              report["capturePassed"] = not report["errors"]
+              persist(OUT / "provenance-final.json", report)
+              return 0 if report["capturePassed"] else 1
+
+
+          if sys.argv[1] == "prepare":
+              prepare()
+          else:
+              sys.exit(finalize())
+          QMIX70_PY
+          # Expand the output argument only inside the bounded child shell.
+          # shellcheck disable=SC2016
+          capture_run decoder-source 10 sh -c 'set -C; cat > "$1"' sh "$helper_dir/PngProbe.java" <<'QMIX70_JAVA'
+          import java.awt.image.BufferedImage;
+          import java.io.File;
+          import java.util.Iterator;
+          import javax.imageio.ImageIO;
+          import javax.imageio.ImageReader;
+          import javax.imageio.stream.ImageInputStream;
+
+          class PngProbe {
+              public static void main(String[] args) throws Exception {
+                  if (args.length != 1) throw new IllegalArgumentException("one PNG path required");
+                  ImageIO.setUseCache(false);
+                  try (ImageInputStream input = ImageIO.createImageInputStream(new File(args[0]))) {
+                      if (input == null) throw new IllegalArgumentException("no ImageIO input");
+                      Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+                      if (!readers.hasNext()) throw new IllegalArgumentException("no image decoder");
+                      ImageReader reader = readers.next();
+                      try {
+                          if (!"png".equalsIgnoreCase(reader.getFormatName())) {
+                              throw new IllegalArgumentException("actual image format is not PNG");
+                          }
+                          reader.addIIOReadWarningListener((source, warning) -> {
+                              throw new IllegalArgumentException("PNG decode warning: " + warning);
+                          });
+                          reader.setInput(input, false, true);
+                          int width = reader.getWidth(0);
+                          int height = reader.getHeight(0);
+                          if (width != 1920 || height != 1080) {
+                              throw new IllegalArgumentException("decoded PNG is not target: " + width + "x" + height);
+                          }
+                          BufferedImage image = reader.read(0);
+                          if (image == null || image.getWidth() != width || image.getHeight() != height) {
+                              throw new IllegalArgumentException("full PNG decode failed");
+                          }
+                          System.out.printf("png\t%d\t%d%n", image.getWidth(), image.getHeight());
+                      } finally {
+                          reader.dispose();
+                      }
+                  }
+              }
+          }
+          QMIX70_JAVA
+          capture_run provenance-before 60 python3 "$helper_dir/capture.py" prepare "$capture_dir" "$helper_dir/write-capture.sh"
+          # A new emulator must have a fresh directory; never delete previous evidence.
+          capture_run prepare-device 15 adb -s emulator-5554 shell \
+            'test ! -e /data/local/tmp/qmix70 && mkdir /data/local/tmp/qmix70 && chmod 755 /data/local/tmp/qmix70'
+          if (( capture_last_rc == 0 )); then
+            capture_run push-writer 15 adb -s emulator-5554 push \
+              "$helper_dir/write-capture.sh" /data/local/tmp/qmix70/write-capture.sh
+            capture_run push-provenance 15 adb -s emulator-5554 push \
+              "$capture_dir/provenance.json" /data/local/tmp/qmix70/provenance.json
+            capture_run prepare-permissions 15 adb -s emulator-5554 shell \
+              'chmod 755 /data/local/tmp/qmix70/write-capture.sh && chmod 644 /data/local/tmp/qmix70/provenance.json'
+          fi
+
+          if ./gradlew --no-daemon :app:jacocoDebugCoverageVerification; then
+            gradle_rc=0
+          else
+            gradle_rc=$?
+          fi
+          # Pull even on failed preparation/build/assertions, before the existing EXIT trap.
+          capture_run device-pull 60 adb -s emulator-5554 pull /data/local/tmp/qmix70 "$capture_dir/device"
+          capture_run display-size 15 adb -s emulator-5554 shell wm size
+          capture_run display-density 15 adb -s emulator-5554 shell wm density
+          capture_run device-font-scale 15 adb -s emulator-5554 shell settings get system font_scale
+          capture_run device-api 15 adb -s emulator-5554 shell getprop ro.build.version.sdk
+          capture_run provenance-validate 180 python3 "$helper_dir/capture.py" final "$capture_dir" "$helper_dir/PngProbe.java" "$gradle_rc"
+          # Recording itself is guarded: a failed receipt cannot turn collection green.
+          # Positional parameters expand in the bounded child shell, not here.
+          # shellcheck disable=SC2016
+          capture_run exit-receipt 10 sh -c \
+            'printf "gradleExit=%s\ncaptureExitBeforeReceipt=%s\n" "$2" "$3" >> "$1"' \
+            sh "$capture_dir/exit-status.txt" "$gradle_rc" "$capture_rc"
+          if (( gradle_rc != 0 )); then
+            exit "$gradle_rc"
+          fi
+          if (( capture_rc != 0 )); then
+            exit "$capture_rc"
+          fi
       - name: Upload instrumentation and coverage reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -198,6 +716,7 @@ jobs:
             android/app/build/reports/androidTests/connected/
             android/app/build/reports/jacoco/jacocoDebugReport/
             android/app/build/reports/qmix-tv-emulator.log
+            android/app/build/reports/qmix70/
           if-no-files-found: error
 
   result:

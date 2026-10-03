@@ -315,13 +315,24 @@ class LiveRoomPresentationTest {
             roomCollectionScope = roomScope,
             roomCollectionContext = Dispatchers.Unconfined,
         )
+        val freshBackDelivered = java.util.concurrent.CountDownLatch(1)
         controller.observeForTest { state ->
             val active = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
-            if (active?.freshness == Freshness.FRESH) controller.onBack()
+            if (active?.freshness == Freshness.FRESH) {
+                controller.onBack()
+                freshBackDelivered.countDown()
+            }
         }
 
-        createAndEnter(controller)
+        server.enqueue(
+            MockResponse().setResponseCode(201)
+                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
+        )
+        controller.createRoom()
+        controller.awaitCreatedForTest()
+        controller.enterRoom()
 
+        assertTrue("FRESH observer offered Back", freshBackDelivered.await(5, java.util.concurrent.TimeUnit.SECONDS))
         assertTrue(controller.awaitSetupForTest())
         assertTrue(repository.closed)
     }
