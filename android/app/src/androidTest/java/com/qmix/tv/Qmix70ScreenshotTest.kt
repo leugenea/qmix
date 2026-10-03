@@ -4,8 +4,15 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -16,8 +23,8 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.platform.InspectableValue
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.isDebugInspectorInfoEnabled
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -27,14 +34,18 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -62,6 +73,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /** qmix#315: one native history, four diagnostic frames; not the final #70 gallery. */
+private const val FOCUS_PARKING_TAG = "qmix70-focus-parking"
+
 @RunWith(AndroidJUnit4::class)
 class Qmix70ScreenshotTest {
     @get:Rule
@@ -69,8 +82,8 @@ class Qmix70ScreenshotTest {
 
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val pending = mutableStateOf(false)
+    private val focusParking = FocusRequester()
     private var creates = 0
-    private lateinit var focusManager: FocusManager
     private lateinit var button: SemanticsNodeInteraction
     private lateinit var buttonLabel: String
     private lateinit var backendLabel: String
@@ -90,7 +103,11 @@ class Qmix70ScreenshotTest {
             collector = NativeCaptureCollector()
             collector.persist()
             startSetup()
-            composeRule.runOnIdle { focusManager.clearFocus(force = true) }
+            // Transfer focus without vacating the owner; an empty TV owner can
+            // reacquire the initial Button focus after clearFocus.
+            composeRule.runOnIdle { focusParking.requestFocus() }
+            composeRule.onNodeWithTag(FOCUS_PARKING_TAG).assertIsFocused()
+            button.assertIsNotFocused()
             settleScale(1f, "default")
             stateCheckpoint(collector.planned[0])
             button.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue("STATE_FOCUS: request rejected", it()) }
@@ -129,12 +146,14 @@ class Qmix70ScreenshotTest {
         backendLabel = instrumentation.targetContext.getString(R.string.backend_url)
         composeRule.setContent {
             QMixTvTheme {
-                focusManager = LocalFocusManager.current
                 colors = MaterialTheme.colorScheme
-                SetupScreen(
-                    HostingState.Setup("https://api.example", "https://guest.example"),
-                    pending.value, null, { _, _ -> }, { creates++ },
-                )
+                Box(Modifier.fillMaxSize()) {
+                    SetupScreen(
+                        HostingState.Setup("https://api.example", "https://guest.example"),
+                        pending.value, null, { _, _ -> }, { creates++ },
+                    )
+                    Spacer(Modifier.size(1.dp).testTag(FOCUS_PARKING_TAG).focusRequester(focusParking).focusable())
+                }
             }
         }
         var observed = 0
