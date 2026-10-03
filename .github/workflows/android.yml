@@ -508,13 +508,23 @@ jobs:
 
 
           def identity_contract(frames):
-              identities = {(f["buttonId"], f["layoutIdentity"], f["rootIdentity"]) for f in frames.values()}
-              require(len(identities) == 1, "widget/layout/root identity changed between captures")
-              configs = {(f["locale"], f["density"], f["fontScale"], f["api"]) for f in frames.values()}
-              require(len(configs) == 1, "native configuration changed between captures")
+              shared_names = (
+                  "setup-button-default.png", "setup-button-focused.png",
+                  "setup-button-held-pressed.png", "setup-button-disabled.png",
+              )
+              require(all(name in frames for name in shared_names), "missing shared Button history frame")
+              shared = [frames[name] for name in shared_names]
+              identities = {(f["buttonId"], f["layoutIdentity"], f["rootIdentity"]) for f in shared}
+              require(len(identities) == 1, "widget/layout/root identity changed between shared captures")
+              configs = {(f["locale"], f["density"], f["fontScale"], f["api"]) for f in shared}
+              require(len(configs) == 1, "native configuration changed between shared captures")
+              rendered = {(f["density"], f["fontScale"], f["api"]) for f in frames.values()}
+              require(len(rendered) == 1, "rendered density/fontScale/API changed between captures")
               observed_api = (OUT / "device-api.log").read_text().strip()
-              require(str(next(iter(frames.values()))["api"]) == observed_api == "36", "native/observed target API mismatch")
-              return {"buttonLayoutRoot": list(next(iter(identities))), "nativeConfiguration": list(next(iter(configs)))}
+              require(all(str(f["api"]) == observed_api == "36" for f in frames.values()),
+                      "native/observed target API mismatch")
+              return {"sharedFrameNames": list(shared_names), "buttonLayoutRoot": list(next(iter(identities))),
+                      "nativeConfiguration": list(next(iter(configs)))}
 
 
           def matching_cases(path):

@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
@@ -106,6 +107,56 @@ class HostingScreenInstrumentationTest {
             assertEquals("https://api.example|https://join.example", settings)
             assertEquals(1, creates)
         }
+    }
+
+    /** qmix#318: system D-pad focus and dispatch; IME editing stays platform-owned. */
+    @Test
+    fun setup_system_dpad_visits_both_fields_returns_to_create_and_dispatches_once() {
+        var creates = 0
+        composeRule.setContent {
+            HostingScreen(
+                HostingState.Setup("https://api.example", "https://guest.example"),
+                { _, _ -> error("focus traversal must not edit settings") }, { creates++ }, {},
+            )
+        }
+        val create = composeRule.onNodeWithText("Create room")
+        val backend = composeRule.onNodeWithContentDescription("Backend URL")
+        val guest = composeRule.onNodeWithContentDescription("Guest origin")
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        awaitSetupFocus(create, "initial Create")
+        assertTrue("Create -> Backend: D-pad down rejected", device.pressDPadDown())
+        awaitSetupFocus(backend, "Create -> Backend")
+        assertTrue("Backend -> Guest: D-pad down rejected", device.pressDPadDown())
+        awaitSetupFocus(guest, "Backend -> Guest")
+        assertTrue("Guest -> Backend: D-pad up rejected", device.pressDPadUp())
+        awaitSetupFocus(backend, "Guest -> Backend")
+        assertTrue("Backend -> Create: D-pad up rejected", device.pressDPadUp())
+        awaitSetupFocus(create, "return to Create")
+        composeRule.runOnIdle { assertEquals("before system OK", 0, creates) }
+        assertTrue("Create OK: D-pad center rejected", device.pressDPadCenter())
+        var observed = -1
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                observed = composeRule.runOnIdle { creates }
+                observed == 1
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("Create system OK receipt: last callbacks=$observed", timeout)
+        }
+        composeRule.runOnIdle { assertEquals("after system OK exactly once", 1, creates) }
+    }
+
+    private fun awaitSetupFocus(node: SemanticsNodeInteraction, step: String) {
+        var observed = false
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                observed = node.fetchSemanticsNode().config.getOrElse(SemanticsProperties.Focused) { false }
+                observed
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("Setup D-pad $step: last focused=$observed", timeout)
+        }
+        node.assertIsFocused()
     }
 
     @Test
