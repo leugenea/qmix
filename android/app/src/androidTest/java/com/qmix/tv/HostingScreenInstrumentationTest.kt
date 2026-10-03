@@ -3,11 +3,22 @@ package com.qmix.tv
 import android.content.Context
 import android.content.res.Configuration
 import android.os.LocaleList
+import android.os.SystemClock
+import android.util.Log
+import android.view.InputDevice
+import android.view.KeyCharacterMap
+import android.view.KeyEvent as NativeKeyEvent
+import android.view.View
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsNodeInteraction
@@ -29,6 +40,8 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.pressKey
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -109,31 +122,48 @@ class HostingScreenInstrumentationTest {
         }
     }
 
-    /** qmix#318: system D-pad focus and dispatch; IME editing stays platform-owned. */
+    /** qmix#318: synthetic HDMI-source system navigation, not physical CEC or IME editing proof. */
     @Test
-    fun setup_system_dpad_visits_both_fields_returns_to_create_and_dispatches_once() {
+    fun setup_synthetic_hdmi_dpad_visits_both_fields_returns_to_create_and_dispatches_once() {
+        val inputDevice = observeSetupDispatcherDevice()
+        val ingress = SetupHdmiIngress()
         var creates = 0
+        var settingsEdits = 0
+        lateinit var hostView: View
         composeRule.setContent {
-            HostingScreen(
-                HostingState.Setup("https://api.example", "https://guest.example"),
-                { _, _ -> error("focus traversal must not edit settings") }, { creates++ }, {},
-            )
+            hostView = LocalView.current
+            Box(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+                ingress.observe(event.nativeKeyEvent)
+                false // Passive ingress receipt; Foundation retains all input/focus behavior.
+            }) {
+                HostingScreen(
+                    HostingState.Setup("https://api.example", "https://guest.example"),
+                    { _, _ -> settingsEdits++ }, { creates++ }, {},
+                )
+            }
         }
         val create = composeRule.onNodeWithText("Create room")
         val backend = composeRule.onNodeWithContentDescription("Backend URL")
         val guest = composeRule.onNodeWithContentDescription("Guest origin")
-        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         awaitSetupFocus(create, "initial Create")
-        assertTrue("Create -> Backend: D-pad down rejected", device.pressDPadDown())
+        awaitSetupWindow(hostView, imeVisible = false, step = "initial Create readiness")
+        pressSetupHdmiKey(inputDevice, ingress, NativeKeyEvent.KEYCODE_DPAD_DOWN, "Create -> Backend")
         awaitSetupFocus(backend, "Create -> Backend")
-        assertTrue("Backend -> Guest: D-pad down rejected", device.pressDPadDown())
+        dismissSetupIme(hostView, backend, "Backend")
+        pressSetupHdmiKey(inputDevice, ingress, NativeKeyEvent.KEYCODE_DPAD_DOWN, "Backend -> Guest")
         awaitSetupFocus(guest, "Backend -> Guest")
-        assertTrue("Guest -> Backend: D-pad up rejected", device.pressDPadUp())
+        dismissSetupIme(hostView, guest, "Guest")
+        pressSetupHdmiKey(inputDevice, ingress, NativeKeyEvent.KEYCODE_DPAD_UP, "Guest -> Backend")
         awaitSetupFocus(backend, "Guest -> Backend")
-        assertTrue("Backend -> Create: D-pad up rejected", device.pressDPadUp())
+        dismissSetupIme(hostView, backend, "return Backend")
+        pressSetupHdmiKey(inputDevice, ingress, NativeKeyEvent.KEYCODE_DPAD_UP, "Backend -> Create")
         awaitSetupFocus(create, "return to Create")
-        composeRule.runOnIdle { assertEquals("before system OK", 0, creates) }
-        assertTrue("Create OK: D-pad center rejected", device.pressDPadCenter())
+        awaitSetupWindow(hostView, imeVisible = false, step = "Create OK readiness")
+        composeRule.runOnIdle {
+            assertEquals("before synthetic HDMI OK", 0, creates)
+            assertEquals("traversal must not edit settings", 0, settingsEdits)
+        }
+        pressSetupHdmiKey(inputDevice, ingress, NativeKeyEvent.KEYCODE_DPAD_CENTER, "Create OK")
         var observed = -1
         try {
             composeRule.waitUntil(timeoutMillis = 5_000) {
@@ -141,9 +171,12 @@ class HostingScreenInstrumentationTest {
                 observed == 1
             }
         } catch (timeout: ComposeTimeoutException) {
-            throw AssertionError("Create system OK receipt: last callbacks=$observed", timeout)
+            throw AssertionError("Create synthetic HDMI OK receipt: last callbacks=$observed", timeout)
         }
-        composeRule.runOnIdle { assertEquals("after system OK exactly once", 1, creates) }
+        composeRule.runOnIdle {
+            assertEquals("after synthetic HDMI OK/release exactly once", 1, creates)
+            assertEquals("system navigation must not edit settings", 0, settingsEdits)
+        }
     }
 
     private fun awaitSetupFocus(node: SemanticsNodeInteraction, step: String) {
@@ -154,9 +187,125 @@ class HostingScreenInstrumentationTest {
                 observed
             }
         } catch (timeout: ComposeTimeoutException) {
-            throw AssertionError("Setup D-pad $step: last focused=$observed", timeout)
+            throw AssertionError("Setup synthetic HDMI D-pad $step: last focused=$observed", timeout)
         }
         node.assertIsFocused()
+    }
+
+    private fun observeSetupDispatcherDevice(): SetupInputDeviceReceipt {
+        val inventory = InputDevice.getDeviceIds().sorted().associateWith { id ->
+            InputDevice.getDevice(id)?.let { SetupInputDeviceReceipt.from(it) }
+        }
+        val dispatcher = InputDevice.getDevice(KeyCharacterMap.VIRTUAL_KEYBOARD)
+            ?.let { SetupInputDeviceReceipt.from(it) }
+        val evidence = "inventory=$inventory; dispatcher=$dispatcher"
+        Log.i("SetupHdmiNavigation", "public preflight $evidence")
+        val observed = requireNotNull(dispatcher) { "Setup HDMI eligibility: unavailable; $evidence" }
+        assertEquals("Setup HDMI eligibility: dispatcher id; $evidence", KeyCharacterMap.VIRTUAL_KEYBOARD, observed.id)
+        assertTrue("Setup HDMI eligibility: not virtual; $evidence", observed.virtual)
+        assertTrue("Setup HDMI eligibility: no DPAD support; $evidence", observed.dpad)
+        return observed
+    }
+
+    private fun pressSetupHdmiKey(
+        device: SetupInputDeviceReceipt, ingress: SetupHdmiIngress, keyCode: Int, step: String,
+    ) {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val start = ingress.snapshot().receipts.size
+        val downTime = SystemClock.uptimeMillis()
+        var primary: Throwable? = null
+        try {
+            val down = NativeKeyEvent(downTime, SystemClock.uptimeMillis(), NativeKeyEvent.ACTION_DOWN,
+                keyCode, 0, 0, device.id, 0, 0, InputDevice.SOURCE_HDMI)
+            assertTrue("Setup synthetic HDMI $step: DOWN injection rejected", automation.injectInputEvent(down, true))
+        } catch (error: Throwable) {
+            primary = error
+            throw error
+        } finally {
+            try {
+                val up = NativeKeyEvent(downTime, SystemClock.uptimeMillis(), NativeKeyEvent.ACTION_UP,
+                    keyCode, 0, 0, device.id, 0, 0, InputDevice.SOURCE_HDMI)
+                assertTrue("Setup synthetic HDMI $step: UP injection rejected", automation.injectInputEvent(up, true))
+            } catch (releaseError: Throwable) {
+                if (primary == null) throw releaseError else primary.addSuppressed(releaseError)
+            }
+        }
+        awaitSetupIngress(ingress, start, device, keyCode, downTime, step)
+    }
+
+    private fun awaitSetupIngress(
+        ingress: SetupHdmiIngress, start: Int, device: SetupInputDeviceReceipt, keyCode: Int, downTime: Long, step: String,
+    ) {
+        val expected = listOf(NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.ACTION_UP).map { action ->
+            SetupHdmiKeyReceipt(device.id, InputDevice.SOURCE_HDMI, action, keyCode, downTime, device)
+        }
+        var observed = SetupIngressSnapshot(emptyList(), null)
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                observed = ingress.snapshot()
+                observed.failure?.let { throw AssertionError("Setup HDMI $step: observer failure; last=$observed", it) }
+                observed.receipts.drop(start) == expected
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("Setup HDMI $step: expected delivered=$expected; last=$observed", timeout)
+        }
+        Log.i("SetupHdmiNavigation", "$step delivered=${observed.receipts.drop(start)}")
+    }
+
+    private fun dismissSetupIme(view: View, field: SemanticsNodeInteraction, step: String) {
+        // Observe this field's actual keyboard before Back; never send a blind app Back.
+        awaitSetupWindow(view, imeVisible = true, step = "$step IME shown")
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        assertTrue("Setup HDMI $step: system IME Back rejected", device.pressBack())
+        awaitSetupWindow(view, imeVisible = false, step = "$step IME dismissed/app ready")
+        awaitSetupFocus(field, "$step focus retained after IME Back")
+    }
+
+    private fun awaitSetupWindow(view: View, imeVisible: Boolean, step: String) {
+        var observed = SetupWindowReceipt(null, false)
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                observed = composeRule.runOnIdle {
+                    SetupWindowReceipt(ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()),
+                        view.hasWindowFocus())
+                }
+                observed.imeVisible == imeVisible && (imeVisible || observed.appWindowFocused)
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("Setup HDMI $step: expected IME=$imeVisible; last=$observed", timeout)
+        }
+        Log.i("SetupHdmiNavigation", "$step window=$observed")
+    }
+
+    private data class SetupInputDeviceReceipt(val id: Int, val virtual: Boolean, val sources: Int, val dpad: Boolean) {
+        companion object {
+            fun from(device: InputDevice): SetupInputDeviceReceipt =
+                SetupInputDeviceReceipt(device.id, device.isVirtual, device.sources, device.supportsSource(InputDevice.SOURCE_DPAD))
+        }
+    }
+
+    private data class SetupHdmiKeyReceipt(
+        val id: Int, val source: Int, val action: Int, val code: Int, val downTime: Long, val device: SetupInputDeviceReceipt?,
+    )
+    private data class SetupIngressSnapshot(val receipts: List<SetupHdmiKeyReceipt>, val failure: Throwable?)
+    private data class SetupWindowReceipt(val imeVisible: Boolean?, val appWindowFocused: Boolean)
+
+    private class SetupHdmiIngress {
+        private val receipts = mutableListOf<SetupHdmiKeyReceipt>()
+        private var failure: Throwable? = null
+
+        fun observe(event: NativeKeyEvent) {
+            synchronized(this) {
+                try {
+                    receipts.add(SetupHdmiKeyReceipt(event.deviceId, event.source, event.action, event.keyCode,
+                        event.downTime, event.device?.let { SetupInputDeviceReceipt.from(it) }))
+                } catch (error: Throwable) {
+                    failure = error
+                }
+            }
+        }
+
+        fun snapshot(): SetupIngressSnapshot = synchronized(this) { SetupIngressSnapshot(receipts.toList(), failure) }
     }
 
     @Test

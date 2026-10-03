@@ -798,11 +798,11 @@ private fun verifyFieldFocus(bitmap: Bitmap, element: ScreenElementSnapshot, den
 private fun inputGlyphFrame(node: SemanticsNode, layout: TextLayoutResult): NativeFrame {
     val modifiers = node.layoutInfo.getModifierInfo()
     val padding = modifiers.single { (it.modifier as? InspectableValue)?.nameFallback == "padding" }
-    val paddingValues = (padding.modifier as InspectableValue).inspectableElements.associate { it.name to it.value }
-    assertEquals("INPUT_REGISTRATION: real source padding", 14.dp, paddingValues.getValue("all"))
+    val appliedPadding = (padding.modifier as InspectableValue).valueOverride as Dp
+    assertEquals("INPUT_REGISTRATION: real source padding", 14.dp, appliedPadding)
     val border = modifiers.single { (it.modifier as? InspectableValue)?.nameFallback == "border" }
     val outer = nativeFrame(border.coordinates)
-    val inset = 14f * node.layoutInfo.density.density
+    val inset = appliedPadding.value * node.layoutInfo.density.density
     assertEquals("INPUT_REGISTRATION: unscaled", 1f, outer.scaleX, 0.001f)
     assertTrue("INPUT_REGISTRATION: unexpected horizontal scrolling", layout.size.width <= outer.local.width - 2f * inset + 0.5f)
     assertEquals("INPUT_REGISTRATION: native text height/viewport", outer.local.height - 2f * inset, layout.size.height.toFloat(), 0.5f)
