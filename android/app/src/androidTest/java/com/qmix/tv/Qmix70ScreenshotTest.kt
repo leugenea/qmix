@@ -155,7 +155,8 @@ class Qmix70ScreenshotTest {
         var observed = Float.NaN
         try {
             composeRule.waitUntil(timeoutMillis = 5_000) {
-                observed = composeRule.runOnIdle { nativeFrame(button.fetchSemanticsNode().layoutInfo.coordinates).scaleX }
+                val node = button.fetchSemanticsNode()
+                observed = composeRule.runOnIdle { nativeFrame(node.layoutInfo.coordinates).scaleX }
                 abs(observed - expected) <= 0.001f
             }
         } catch (error: ComposeTimeoutException) {
@@ -182,8 +183,8 @@ class Qmix70ScreenshotTest {
         val backend = textSnapshot(composeRule.onNodeWithText(backendLabel, useUnmergedTree = true), backendLabel)
         val text = textSnapshot(composeRule.onNodeWithText(buttonLabel, useUnmergedTree = true), buttonLabel)
         val keyDown = keyReceipt()
+        val node = button.fetchSemanticsNode()
         return composeRule.runOnIdle {
-            val node = button.fetchSemanticsNode()
             val info = node.layoutInfo
             val border = info.getModifierInfo().single { (it.modifier as? InspectableValue)?.nameFallback == "border" }
             val borderValues = (border.modifier as InspectableValue).inspectableElements.associate { it.name to it.value }
@@ -210,8 +211,8 @@ class Qmix70ScreenshotTest {
         val layouts = mutableListOf<TextLayoutResult>()
         var accepted = false
         node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> accepted = action(layouts) }
+        val semantics = node.fetchSemanticsNode()
         return composeRule.runOnIdle {
-            val semantics = node.fetchSemanticsNode()
             NativeTextSnapshot(layouts.single(), nativeFrame(semantics.layoutInfo.coordinates), semantics.boundsInRoot, expectedText, accepted)
         }
     }
@@ -398,7 +399,16 @@ private fun verifyStraightEdge(outline: Outline.Rounded, frame: NativeFrame) {
     assertTrue("NATIVE_ROUNDING: sample right of straight top edge", x <= shape.right - shape.topRightCornerRadius.x)
 }
 
-private fun glyphEvidence(bitmap: Bitmap, text: NativeTextSnapshot, active: Boolean): NativeGlyphEvidence {
+private data class TransformedGlyphEvidence(
+    val glyph: NativeGlyphEvidence, val matchingBackgroundEdges: Int, val topBackgroundEdges: Int, val bottomBackgroundEdges: Int,
+) {
+    val background: Color get() = glyph.background
+    fun json(): JSONObject = glyph.json().put("matchingBackgroundEdgeSamples", matchingBackgroundEdges)
+        .put("topBackgroundEdgeSamples", topBackgroundEdges).put("bottomBackgroundEdgeSamples", bottomBackgroundEdges)
+        .put("totalBackgroundEdgeSamples", topBackgroundEdges + bottomBackgroundEdges)
+}
+
+private fun glyphEvidence(bitmap: Bitmap, text: NativeTextSnapshot, active: Boolean): TransformedGlyphEvidence {
     val layout = text.layout
     assertTrue("NATIVE_LAYOUT: semantics action rejected", text.actionAccepted)
     assertEquals("NATIVE_LAYOUT: wrong native Text", text.expectedText, layout.layoutInput.text.text)
@@ -417,11 +427,28 @@ private fun glyphEvidence(bitmap: Bitmap, text: NativeTextSnapshot, active: Bool
         if (text.frame.local.contains(local)) bitmap.color(left + x, top + y) else null
     }
     val background = Color(samples.groupingBy { it.toArgb() }.eachCount().maxBy { it.value }.key)
+    // Use the first and last physical pixel-center rows inside the transformed Text frame.
+    // As in the retained tracer, these edge rows must predominantly be background.
+    val firstRow = ceil(bounds.top - 0.5f).toInt()
+    val lastRow = ceil(bounds.bottom - 0.5f).toInt() - 1
+    assertTrue("NATIVE_BACKGROUND: no transformed top/bottom rows", firstRow <= lastRow)
+    fun edgeSamples(row: Int): List<Color> = pixelSamples(width, 1) { x, _ ->
+        val screen = Offset(left + x + 0.5f, row + 0.5f)
+        val local = text.frame.toLocal(screen)
+        if (text.frame.local.contains(local)) bitmap.color(left + x, row) else null
+    }
+    val topEdges = edgeSamples(firstRow)
+    val bottomEdges = edgeSamples(lastRow)
+    assertTrue("NATIVE_BACKGROUND: missing transformed nonglyph edge samples", topEdges.isNotEmpty() && bottomEdges.isNotEmpty())
+    val edges = topEdges + bottomEdges
+    val matchingEdges = edges.count { colorDistance(it, background) <= 2f / 255f }
+    assertTrue("NATIVE_BACKGROUND: nonuniform Text-local edges $matchingEdges/${edges.size}", matchingEdges >= edges.size * 0.9)
     val glyphs = pixelSamples(width, height) { x, y ->
         val local = text.frame.toLocal(Offset(left + x + 0.5f, top + y + 0.5f))
         if (boxes.any { it.contains(local) }) bitmap.color(left + x, top + y) else null
     }
-    return nativeGlyphEvidence(glyphs, background, layout.layoutInput.style.color, active)
+    return TransformedGlyphEvidence(nativeGlyphEvidence(glyphs, background, layout.layoutInput.style.color, active),
+        matchingEdges, topEdges.size, bottomEdges.size)
 }
 
 private data class NativePaintEvidence(
