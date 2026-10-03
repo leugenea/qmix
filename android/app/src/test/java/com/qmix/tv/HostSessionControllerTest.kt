@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -28,6 +29,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
@@ -45,6 +47,44 @@ import org.robolectric.annotation.Config
 class HostSessionControllerTest {
     private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private var serializedMutation: SerializedTestMutationContext? = null
+    private val observations = mutableListOf<AutoCloseable>()
+
+    private fun HostSessionController.observeForTest(observer: (HostingState) -> Unit): AutoCloseable =
+        collectStatesForTest(observer = observer).also(observations::add)
+
+    private fun HostSessionController.awaitLiveForTest(
+        step: String, predicate: (HostingState.LiveRoom) -> Boolean,
+    ): HostingState.LiveRoom = awaitStateForTest(step) {
+        it is HostingState.LiveRoom && predicate(it)
+    } as HostingState.LiveRoom
+
+    private fun HostSessionController.awaitSetupAfterCleanupForTest(): Boolean {
+        awaitStateForTest("Setup after owned-worker cleanup") { it is HostingState.Setup }
+        return true
+    }
+
+    private fun awaitBoundary(step: String, boundary: CountDownLatch) {
+        assertTrue("$step did not arrive", boundary.await(5, TimeUnit.SECONDS))
+    }
+
+    private fun withHeldCreateResponse(
+        body: String, action: (started: CountDownLatch, release: CountDownLatch) -> Unit,
+    ) {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                check(request.method == "POST") { "unexpected request while holding room creation" }
+                started.countDown()
+                check(release.await(5, TimeUnit.SECONDS)) { "create-response gate timed out" }
+                return MockResponse().setResponseCode(201).setBody(body)
+            }
+        }
+        try { action(started, release) }
+        finally { release.countDown() }
+    }
+
+
     private fun mutationForTest(): QueueMutationContext =
         (serializedMutation ?: SerializedTestMutationContext("host-session-test-mutation")
             .also { serializedMutation = it }).mutationContext
@@ -52,7 +92,16 @@ class HostSessionControllerTest {
     @org.junit.After
     fun cancelQueueScope() {
         queueScope.cancel()
-        serializedMutation?.close()
+        var failure: Throwable? = null
+        for (observation in observations) {
+            try { observation.close() } catch (error: Throwable) {
+                if (failure == null) failure = error else failure.addSuppressed(error)
+            }
+        }
+        try { serializedMutation?.close() } catch (error: Throwable) {
+            if (failure == null) failure = error else failure.addSuppressed(error)
+        }
+        failure?.let { throw it }
     }
 
     private lateinit var server: MockWebServer
@@ -68,19 +117,29 @@ class HostSessionControllerTest {
         server.shutdown()
     }
 
-    /** qmix#181: stop wins over a recovery Job that has reached the worker dispatcher. */
+    /** qmix#312: processed Stop cancels a dispatched recovery before its fetch begins. */
     @Test
+    @OptIn(kotlinx.coroutines.InternalCoroutinesApi::class)
     fun stop_start_stop_cancels_queued_recovery_without_reopening_commands() {
         server.enqueue(MockResponse().setResponseCode(201)
             .setBody("""{"code":"ABCD","host_token":"fixture","url":"/r/ABCD"}"""))
         val repository = RecordingRoomRepository()
-        val recoveryTasks = LinkedBlockingQueue<Runnable>()
+        data class QueuedRecovery(
+            val runnable: Runnable, val cancelled: CountDownLatch, val completed: CountDownLatch,
+        )
+        val recoveryTasks = LinkedBlockingQueue<QueuedRecovery>()
         val recoveryDispatcher = object : CoroutineDispatcher() {
             private var released = false
             override fun dispatch(context: CoroutineContext, block: Runnable) {
                 synchronized(recoveryTasks) {
                     if (!released) {
-                        recoveryTasks.add(block)
+                        val cancelled = CountDownLatch(1)
+                        requireNotNull(context[Job]).invokeOnCompletion(
+                            onCancelling = true, invokeImmediately = true,
+                        ) { cause -> if (cause != null) cancelled.countDown() }
+                        val completed = CountDownLatch(1)
+                        requireNotNull(context[Job]).invokeOnCompletion { completed.countDown() }
+                        recoveryTasks.add(QueuedRecovery(block, cancelled, completed))
                         return
                     }
                 }
@@ -91,16 +150,16 @@ class HostSessionControllerTest {
                     released = true
                     buildList { while (true) add(recoveryTasks.poll() ?: break) }
                 }
-                pending.forEach(Runnable::run)
+                pending.forEach { it.runnable.run() }
             }
-        }
-        fun awaitRecovery() = checkNotNull(recoveryTasks.poll(5, TimeUnit.SECONDS)) {
-            "recovery was not queued"
         }
         val initial = RoomState("ABCD", null,
             listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
         val fetches = AtomicInteger()
+        val recoveryEntered = CountDownLatch(1)
+        val finishRecovery = CompletableDeferred<Unit>()
         val commands = AtomicInteger()
+        val commandEntered = CountDownLatch(1)
         Executors.newSingleThreadExecutor().asCoroutineDispatcher().use { mutationDispatcher ->
             val controller = HostSessionController(
                 OkHttpClient(), initialBackendUrl = server.url("/").toString(),
@@ -110,52 +169,61 @@ class HostSessionControllerTest {
                 foregroundRecoveryContext = recoveryDispatcher,
                 foregroundReconcilerFactory = { { _: String ->
                     fetches.incrementAndGet()
+                    recoveryEntered.countDown()
+                    finishRecovery.await()
                     RoomFetchResult.Success(initial)
                 } },
                 queueMutationContext = QueueMutationContext(mutationDispatcher),
-                primaryActionHandler = { commands.incrementAndGet(); Unit },
+                primaryActionHandler = { commands.incrementAndGet(); commandEntered.countDown() },
             )
             try {
-                assertTrue(controller.createRoom())
-                controller.awaitCreatedForTest()
+                controller.createRoom()
+                controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation }
+                repository.awaitInvitationCollection()
                 controller.enterRoom()
                 repository.awaitCollection()
-                repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
-                runBlocking { withTimeout(5_000) { controller.states.first { state ->
-                    (state as? HostingState.LiveRoom)?.synchronization ==
-                        RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED)
-                } } }
+                val sync = RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED)
+                repository.publish(sync)
+                controller.awaitLiveForTest("initial authoritative queue") { it.synchronization == sync }
                 controller.onHostStopped()
                 controller.onHostStarted()
-                val cancelledRecovery = awaitRecovery()
+                val cancelledRecovery = checkNotNull(recoveryTasks.poll(5, TimeUnit.SECONDS)) {
+                    "foreground recovery worker was not dispatched"
+                }
                 controller.onHostStopped()
-                cancelledRecovery.run()
-                // Only the first recovery is deliberately parked. Let all later resumptions
-                // run normally, including the success continuation needed by owner teardown.
+                // Offers do not cancel synchronously. Wait for Stop's actual Job cancellation,
+                // then resume that cancelled dispatch so Stop can finish its full-worker join.
+                awaitBoundary("queued recovery Job cancellation", cancelledRecovery.cancelled)
+                cancelledRecovery.runnable.run()
+                awaitBoundary("cancelled recovery worker completed", cancelledRecovery.completed)
+                assertEquals("cancelled recovery fetched", 0, fetches.get())
                 recoveryDispatcher.release()
                 controller.onStartOrNext()
-                assertEquals("cancelled recovery fetched", 0, fetches.get())
+                controller.onHostStarted()
+                // The next genuine recovery entry is FIFO after the stopped command.
+                awaitBoundary("next foreground recovery fetch", recoveryEntered)
+                assertEquals("only the next genuine recovery fetched", 1, fetches.get())
                 assertEquals("command admitted while stopped", 0, commands.get())
                 assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
 
-                controller.onHostStarted()
-                runBlocking { withTimeout(5_000) { controller.states.first { state ->
-                    state is HostingState.LiveRoom && !state.foregroundRecoveryPending
-                } } }
+                finishRecovery.complete(Unit)
+                controller.awaitLiveForTest("successful fresh recovery") { !it.foregroundRecoveryPending }
                 assertEquals("foreground recovery fetches", 1, fetches.get())
                 controller.onStartOrNext()
+                awaitBoundary("command after successful recovery", commandEntered)
                 assertEquals("command admitted after recovery", 1, commands.get())
             } finally {
-                controller.endRoom()
+                finishRecovery.complete(Unit)
                 recoveryDispatcher.release()
-                controller.awaitSetupForTest()
+                controller.endRoom()
+                controller.awaitSetupAfterCleanupForTest()
             }
         }
     }
 
     @Test
     fun playback_callbacks_are_safe_without_an_active_coordinator() {
-        val controller = HostSessionController(OkHttpClient())
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(), httpClient = OkHttpClient())
 
         controller.onPlayPause()
         controller.onPlay()
@@ -164,7 +232,12 @@ class HostSessionControllerTest {
         controller.onSeekBy(10_000)
         controller.onRetryCurrent()
 
-        assertTrue(controller.awaitSetupForTest())
+        // This real settings publication is FIFO after all out-of-session callbacks.
+        controller.updateSettings("https://backend.example", "https://guest.example")
+        assertEquals(HostingState.Setup("https://backend.example", "https://guest.example"),
+            controller.awaitStateForTest("callbacks leave setup editable") {
+                it == HostingState.Setup("https://backend.example", "https://guest.example")
+            })
     }
 
     @Test
@@ -172,9 +245,11 @@ class HostSessionControllerTest {
         val sink = RecordingLogSink()
         val logger = QMixLogger(sink, QMixLogLevel.DEBUG) { null }
             .component(QMixLogComponent.APP_HOST_SESSION)
-        val controller = HostSessionController(OkHttpClient())
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(), httpClient = OkHttpClient())
 
-        controller.collectStatesForTest { throw IllegalStateException("host_token=do-not-log") }
+        observations += controller.collectStatesForTest(isolateFailures = true) {
+            throw IllegalStateException("host_token=do-not-log")
+        }
 
         assertTrue(sink.records.isEmpty())
         assertFalse(sink.records.toString().contains("do-not-log"))
@@ -188,21 +263,22 @@ class HostSessionControllerTest {
         )
         val persistence = RecordingEndpointPersistence()
         val backend = server.url("/").toString()
-        val controller = HostSessionController(
-            OkHttpClient(),
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(),
+            httpClient = OkHttpClient(),
 
             settingsPersistence = persistence,
         )
         controller.updateSettings(backend, "https://guest.example")
 
-        assertTrue(controller.createRoom())
+        controller.createRoom()
+        controller.awaitStateForTest("HTTP warning before traffic") { it is HostingState.HttpWarning }
         assertEquals(
             HostingState.HttpWarning(backend.trimEnd('/'), "https://guest.example"),
             controller.state,
         )
         assertEquals(0, server.requestCount)
-        assertTrue(controller.confirmHttpWarning())
-        controller.awaitCreatedForTest()
+        controller.confirmHttpWarning()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
 
         assertTrue(persistence.warningAcknowledged)
         assertEquals(1, server.requestCount)
@@ -212,8 +288,8 @@ class HostSessionControllerTest {
         )
         assertTrue(controller.state is HostingState.Invitation)
 
-        val restored = HostSessionController(
-            OkHttpClient(),
+        val restored = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(),
+            httpClient = OkHttpClient(),
 
             settingsPersistence = persistence,
         )
@@ -226,15 +302,15 @@ class HostSessionControllerTest {
     @Test
     fun https_creation_skips_warning_and_failed_creation_does_not_persist() {
         val persistence = RecordingEndpointPersistence()
-        val controller = HostSessionController(
-            OkHttpClient(),
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(),
+            httpClient = OkHttpClient(),
 
             settingsPersistence = persistence,
         )
         controller.updateSettings("https://127.0.0.1:1/", "https://guest.example/")
 
-        assertTrue(controller.createRoom())
-        controller.awaitCreatedForTest()
+        controller.createRoom()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
 
         assertTrue(controller.state is HostingState.Error)
         assertFalse(persistence.warningAcknowledged)
@@ -249,19 +325,23 @@ class HostSessionControllerTest {
         )
         val persistence = RecordingEndpointPersistence().apply { failAcknowledgementAfterMutation = true }
         val backend = server.url("/").toString()
-        val controller = HostSessionController(
-            OkHttpClient(),
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(),
+            httpClient = OkHttpClient(),
 
             settingsPersistence = persistence,
         )
         controller.updateSettings(backend, "https://guest.example")
-        assertTrue(controller.createRoom())
+        controller.createRoom()
 
-        assertFalse(controller.confirmHttpWarning())
+        controller.confirmHttpWarning()
+        controller.awaitStateForTest("failed durable acknowledgement") {
+            it is HostingState.Error && it.message == UserMessage.PERSISTENCE_ERROR
+        }
         assertTrue(persistence.warningAcknowledged)
         assertEquals(0, server.requestCount)
 
-        assertTrue(controller.createRoom())
+        controller.createRoom()
+        controller.awaitStateForTest("quarantined acknowledgement reprompts") { it is HostingState.HttpWarning }
         assertEquals(
             HostingState.HttpWarning(backend.trimEnd('/'), "https://guest.example"),
             controller.state,
@@ -269,8 +349,8 @@ class HostSessionControllerTest {
         assertEquals(0, server.requestCount)
 
         persistence.failAcknowledgementAfterMutation = false
-        assertTrue(controller.confirmHttpWarning())
-        controller.awaitCreatedForTest()
+        controller.confirmHttpWarning()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
         assertEquals(1, server.requestCount)
         assertTrue(controller.state is HostingState.Invitation)
     }
@@ -293,10 +373,11 @@ class HostSessionControllerTest {
             },
         )
         controller.updateSettings(backend, "https://guest.example")
-        assertTrue(controller.createRoom())
+        controller.createRoom()
+        controller.awaitStateForTest("warning awaiting durable confirmation") { it is HostingState.HttpWarning }
 
         val confirmationThread = Executors.newSingleThreadExecutor()
-        val confirmation = confirmationThread.submit<Boolean> { controller.confirmHttpWarning() }
+        val confirmation = confirmationThread.submit<Unit> { controller.confirmHttpWarning() }
         lateinit var cancellation: Thread
         try {
             assertTrue(persistence.acknowledgementStarted.await(5, TimeUnit.SECONDS))
@@ -308,13 +389,16 @@ class HostSessionControllerTest {
                 cancellationFinished.countDown()
             }.apply { start() }
             assertTrue(cancellationStarted.await(5, TimeUnit.SECONDS))
-            assertEquals(1L, cancellationFinished.count)
+            awaitBoundary("CancelWarning offer returns while confirmation runs", cancellationFinished)
+            assertFalse(persistence.warningAcknowledged)
+            assertEquals(0, server.requestCount)
+            assertTrue(controller.state is HostingState.HttpWarning)
 
             persistence.allowAcknowledgement.countDown()
 
-            assertTrue(confirmation.get(5, TimeUnit.SECONDS))
+            confirmation.get(5, TimeUnit.SECONDS)
             assertTrue(cancellationFinished.await(5, TimeUnit.SECONDS))
-            controller.awaitCreatedForTest()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
             assertTrue(persistence.warningAcknowledged)
             assertEquals(1, server.requestCount)
             assertTrue(controller.state is HostingState.Invitation)
@@ -341,23 +425,25 @@ class HostSessionControllerTest {
 
         try {
             val store = EndpointSettingsStore(context)
-            val controller = HostSessionController(
-                OkHttpClient(),
+            val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(),
+                httpClient = OkHttpClient(),
 
                 settingsPersistence = store,
             )
             controller.updateSettings(backend, guestOrigin)
 
-            assertTrue(controller.createRoom())
+            controller.createRoom()
+            controller.awaitStateForTest("real-store HTTP warning") { it is HostingState.HttpWarning }
             assertTrue(controller.state is HostingState.HttpWarning)
             assertEquals(0, server.requestCount)
             controller.cancelHttpWarning()
+            controller.awaitStateForTest("real-store warning cancellation") { it is HostingState.Setup }
             assertFalse(EndpointSettingsStore(context).isHttpWarningAcknowledged())
             assertEquals(0, server.requestCount)
 
-            assertTrue(controller.createRoom())
-            assertTrue(controller.confirmHttpWarning())
-        controller.awaitCreatedForTest()
+            controller.createRoom()
+            controller.confirmHttpWarning()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
             assertEquals(1, server.requestCount)
             assertEquals(
                 mapOf(
@@ -376,16 +462,16 @@ class HostSessionControllerTest {
                     .setBody("""{"code":"EFGH","host_token":"another-host-token","url":"/r/EFGH"}"""),
             )
             val restoredStates = mutableListOf<HostingState>()
-            val restored = HostSessionController(
-                OkHttpClient(),
+            val restored = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(),
+                httpClient = OkHttpClient(),
 
                 settingsPersistence = EndpointSettingsStore(context),
             )
-            restored.collectStatesForTest(restoredStates::add)
+            restored.observeForTest(restoredStates::add)
             assertEquals(HostingState.Setup(canonicalBackend, guestOrigin), restored.state)
 
-            assertTrue(restored.createRoom())
-            restored.awaitCreatedForTest()
+            restored.createRoom()
+            restored.awaitStateForTest("restored creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
 
             assertEquals(2, server.requestCount)
             assertTrue(restored.state is HostingState.Invitation)
@@ -412,18 +498,18 @@ class HostSessionControllerTest {
             },
             acknowledgementCommit = android.content.SharedPreferences.Editor::commit,
         )
-        val controller = HostSessionController(
-            OkHttpClient(),
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(),
+            httpClient = OkHttpClient(),
 
             settingsPersistence = failingStore,
         )
         val states = mutableListOf<HostingState>()
-        controller.collectStatesForTest(states::add)
+        controller.observeForTest(states::add)
 
         try {
             controller.updateSettings(server.url("/").toString(), "https://guest.example")
-            assertTrue(controller.createRoom())
-            controller.awaitCreatedForTest()
+            controller.createRoom()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
 
             assertEquals(1, server.requestCount)
             assertEquals(UserMessage.PERSISTENCE_ERROR, (controller.state as HostingState.Error).message)
@@ -431,8 +517,8 @@ class HostSessionControllerTest {
             assertEquals(EndpointSettings.EMPTY, failingStore.load())
             assertEquals(
                 HostingState.Setup("", ""),
-                HostSessionController(
-                    OkHttpClient(),
+                HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(),
+                    httpClient = OkHttpClient(),
 
                     settingsPersistence = EndpointSettingsStore(context),
                 ).state,
@@ -447,11 +533,13 @@ class HostSessionControllerTest {
     fun warning_can_be_cancelled_without_acknowledgement_or_network_access() {
         val persistence = RecordingEndpointPersistence()
         val backend = server.url("/").toString()
-        val controller = HostSessionController(OkHttpClient(), settingsPersistence = persistence)
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(), httpClient = OkHttpClient(), settingsPersistence = persistence)
         controller.updateSettings(backend, "http://192.168.1.20:8180")
         controller.createRoom()
+        controller.awaitStateForTest("warning before cancellation") { it is HostingState.HttpWarning }
 
         controller.cancelHttpWarning()
+        controller.awaitStateForTest("cancelled warning returns canonical setup") { it is HostingState.Setup }
 
         assertEquals(
             HostingState.Setup(backend.trimEnd('/'), "http://192.168.1.20:8180"),
@@ -463,13 +551,14 @@ class HostSessionControllerTest {
 
     @Test
     fun credential_bearing_endpoint_is_rejected_without_retaining_secret_in_error_state() {
-        val controller = HostSessionController(OkHttpClient())
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(), httpClient = OkHttpClient())
         controller.updateSettings(
             "https://user:host-secret@api.example?host_token=host-secret",
             "https://guest.example",
         )
 
-        assertFalse(controller.createRoom())
+        controller.createRoom()
+        controller.awaitStateForTest("credential-bearing endpoint rejected") { it is HostingState.Error }
 
         assertEquals(
             HostingState.Error(UserMessage.INVALID_ENDPOINT, "", ""),
@@ -480,59 +569,54 @@ class HostSessionControllerTest {
 
     @Test
     fun repeated_create_while_pending_sends_exactly_one_post() {
-        server.enqueue(
-            MockResponse()
-                .setBodyDelay(150, TimeUnit.MILLISECONDS)
-                .setResponseCode(201)
-                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
-        )
-        val controller = HostSessionController(OkHttpClient())
-        controller.updateSettings(server.url("/").toString(), "https://guest.example")
-        val completed = CountDownLatch(1)
-        controller.collectStatesForTest { if (it is HostingState.Invitation) completed.countDown() }
-
-        assertTrue(controller.createRoom())
-        assertFalse(controller.createRoom())
-
-        assertTrue(completed.await(5, TimeUnit.SECONDS))
-        assertEquals(1, server.requestCount)
-        assertEquals(
-            HostingState.Invitation(GuestInvite("ABCD", "https://guest.example/r/ABCD")),
-            controller.state,
-        )
-        assertFalse(controller.state.toString().contains("host-secret"))
+        withHeldCreateResponse("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""") { started, release ->
+            val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(), httpClient = OkHttpClient())
+            controller.updateSettings(server.url("/").toString(), "https://guest.example")
+            controller.createRoom()
+            controller.awaitStateForTest("first create is pending") { it is HostingState.Pending }
+            awaitBoundary("first room POST", started)
+            controller.createRoom()
+            // The duplicate offer precedes the worker result, and Pending rejects it.
+            release.countDown()
+            controller.awaitStateForTest("single room creation completed") { it is HostingState.Invitation }
+            assertEquals(1, server.requestCount)
+            assertEquals(
+                HostingState.Invitation(GuestInvite("ABCD", "https://guest.example/r/ABCD")), controller.state,
+            )
+            assertFalse(controller.state.toString().contains("host-secret"))
+        }
     }
 
     @Test
     fun settings_changes_during_pending_cannot_reenable_create() {
-        server.enqueue(
-            MockResponse().setBodyDelay(150, TimeUnit.MILLISECONDS).setResponseCode(201)
-                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
-        )
-        val controller = HostSessionController(OkHttpClient())
-        controller.updateSettings(server.url("/").toString(), "https://guest.example")
-
-        assertTrue(controller.createRoom())
-        controller.updateSettings("https://other.example", "https://other.example")
-        assertFalse(controller.createRoom())
-
-        server.takeRequest(5, TimeUnit.SECONDS)
-        Thread.sleep(250)
-        assertEquals(1, server.requestCount)
+        withHeldCreateResponse("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""") { started, release ->
+            val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(), httpClient = OkHttpClient())
+            controller.updateSettings(server.url("/").toString(), "https://guest.example")
+            controller.createRoom()
+            controller.awaitStateForTest("create remains pending") { it is HostingState.Pending }
+            awaitBoundary("original room POST", started)
+            controller.updateSettings("https://other.example", "https://other.example")
+            controller.createRoom()
+            release.countDown()
+            controller.awaitStateForTest("pending create keeps original endpoints") { it is HostingState.Invitation }
+            assertEquals(1, server.requestCount)
+            assertEquals(GuestInvite("ABCD", "https://guest.example/r/ABCD"),
+                (controller.state as HostingState.Invitation).invite)
+        }
     }
 
     @Test
     fun lost_create_response_is_not_retried_automatically() {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
-        val controller = HostSessionController(OkHttpClient())
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(), httpClient = OkHttpClient())
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val failed = CountDownLatch(1)
-        controller.collectStatesForTest { if (it is HostingState.Error) failed.countDown() }
+        controller.observeForTest { if (it is HostingState.Error) failed.countDown() }
 
-        assertTrue(controller.createRoom())
+        controller.createRoom()
 
         assertTrue(failed.await(5, TimeUnit.SECONDS))
-        Thread.sleep(200)
+        controller.awaitStateForTest("failed create worker fully settled") { it is HostingState.Error }
         assertEquals(1, server.requestCount)
         assertEquals(
             UserMessage.SERVER_UNREACHABLE,
@@ -546,15 +630,16 @@ class HostSessionControllerTest {
             MockResponse().setResponseCode(201)
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
         )
-        val controller = HostSessionController(OkHttpClient())
+        val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(), httpClient = OkHttpClient())
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val invited = CountDownLatch(1)
-        controller.collectStatesForTest { if (it is HostingState.Invitation) invited.countDown() }
+        controller.observeForTest { if (it is HostingState.Invitation) invited.countDown() }
         controller.createRoom()
         assertTrue(invited.await(5, TimeUnit.SECONDS))
 
-        controller.awaitCreatedForTest()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
         controller.enterRoom()
+        controller.awaitLiveForTest("invitation entered") { true }
 
         assertEquals(
             HostingState.LiveRoom(
@@ -567,25 +652,26 @@ class HostSessionControllerTest {
 
     @Test
     fun ending_a_pending_room_creation_ignores_its_late_response() {
-        server.enqueue(
-            MockResponse().setResponseCode(201)
-                .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""")
-                .setBodyDelay(500, TimeUnit.MILLISECONDS),
-        )
-        val persistence = RecordingEndpointPersistence().apply { warningAcknowledged = true }
-        val controller = HostSessionController(OkHttpClient(), settingsPersistence = persistence)
-        val setup = HostingState.Setup(server.url("/").toString().trimEnd('/'), "https://guest.example")
-        controller.updateSettings(setup.backendUrl, setup.guestOrigin)
-        val invited = CountDownLatch(1)
-        controller.collectStatesForTest { if (it is HostingState.Invitation) invited.countDown() }
-
-        controller.createRoom()
-        server.takeRequest(5, TimeUnit.SECONDS)
-        controller.endRoom()
-
-        assertEquals(false, invited.await(1, TimeUnit.SECONDS))
-        assertEquals(setup, controller.state)
-        assertEquals(null, persistence.saved)
+        withHeldCreateResponse("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}""") { started, release ->
+            val persistence = RecordingEndpointPersistence().apply { warningAcknowledged = true }
+            val controller = HostSessionController(roomCollectionScope = queueScope, queueMutationContext = mutationForTest(), httpClient = OkHttpClient(),
+                settingsPersistence = persistence)
+            val setup = HostingState.Setup(server.url("/").toString().trimEnd('/'), "https://guest.example")
+            controller.updateSettings(setup.backendUrl, setup.guestOrigin)
+            val invited = AtomicBoolean(false)
+            controller.observeForTest { if (it is HostingState.Invitation) invited.set(true) }
+            controller.createRoom()
+            controller.awaitStateForTest("room POST pending before End") { it is HostingState.Pending }
+            awaitBoundary("POST entered before cancellation", started)
+            controller.endRoom()
+            // Setup is a positive full-create-worker cancellation/join boundary, not a timeout
+            // hoping that the delayed response never becomes an invitation.
+            controller.awaitStateForTest("pending creation cancelled and joined") { it == setup }
+            release.countDown()
+            assertFalse(invited.get())
+            assertEquals(setup, controller.state)
+            assertEquals(null, persistence.saved)
+        }
     }
 
     @Test
@@ -619,7 +705,8 @@ class HostSessionControllerTest {
             },
         )
         controller.createRoom()
-        controller.awaitCreatedForTest()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+        repository.awaitInvitationCollection()
         controller.enterRoom()
         val room = RoomState(
             "ABCD",
@@ -628,20 +715,22 @@ class HostSessionControllerTest {
         )
         repository.awaitCollection()
         repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.awaitRoomStateForTest { it.isPrimaryActionEnabled }
+        controller.awaitLiveForTest("primary_action_uses_the_queue_coordinator_and_publishes_pending_state: live publication") { it.isPrimaryActionEnabled }
 
         controller.onStartOrNext()
+        command.awaitCall()
+        controller.awaitLiveForTest("queue command pending") { it.commandPending }
 
         assertEquals(1, command.callbacks.size)
         assertTrue((controller.state as HostingState.LiveRoom).commandPending)
         command.complete(QueueAdvanceCommandResult.Indeterminate)
         reconciler.awaitCall()
         reconciler.complete(RoomFetchResult.Success(room))
-        controller.awaitRoomStateForTest { !it.commandPending }
+        controller.awaitLiveForTest("primary_action_uses_the_queue_coordinator_and_publishes_pending_state: live publication") { !it.commandPending }
         assertFalse((controller.state as HostingState.LiveRoom).commandPending)
     }
 
-    /** qmix#182: the synchronous playback observer must win over the stop's old snapshot. */
+    /** qmix#312: the processed Stop publishes its coordinator's paused playback snapshot. */
     @Test
     fun stopping_a_playing_room_preserves_paused_playback_and_closes_recovery_gate() {
         server.enqueue(MockResponse().setResponseCode(201)
@@ -663,20 +752,25 @@ class HostSessionControllerTest {
             },
         )
         try {
-            assertTrue(controller.createRoom())
-            controller.awaitCreatedForTest()
+            controller.createRoom()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            repository.awaitInvitationCollection()
             controller.enterRoom()
             repository.awaitCollection()
             val room = RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList())
             repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
-            controller.awaitRoomStateForTest { it.synchronization == RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED) }
-            mutationForTest().run { Unit } // The synchronization reducer has finished the playback handoff.
+            controller.awaitLiveForTest("stopping_a_playing_room_preserves_paused_playback_and_closes_recovery_gate: live publication") { it.synchronization == RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED) }
+            engine.awaitPrepared(1)
+            engine.awaitPlayed(1)
             assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
             engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
-            controller.awaitRoomStateForTest { it.playback.status == LocalPlaybackStatus.PLAYING }
+            controller.awaitLiveForTest("stopping_a_playing_room_preserves_paused_playback_and_closes_recovery_gate: live publication") { it.playback.status == LocalPlaybackStatus.PLAYING }
             assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
 
             controller.onHostStopped()
+            controller.awaitLiveForTest("stop pauses playback and closes recovery gate") {
+                it.foregroundRecoveryPending && it.playback.status == LocalPlaybackStatus.PAUSED
+            }
 
             val stopped = controller.state as HostingState.LiveRoom
             assertEquals(1, engine.pauseCount)
@@ -685,6 +779,7 @@ class HostSessionControllerTest {
             assertFalse(stopped.commandPending)
         } finally {
             controller.endRoom()
+            controller.awaitSetupAfterCleanupForTest()
         }
     }
 
@@ -698,6 +793,8 @@ class HostSessionControllerTest {
         val command = RecordingAdvanceCommand()
         val reconciler = RecordingReconciler()
         val engine = HostRecordingPlaybackEngine()
+        val seekEntered = CountDownLatch(1)
+        val releaseSeek = CountDownLatch(1)
         val controller = HostSessionController(
             OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
@@ -724,61 +821,88 @@ class HostSessionControllerTest {
                 )
             },
         )
-        controller.createRoom()
-        controller.awaitCreatedForTest()
-        controller.enterRoom()
-        repository.awaitCollection()
-        val initial = RoomState(
-            "ABCD",
-            CurrentTrack("one", 0, "playing", "One", "Artist"),
-            listOf(QueuedTrack("two", "url", "Two", "Artist", 60, "fixture")),
-        )
-        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.awaitRoomStateForTest { it.synchronization == RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED) }
-        mutationForTest().run { Unit }
+        try {
+            controller.createRoom()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            repository.awaitInvitationCollection()
+            controller.enterRoom()
+            repository.awaitCollection()
+            val initial = RoomState(
+                "ABCD",
+                CurrentTrack("one", 0, "playing", "One", "Artist"),
+                listOf(QueuedTrack("two", "url", "Two", "Artist", 60, "fixture")),
+            )
+            repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+            controller.awaitLiveForTest("returning_to_foreground_requires_its_own_successful_reconciliation_before_commands: live publication") { it.synchronization == RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED) }
+            engine.awaitPrepared(1)
+            engine.awaitPlayed(1)
 
-        controller.onHostStopped()
-        controller.onStartOrNext()
-        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.onHostStarted()
+            repository.awaitDelivery(1)
+            engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY,
+                isPlaying = true, durationMs = 60_000, isSeekable = true))
+            controller.awaitLiveForTest("playing seekable before queued lifecycle events") { it.playback.isSeekable }
+            engine.beforeSeek = {
+                engine.beforeSeek = null
+                seekEntered.countDown()
+                check(releaseSeek.await(5, TimeUnit.SECONDS)) { "seek-call gate timed out" }
+            }
+            controller.onSeekBy(1_000)
+            awaitBoundary("real engine seek holds current handler", seekEntered)
+            controller.onHostStopped()
+            controller.onStartOrNext()
+            repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.STALE, LiveConnection.RECONNECTING))
+            repository.awaitDelivery(2)
+            controller.onHostStarted()
+            releaseSeek.countDown()
+            reconciler.awaitCall()
+            controller.awaitLiveForTest("stop pauses before foreground recovery") {
+                it.foregroundRecoveryPending && it.playback.status == LocalPlaybackStatus.PAUSED
+            }
+            assertEquals(1, engine.pauseCount)
+            assertTrue(command.callbacks.isEmpty())
+            // The old stream offered a tagged result after Stop was queued. Recovery's
+            // real fetch entry proves that FIFO result was handled and rejected.
+            assertEquals(Freshness.FRESH, (controller.roomSyncState as RoomSyncState.Active).freshness)
+            assertEquals(listOf("ABCD"), reconciler.calls)
+            reconciler.complete(RoomFetchResult.Failure)
+            repository.awaitCollection()
+            repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+            reconciler.awaitCall()
+            assertEquals(listOf("ABCD", "ABCD"), reconciler.calls)
+            reconciler.complete(RoomFetchResult.Success(initial.copy(code = "WRONG")))
+            repository.awaitCollection()
+            controller.onStartOrNext()
+            assertTrue(command.callbacks.isEmpty())
+            assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
+            repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+            reconciler.awaitCall()
+            assertEquals(listOf("ABCD", "ABCD", "ABCD"), reconciler.calls)
+            val replacement = initial.copy(current = CurrentTrack("other", 0, "playing", "Other", "Artist"))
+            // Foreground reconciliation is newer than the last stream snapshot. The
+            // restarted collector must replay that authoritative room, not "one".
+            repository.rememberSnapshot(RoomSyncState.Active("ABCD", replacement, Freshness.FRESH, LiveConnection.CONNECTED))
+            reconciler.complete(RoomFetchResult.Success(replacement))
+            // awaitCall only observes fetch entry; the IO-launched Unconfined
+            // recovery may not have reduced the callback yet. The next collection
+            // starts after queue/playback handoff and is the readiness boundary.
+            repository.awaitCollection()
 
-        assertEquals(1, engine.pauseCount)
-        assertTrue(command.callbacks.isEmpty())
-        reconciler.awaitCall()
-        assertEquals(listOf("ABCD"), reconciler.calls)
-        reconciler.complete(RoomFetchResult.Failure)
-        repository.awaitCollection()
-        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
-        reconciler.awaitCall()
-        assertEquals(listOf("ABCD", "ABCD"), reconciler.calls)
-        reconciler.complete(RoomFetchResult.Success(initial.copy(code = "WRONG")))
-        repository.awaitCollection()
-        controller.onStartOrNext()
-        assertTrue(command.callbacks.isEmpty())
-        assertTrue((controller.state as HostingState.LiveRoom).foregroundRecoveryPending)
-        repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
-        reconciler.awaitCall()
-        assertEquals(listOf("ABCD", "ABCD", "ABCD"), reconciler.calls)
-        val replacement = initial.copy(current = CurrentTrack("other", 0, "playing", "Other", "Artist"))
-        // Foreground reconciliation is newer than the last stream snapshot. The
-        // restarted collector must replay that authoritative room, not "one".
-        repository.rememberSnapshot(RoomSyncState.Active("ABCD", replacement, Freshness.FRESH, LiveConnection.CONNECTED))
-        reconciler.complete(RoomFetchResult.Success(replacement))
-        // awaitCall only observes fetch entry; the IO-launched Unconfined
-        // recovery may not have reduced the callback yet. The next collection
-        // starts after queue/playback handoff and is the readiness boundary.
-        repository.awaitCollection()
-
-        repository.publishAt(
-            0,
-            RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED),
-        )
-
-        controller.onStartOrNext()
-        assertEquals(1, command.callbacks.size)
-        assertEquals(listOf("one", "other"), engine.prepared.map(PlaybackMedia::trackId))
-        assertEquals(1, engine.playCount)
-        assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
+            controller.awaitLiveForTest("successful recovery hands off replacement paused") {
+                !it.foregroundRecoveryPending && it.playback.trackId == "other" &&
+                    it.playback.status == LocalPlaybackStatus.PAUSED
+            }
+            controller.onStartOrNext()
+            command.awaitCall()
+            controller.awaitLiveForTest("foreground command pending") { it.commandPending }
+            assertEquals(1, command.callbacks.size)
+            assertEquals(listOf("one", "other"), engine.prepared.map(PlaybackMedia::trackId))
+            assertEquals(1, engine.playCount)
+            assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
+        } finally {
+            releaseSeek.countDown()
+            controller.endRoom()
+            controller.awaitSetupAfterCleanupForTest()
+        }
     }
 
     @Test
@@ -817,7 +941,8 @@ class HostSessionControllerTest {
             },
         )
         controller.createRoom()
-        controller.awaitCreatedForTest()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+        repository.awaitInvitationCollection()
         controller.enterRoom()
         repository.awaitCollection()
         repository.publish(
@@ -828,10 +953,10 @@ class HostSessionControllerTest {
                 LiveConnection.CONNECTED,
             ),
         )
-        controller.awaitRoomStateForTest { it.isPrimaryActionEnabled }
-        mutationForTest().run { Unit }
+        controller.awaitLiveForTest("start_command_followed_by_fresh_selection_starts_local_playback_once: live publication") { it.isPrimaryActionEnabled }
 
         controller.onStartOrNext()
+        command.awaitCall()
         command.complete(QueueAdvanceCommandResult.Success)
         reconciler.awaitCall()
         val selected = RoomState(
@@ -842,8 +967,9 @@ class HostSessionControllerTest {
         reconciler.complete(RoomFetchResult.Success(selected))
         repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
         repository.publish(RoomSyncState.Active("ABCD", selected, Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.awaitRoomStateForTest { it.playback.trackId == "one" }
-        mutationForTest().run { Unit }
+        controller.awaitLiveForTest("start_command_followed_by_fresh_selection_starts_local_playback_once: live publication") { it.playback.trackId == "one" }
+        engine.awaitPrepared(1)
+        engine.awaitPlayed(1)
 
         assertEquals(listOf("one"), engine.prepared.map(PlaybackMedia::trackId))
         assertEquals(1, engine.playCount)
@@ -859,8 +985,12 @@ class HostSessionControllerTest {
                 isSeekable = true,
             ),
         )
+        controller.awaitLiveForTest("engine READY is published as playing") {
+            it.playback.status == LocalPlaybackStatus.PLAYING && it.playback.positionMs == 5_000L
+        }
         assertEquals(LocalPlaybackStatus.PLAYING, (controller.state as HostingState.LiveRoom).playback.status)
         controller.onSeekBy(Long.MIN_VALUE)
+        engine.awaitSeeks(1)
         engine.emit(
             PlaybackState(
                 mediaId = "one",
@@ -871,18 +1001,28 @@ class HostSessionControllerTest {
                 isSeekable = true,
             ),
         )
+        controller.awaitLiveForTest("latest seekable engine position") { it.playback.positionMs == 55_000L }
         controller.onSeekBy(Long.MAX_VALUE)
+        engine.awaitSeeks(2)
         assertEquals(listOf(0L, 60_000L), engine.seeks)
         controller.onPlayPause()
+        engine.awaitPaused(1)
+        controller.awaitLiveForTest("engine.awaitPaused(1) playback publication") { it.playback.status == LocalPlaybackStatus.PAUSED }
         assertEquals(1, engine.pauseCount)
         assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
         controller.onPlayPause()
+        engine.awaitPlayed(2)
+        controller.awaitLiveForTest("engine.awaitPlayed(2) playback publication") { it.playback.status == LocalPlaybackStatus.BUFFERING }
         assertEquals(2, engine.playCount)
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
         controller.pausePlayback()
+        engine.awaitPaused(2)
+        controller.awaitLiveForTest("engine.awaitPaused(2) playback publication") { it.playback.status == LocalPlaybackStatus.PAUSED }
         assertEquals(2, engine.pauseCount)
         assertEquals(LocalPlaybackStatus.PAUSED, (controller.state as HostingState.LiveRoom).playback.status)
         controller.resumePlayback()
+        engine.awaitPlayed(3)
+        controller.awaitLiveForTest("engine.awaitPlayed(3) playback publication") { it.playback.status == LocalPlaybackStatus.BUFFERING }
         assertEquals(3, engine.playCount)
         assertEquals(LocalPlaybackStatus.BUFFERING, (controller.state as HostingState.LiveRoom).playback.status)
 
@@ -893,15 +1033,19 @@ class HostSessionControllerTest {
                 error = PlaybackError(PlaybackErrorKind.NETWORK, "offline"),
             ),
         )
+        controller.awaitLiveForTest("engine error remains visible") { it.playback.status == LocalPlaybackStatus.ERROR }
         val failedPlayback = (controller.state as HostingState.LiveRoom).playback
         controller.onPause()
         controller.onPlay()
         controller.onPlayPause()
+        controller.onStartOrNext()
+        command.awaitCall(2)
         assertEquals(failedPlayback, (controller.state as HostingState.LiveRoom).playback)
         assertEquals(2, engine.pauseCount)
         assertEquals(3, engine.playCount)
         assertEquals(1, engine.prepared.size)
         controller.onStartOrNext()
+        controller.awaitLiveForTest("start_command_followed_by_fresh_selection_starts_local_playback_once: live publication") { it.commandPending }
         assertEquals(2, command.callbacks.size)
         assertEquals(LocalPlaybackStatus.ERROR, (controller.state as HostingState.LiveRoom).playback.status)
 
@@ -909,7 +1053,7 @@ class HostSessionControllerTest {
         repository.publish(
             RoomSyncState.Active("ABCD", staleReplacement, Freshness.STALE, LiveConnection.RECONNECTING),
         )
-        controller.awaitRoomStateForTest { live ->
+        controller.awaitLiveForTest("start_command_followed_by_fresh_selection_starts_local_playback_once: live publication") { live ->
             (live.synchronization as? RoomSyncState.Active)?.let { sync ->
                 sync.freshness == Freshness.STALE && sync.room?.current?.trackId == "two"
             } == true
@@ -923,17 +1067,19 @@ class HostSessionControllerTest {
         reconciler.awaitCall()
         assertEquals(listOf("ABCD", "ABCD"), reconciler.calls)
         reconciler.complete(RoomFetchResult.Success(selected))
-        // Callback completion posts the retry continuation to the mutation lane.
-        // Its prepare/play pair must finish before inspecting the engine or emitting ENDED.
-        mutationForTest().awaitLaneIdleForTest()
+        // Await the real retry prepare/play pair and publication before inspecting ENDED.
+        engine.awaitPrepared(2)
+        engine.awaitPlayed(4)
+        controller.awaitLiveForTest("retry returns to buffering") { it.playback.status == LocalPlaybackStatus.BUFFERING }
         assertEquals(listOf("one", "one"), engine.prepared.map(PlaybackMedia::trackId))
         assertEquals(4, engine.playCount)
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.ENDED))
-        assertEquals(2, command.callbacks.size)
-
         controller.endRoom()
+        // End joins the still-pending second command and the ENDED callback, so the
+        // existing in-flight advance cannot dispatch another POST.
+        assertTrue(controller.awaitSetupAfterCleanupForTest())
+        assertEquals(2, command.callbacks.size)
         assertEquals(3, engine.pauseCount)
-        assertTrue(controller.awaitSetupForTest())
         assertTrue(repository.closed)
     }
 
@@ -953,11 +1099,12 @@ class HostSessionControllerTest {
         )
         controller.updateSettings(server.url("/").toString(), "https://guest.example")
         val invited = CountDownLatch(1)
-        controller.collectStatesForTest { if (it is HostingState.Invitation) invited.countDown() }
+        controller.observeForTest { if (it is HostingState.Invitation) invited.countDown() }
         controller.createRoom()
         assertTrue(invited.await(5, TimeUnit.SECONDS))
 
-        controller.awaitCreatedForTest()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+        repository.awaitInvitationCollection()
         controller.enterRoom()
         val synchronized = RoomSyncState.Active(
             "ABCD",
@@ -967,12 +1114,12 @@ class HostSessionControllerTest {
         )
         repository.awaitCollection()
         repository.publish(synchronized)
-        controller.awaitRoomStateForTest { it.synchronization == synchronized }
+        controller.awaitLiveForTest("room_sync_is_application_session_owned_and_canceled_when_session_ends: live publication") { it.synchronization == synchronized }
 
         assertEquals("ABCD", repository.observedCode)
         assertEquals(synchronized, controller.roomSyncState)
         controller.endRoom()
-        assertTrue(controller.awaitSetupForTest())
+        assertTrue(controller.awaitSetupAfterCleanupForTest())
         assertTrue(repository.closed)
         assertEquals(
             HostingState.Setup(server.url("/").toString().trimEnd('/'), "https://guest.example"),
@@ -990,8 +1137,8 @@ class HostSessionControllerTest {
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
         )
         val repository = FlowRoomRepository()
-        val controller = HostSessionController(
-            OkHttpClient(),
+        val controller = HostSessionController(queueMutationContext = mutationForTest(),
+            httpClient = OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
 
@@ -1000,8 +1147,9 @@ class HostSessionControllerTest {
             roomCollectionContext = Dispatchers.Unconfined,
         )
 
-        assertTrue(controller.createRoom())
-        controller.awaitCreatedForTest()
+        controller.createRoom()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+        repository.awaitSubscription()
         controller.enterRoom()
         repository.awaitSecondSubscription()
         repository.publish(
@@ -1017,8 +1165,8 @@ class HostSessionControllerTest {
         assertEquals(1, repository.cancellations)
         assertEquals(1, repository.activeCollectors)
         controller.endRoom()
-        // endRoom detaches/cancels without joining; Setup follows the entire collector tree.
-        assertTrue(controller.awaitSetupForTest())
+        // End is offered immediately; its handler joins the entire collector tree before Setup.
+        assertTrue(controller.awaitSetupAfterCleanupForTest())
         assertEquals(2, repository.cancellations)
         assertEquals(0, repository.activeCollectors)
     }
@@ -1030,8 +1178,8 @@ class HostSessionControllerTest {
                 .setBody("""{"code":"ABCD","host_token":"host-secret","url":"/r/ABCD"}"""),
         )
         val repository = BlockingCleanupRoomRepository()
-        val controller = HostSessionController(
-            OkHttpClient(),
+        val controller = HostSessionController(queueMutationContext = mutationForTest(),
+            httpClient = OkHttpClient(),
             initialBackendUrl = server.url("/").toString(),
             initialGuestOrigin = "https://guest.example",
 
@@ -1039,13 +1187,13 @@ class HostSessionControllerTest {
             roomCollectionScope = queueScope,
             roomCollectionContext = Dispatchers.IO,
         )
-        assertTrue(controller.createRoom())
-        controller.awaitCreatedForTest()
-        assertTrue(repository.collectionStarted.await(5, TimeUnit.SECONDS))
         val endReturned = CountDownLatch(1)
         val endThread = Executors.newSingleThreadExecutor()
 
         try {
+            controller.createRoom()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            assertTrue(repository.collectionStarted.await(5, TimeUnit.SECONDS))
             endThread.execute {
                 controller.endRoom()
                 endReturned.countDown()
@@ -1056,9 +1204,9 @@ class HostSessionControllerTest {
 
             repository.allowCleanup.countDown()
             assertTrue(endReturned.await(5, TimeUnit.SECONDS))
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
             assertTrue(repository.cleanupCompleted.get())
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
         } finally {
             repository.allowCleanup.countDown()
             endThread.shutdownNow()
@@ -1076,6 +1224,7 @@ class HostSessionControllerTest {
             Thread(task, "host-mutation").apply { isDaemon = true }
         }.asCoroutineDispatcher()
         val sawPending = AtomicBoolean(false)
+        val pendingObserved = CountDownLatch(1)
         val mutation = QueueMutationContext(dispatcher) {
             Thread.currentThread().name.startsWith("host-mutation")
         }
@@ -1095,10 +1244,10 @@ class HostSessionControllerTest {
                     },
                     QueueRoomReconciler { RoomFetchResult.Failure }, { update ->
                         observer(update)
-                        if (update.pending) sawPending.set(true)
+                        if (update.pending) { sawPending.set(true); pendingObserved.countDown() }
                         else if (sawPending.get()) {
                             endedFromCollector.set(true)
-                            assertEquals(LiveRoomBackResult.EXIT_ACTIVITY, controller.onBack())
+                            controller.onBack()
                             teardownCallback.countDown()
                         }
                     },
@@ -1107,14 +1256,17 @@ class HostSessionControllerTest {
         )
         try {
             controller.createRoom()
-            controller.awaitCreatedForTest()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            repository.awaitInvitationCollection()
             controller.enterRoom()
             val room = RoomState("ABCD", null,
                 listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
             repository.awaitCollection()
             repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
-            controller.awaitRoomStateForTest { it.isPrimaryActionEnabled }
+            controller.awaitLiveForTest("rejected_queue_command_can_exit_reentrantly_from_its_callback: live publication") { it.isPrimaryActionEnabled }
             controller.onStartOrNext()
+            controller.awaitLiveForTest("owned queue command pending") { it.commandPending }
+            awaitBoundary("queue observer pending callback", pendingObserved)
             assertTrue("pending state was not observed", sawPending.get())
             // Resume on a daemon so the RED self-join cannot wedge the test JVM.
             val returned = CountDownLatch(1)
@@ -1123,8 +1275,11 @@ class HostSessionControllerTest {
             assertTrue("queue callback joined its own owner", returned.await(3, TimeUnit.SECONDS))
             assertTrue("teardown callback was not reached", teardownCallback.await(5, TimeUnit.SECONDS))
             assertTrue(endedFromCollector.get())
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
         } finally {
+            finishCommand.complete(Unit)
+            controller.endRoom()
+            controller.awaitSetupAfterCleanupForTest()
             dispatcher.close()
         }
     }
@@ -1174,7 +1329,9 @@ class HostSessionControllerTest {
         val queueReady = CountDownLatch(1)
         val teardownReturned = CountDownLatch(1)
         val sawPending = AtomicBoolean(false)
-        val teardownResult = java.util.concurrent.atomic.AtomicReference<LiveRoomBackResult?>()
+        val exitCompleted = CountDownLatch(1)
+        val pendingObserved = CountDownLatch(1)
+        val teardownResult = java.util.concurrent.atomic.AtomicReference<Boolean?>()
         lateinit var controller: HostSessionController
         controller = HostSessionController(
             OkHttpClient(), initialBackendUrl = server.url("/").toString(),
@@ -1190,26 +1347,29 @@ class HostSessionControllerTest {
                     sessionScope, mutation)
             },
         )
-        val observation = controller.collectStatesForTest { state ->
-            val live = state as? HostingState.LiveRoom ?: return@collectStatesForTest
+        val observation = controller.observeForTest { state ->
+            val live = state as? HostingState.LiveRoom ?: return@observeForTest
             if (live.isPrimaryActionEnabled) queueReady.countDown()
             if (live.commandPending) {
                 sawPending.set(true)
+                pendingObserved.countDown()
             } else if (sawPending.get() && callbackReached.count > 0L) {
                 callbackReached.countDown()
-                teardownResult.set(controller.onBack())
+                controller.onBack { teardownResult.set(true); exitCompleted.countDown() }
                 teardownReturned.countDown()
             }
         }
         try {
             controller.createRoom()
-            controller.awaitCreatedForTest()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
             assertTrue("invitation collection did not start", invitationStarted.await(5, TimeUnit.SECONDS))
             controller.enterRoom()
             assertTrue("live collection did not start", collectionStarted.await(5, TimeUnit.SECONDS))
             assertEquals(2, collections.get())
             assertTrue("authoritative queue was not delivered", queueReady.await(5, TimeUnit.SECONDS))
             controller.onStartOrNext()
+            controller.awaitLiveForTest("owned queue command pending") { it.commandPending }
+            awaitBoundary("observer sees owned queue pending", pendingObserved)
             assertTrue("pending state was not observed", sawPending.get())
 
             finishCommand.complete(Unit)
@@ -1217,17 +1377,19 @@ class HostSessionControllerTest {
             assertTrue("owned collection cleanup did not start", cleanupStarted.await(5, TimeUnit.SECONDS))
             assertTrue("reentrant teardown must return before owner cleanup", teardownReturned.await(5, TimeUnit.SECONDS))
             assertTrue(controller.state is HostingState.Ending)
+            assertEquals("Back exit must wait for full owner cleanup", null, teardownResult.get())
 
             allowCleanup.countDown()
             assertTrue("reentrant teardown did not return", teardownReturned.await(5, TimeUnit.SECONDS))
-            assertEquals(LiveRoomBackResult.EXIT_ACTIVITY, teardownResult.get())
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
+            awaitBoundary("Back explicit exit effect after cleanup", exitCompleted)
+            assertEquals(true, teardownResult.get())
             assertTrue("owner cleanup was incomplete at readiness", cleanupCompleted.get())
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
         } finally {
-            observation.close()
             finishCommand.complete(Unit)
             allowCleanup.countDown()
+            observation.close()
             dispatcher.close()
         }
     }
@@ -1264,20 +1426,22 @@ class HostSessionControllerTest {
             },
         )
         controller.createRoom()
-        controller.awaitCreatedForTest()
+        controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+        repository.awaitInvitationCollection()
         controller.enterRoom()
         repository.awaitCollection()
         repository.publish(RoomSyncState.Active("ABCD",
             RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList()),
             Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.awaitRoomStateForTest { it.playback.trackId == "one" }
-        mutationForTest().run { Unit }
+        controller.awaitLiveForTest("conflicted_player_report_can_end_room_reentrantly_from_its_callback: live publication") { it.playback.trackId == "one" }
+        engine.awaitPrepared(1)
+        engine.awaitPlayed(1)
         engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
         val returned = CountDownLatch(1)
         Thread({ finishReport.complete(Unit); returned.countDown() }, "reentrant-report-probe")
             .apply { isDaemon = true }.start()
         assertTrue("player report callback joined its own owner", returned.await(3, TimeUnit.SECONDS))
-        assertTrue(controller.awaitSetupForTest())
+        assertTrue(controller.awaitSetupAfterCleanupForTest())
         assertTrue("teardown callback was not reached", endedFromCallback.get())
     }
 
@@ -1312,28 +1476,29 @@ class HostSessionControllerTest {
                     sessionScope, mutationForTest())
             },
         )
-        controller.createRoom()
-        controller.awaitCreatedForTest()
-        controller.enterRoom()
-        val room = RoomState("ABCD", null,
-            listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
-        repository.awaitCollection()
-        repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.awaitRoomStateForTest { it.isPrimaryActionEnabled }
-        controller.onStartOrNext()
-        assertTrue(started.await(5, TimeUnit.SECONDS))
         val returned = CountDownLatch(1)
         val endThread = Executors.newSingleThreadExecutor()
         try {
+            controller.createRoom()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            repository.awaitInvitationCollection()
+            controller.enterRoom()
+            val room = RoomState("ABCD", null,
+                listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+            repository.awaitCollection()
+            repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+            controller.awaitLiveForTest("ending_room_returns_before_queue_cleanup_but_setup_waits: live publication") { it.isPrimaryActionEnabled }
+            controller.onStartOrNext()
+            assertTrue(started.await(5, TimeUnit.SECONDS))
             endThread.execute { controller.endRoom(); returned.countDown() }
             assertTrue(cleanupStarted.await(5, TimeUnit.SECONDS))
             assertTrue(returned.await(5, TimeUnit.SECONDS))
             assertTrue(controller.state is HostingState.Ending)
             allowCleanup.countDown()
             assertTrue(returned.await(5, TimeUnit.SECONDS))
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
             assertTrue(cleaned.get())
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
         } finally {
             allowCleanup.countDown()
             endThread.shutdownNow()
@@ -1376,29 +1541,31 @@ class HostSessionControllerTest {
                     })
             },
         )
-        controller.createRoom()
-        controller.awaitCreatedForTest()
-        controller.enterRoom()
-        repository.awaitCollection()
-        repository.publish(RoomSyncState.Active("ABCD",
-            RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList()),
-            Freshness.FRESH, LiveConnection.CONNECTED))
-        controller.awaitRoomStateForTest { it.playback.trackId == "one" }
-        mutationForTest().run { Unit }
-        engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
-        assertTrue(reportStarted.await(5, TimeUnit.SECONDS))
         val returned = CountDownLatch(1)
         val endThread = Executors.newSingleThreadExecutor()
         try {
+            controller.createRoom()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            repository.awaitInvitationCollection()
+            controller.enterRoom()
+            repository.awaitCollection()
+            repository.publish(RoomSyncState.Active("ABCD",
+                RoomState("ABCD", CurrentTrack("one", 0, "playing", "One", "Artist"), emptyList()),
+                Freshness.FRESH, LiveConnection.CONNECTED))
+            controller.awaitLiveForTest("ending_room_returns_before_report_cleanup_but_setup_waits: live publication") { it.playback.trackId == "one" }
+            engine.awaitPrepared(1)
+            engine.awaitPlayed(1)
+            engine.emit(PlaybackState(mediaId = "one", status = PlaybackStatus.READY, isPlaying = true))
+            assertTrue(reportStarted.await(5, TimeUnit.SECONDS))
             endThread.execute { controller.endRoom(); returned.countDown() }
             assertTrue(cleanupStarted.await(5, TimeUnit.SECONDS))
             assertTrue(returned.await(5, TimeUnit.SECONDS))
             assertTrue(controller.state is HostingState.Ending)
             allowCleanup.countDown()
             assertTrue(returned.await(5, TimeUnit.SECONDS))
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
             assertTrue(cleaned.get())
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
         } finally {
             allowCleanup.countDown()
             endThread.shutdownNow()
@@ -1426,17 +1593,17 @@ class HostSessionControllerTest {
                 Thread.currentThread().name == "stop-mutation"
             },
         )
-        assertTrue(controller.createRoom())
-        controller.awaitCreatedForTest()
-        assertTrue("invitation collection did not start", repository.invitationStarted.await(5, TimeUnit.SECONDS))
-        controller.enterRoom()
-        assertTrue("live collection did not start", repository.collectionStarted.await(5, TimeUnit.SECONDS))
-        assertEquals(2, repository.collections.get())
         val begin = CountDownLatch(1)
         val returned = CountDownLatch(2)
         val callers = Executors.newFixedThreadPool(2)
 
         try {
+            controller.createRoom()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            assertTrue("invitation collection did not start", repository.invitationStarted.await(5, TimeUnit.SECONDS))
+            controller.enterRoom()
+            assertTrue("live collection did not start", repository.collectionStarted.await(5, TimeUnit.SECONDS))
+            assertEquals(2, repository.collections.get())
             repeat(2) {
                 callers.execute {
                     begin.await()
@@ -1477,7 +1644,7 @@ class HostSessionControllerTest {
             queueMutationContext = mutationForTest(),
         )
         val ended = CountDownLatch(1)
-        val observation = controller.collectStatesForTest { state ->
+        val observation = controller.observeForTest { state ->
             val sync = (state as? HostingState.LiveRoom)?.synchronization as? RoomSyncState.Active
             if (sync?.freshness == Freshness.FRESH) {
                 controller.endRoom()
@@ -1485,8 +1652,9 @@ class HostSessionControllerTest {
             }
         }
         try {
-            assertTrue(controller.createRoom())
-            controller.awaitCreatedForTest()
+            controller.createRoom()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            repository.awaitSubscription()
             controller.enterRoom()
             repository.awaitSecondSubscription()
 
@@ -1500,14 +1668,14 @@ class HostSessionControllerTest {
             )
 
             assertTrue(ended.await(5, TimeUnit.SECONDS))
-            // endRoom returns at Ending; Setup is published only after the collection Job joins.
-            assertTrue(controller.awaitSetupForTest())
+            // End only offers an event; Setup is published after its handler joins the collection Job.
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
             assertEquals(2, repository.cancellations)
             assertEquals(0, repository.activeCollectors)
         } finally {
             observation.close()
             if (controller.state !is HostingState.Setup) controller.endRoom()
-            controller.awaitSetupForTest()
+            controller.awaitSetupAfterCleanupForTest()
         }
     }
 
@@ -1556,13 +1724,13 @@ class HostSessionControllerTest {
         )
         try {
             controller.createRoom()
-            controller.awaitCreatedForTest()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
             controller.enterRoom()
             assertTrue("room flow did not start", collecting.await(5, TimeUnit.SECONDS))
             assertTrue("nested playback callback was not reached: state=${controller.state}",
                 entered.await(5, TimeUnit.SECONDS))
             assertTrue("nested callback joined the collecting Job", ended.await(5, TimeUnit.SECONDS))
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
         } finally {
             dispatcher.close()
         }
@@ -1617,16 +1785,19 @@ class HostSessionControllerTest {
             },
         )
         val caller = Executors.newSingleThreadExecutor()
-        val observation = controller.collectStatesForTest { state ->
-            if (state is HostingState.Setup) setupPublished.countDown()
+        val observation = controller.observeForTest { state ->
+            if (state is HostingState.Setup && cleanupCompleted.get()) setupPublished.countDown()
         }
         try {
             controller.createRoom()
-            controller.awaitCreatedForTest()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            repository.awaitInvitationCollection()
             controller.enterRoom()
             val room = RoomState("ABCD", null,
                 listOf(QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")))
+            repository.awaitCollection()
             repository.publish(RoomSyncState.Active("ABCD", room, Freshness.FRESH, LiveConnection.CONNECTED))
+            controller.awaitLiveForTest("authoritative queue before owned command") { it.isPrimaryActionEnabled }
             controller.onStartOrNext()
             assertTrue("owned queue command did not start", commandStarted.await(5, TimeUnit.SECONDS))
 
@@ -1635,18 +1806,24 @@ class HostSessionControllerTest {
             assertTrue("owned cleanup did not start", cleanupStarted.await(5, TimeUnit.SECONDS))
             assertTrue("endRoom must return before owned cleanup", endReturned.await(5, TimeUnit.SECONDS))
             assertTrue("onHostStopped must return before owned cleanup", stopReturned.await(5, TimeUnit.SECONDS))
-            assertTrue(controller.state is HostingState.Ending)
+            // End offered by the coordinator cannot preempt Stop, which is joining
+            // the foreground command's cleanup before it can handle the queued End.
+            val stopped = controller.state as HostingState.LiveRoom
+            assertTrue(stopped.foregroundRecoveryPending)
+            assertFalse(stopped.commandPending)
+            assertFalse(cleanupCompleted.get())
+            assertEquals(1L, setupPublished.count)
 
             allowCleanup.countDown()
             assertTrue("reentrant endRoom did not return", endReturned.await(5, TimeUnit.SECONDS))
             assertTrue("onHostStopped did not return", stopReturned.await(5, TimeUnit.SECONDS))
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
             assertTrue("owned cleanup was incomplete at readiness", cleanupCompleted.get())
             assertTrue("Setup was not published after cleanup", setupPublished.await(5, TimeUnit.SECONDS))
-            assertTrue("stale LiveRoom published after Setup", controller.awaitSetupForTest())
+            assertTrue("stale LiveRoom published after Setup", controller.awaitSetupAfterCleanupForTest())
         } finally {
-            observation.close()
             allowCleanup.countDown()
+            observation.close()
             caller.shutdownNow()
             dispatcher.close()
         }
@@ -1704,14 +1881,15 @@ class HostSessionControllerTest {
                     })
             },
         )
-        val observation = controller.collectStatesForTest { state ->
+        val observation = controller.observeForTest { state ->
             if ((state as? HostingState.LiveRoom)?.isPrimaryActionEnabled == true) queueReady.countDown()
         }
         try {
             controller.createRoom()
-            controller.awaitCreatedForTest()
+            controller.awaitStateForTest("creation worker result") { it is HostingState.Invitation || it is HostingState.Error }
+            repository.awaitInvitationCollection()
             controller.enterRoom()
-            assertTrue("room collection did not start", repository.collectionStarted.await(5, TimeUnit.SECONDS))
+            repository.awaitCollection()
             val queued = QueuedTrack("one", "https://example/one", "One", "", 1, "fixture")
             repository.publish(RoomSyncState.Active("ABCD", RoomState("ABCD", null, listOf(queued)),
                 Freshness.FRESH, LiveConnection.CONNECTED))
@@ -1729,12 +1907,12 @@ class HostSessionControllerTest {
 
             allowCleanup.countDown()
             assertTrue("reentrant endRoom did not return", endReturned.await(5, TimeUnit.SECONDS))
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
             assertTrue("sibling cleanup was incomplete at readiness", cleanupCompleted.get())
-            assertTrue(controller.awaitSetupForTest())
+            assertTrue(controller.awaitSetupAfterCleanupForTest())
         } finally {
-            observation.close()
             allowCleanup.countDown()
+            observation.close()
             dispatcher.close()
         }
     }
@@ -1791,15 +1969,35 @@ class HostSessionControllerTest {
         var pauseCount = 0
         val seeks = mutableListOf<Long>()
         private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
+        private val completedCalls = MutableStateFlow(0)
+
+        private fun awaitCall(step: String, predicate: () -> Boolean) {
+            try {
+                runBlocking { withTimeout(5_000) { completedCalls.first { predicate() } } }
+            } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                throw AssertionError("$step: engine call did not arrive", error)
+            }
+        }
+        fun awaitPrepared(count: Int) = awaitCall("prepare #$count") { prepared.size >= count }
+        fun awaitPlayed(count: Int) = awaitCall("play #$count") { playCount >= count }
+        fun awaitPaused(count: Int) = awaitCall("pause #$count") { pauseCount >= count }
+        fun awaitSeeks(count: Int) = awaitCall("seek #$count") { seeks.size >= count }
+
 
         override fun prepare(media: PlaybackMedia) {
             prepared += media
             state = PlaybackState(mediaId = media.trackId, status = PlaybackStatus.BUFFERING)
             listeners.toList().forEach { it(state) }
+            completedCalls.value++
         }
-        override fun play() { playCount++ }
-        override fun pause() { pauseCount++ }
-        override fun seekTo(positionMs: Long) { seeks += positionMs }
+        override fun play() { playCount++; completedCalls.value++ }
+        override fun pause() { pauseCount++; completedCalls.value++ }
+        var beforeSeek: (() -> Unit)? = null
+        override fun seekTo(positionMs: Long) {
+            beforeSeek?.invoke()
+            seeks += positionMs
+            completedCalls.value++
+        }
         override fun release() = Unit
         override fun addListener(listener: (PlaybackState) -> Unit) { listeners += listener }
         override fun removeListener(listener: (PlaybackState) -> Unit) { listeners -= listener }
@@ -1812,6 +2010,11 @@ class HostSessionControllerTest {
 
     private class RecordingAdvanceCommand : TestQueueCommand {
         val callbacks = mutableListOf<(QueueAdvanceCommandResult) -> Unit>()
+        private val entered = LinkedBlockingQueue<Int>()
+
+        fun awaitCall(expected: Int = 1) {
+            assertEquals("queue POST #$expected did not arrive", expected, entered.poll(5, TimeUnit.SECONDS))
+        }
 
         override fun skip(
             roomCode: String,
@@ -1821,6 +2024,7 @@ class HostSessionControllerTest {
             assertEquals("ABCD", roomCode)
             assertEquals("host-secret", hostToken)
             callbacks += callback
+            entered.add(callbacks.size)
         }
 
         fun complete(result: QueueAdvanceCommandResult) {
@@ -1919,27 +2123,54 @@ class HostSessionControllerTest {
     private class RecordingRoomRepository : RoomRepository {
         var observedCode: String? = null
         val collectionStarted = CountDownLatch(1)
-        var closed = false
+        val closed: Boolean get() = activeCollectors.get() == 0 && cancellations.get() == started.value
         private val collectors = mutableListOf<Channel<RoomSyncState>>()
         @Volatile private var lastState: RoomSyncState? = null
-        private val entered = java.util.concurrent.LinkedBlockingQueue<Unit>()
+        private val started = MutableStateFlow(0)
+        private var nextCollection = 2
+        private val activeCollectors = AtomicInteger()
+        private val cancellations = AtomicInteger()
+        private val delivered = MutableStateFlow(0)
+
+        fun awaitInvitationCollection() {
+            try {
+                runBlocking { withTimeout(5_000) { started.first { it >= 1 } } }
+            } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                throw AssertionError("invitation collection did not start", error)
+            }
+        }
+
+        fun awaitDelivery(expected: Int) {
+            try {
+                runBlocking { withTimeout(5_000) { delivered.first { it >= expected } } }
+            } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                throw AssertionError("repository offer #$expected did not reach host inbox", error)
+            }
+        }
 
         fun awaitCollection() {
-            assertEquals(Unit, entered.poll(5, TimeUnit.SECONDS))
+            val expected = nextCollection++
+            try {
+                runBlocking { withTimeout(5_000) { started.first { it >= expected } } }
+            } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                throw AssertionError("room collection #$expected did not start", error)
+            }
         }
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
             observedCode = roomCode
             val states = Channel<RoomSyncState>(Channel.UNLIMITED)
             collectors += states
+            activeCollectors.incrementAndGet()
             lastState?.let(states::trySend)
-            entered.add(Unit)
+            started.value = collectors.size
             collectionStarted.countDown()
             try {
-                for (state in states) emit(state)
+                for (state in states) { emit(state); delivered.value++ }
             } finally {
                 states.close()
-                closed = true
+                activeCollectors.decrementAndGet()
+                cancellations.incrementAndGet()
             }
         }
 
@@ -1952,8 +2183,5 @@ class HostSessionControllerTest {
             collectors.lastOrNull()?.trySend(state)
         }
 
-        fun publishAt(index: Int, state: RoomSyncState) {
-            collectors[index].trySend(state)
-        }
     }
 }

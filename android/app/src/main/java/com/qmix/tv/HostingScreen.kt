@@ -18,7 +18,7 @@ internal fun HostingScreen(
 ) {
     MaterialTheme {
         when (state) {
-            HostingState.Ending -> Unit // Admission remains closed until detached cleanup completes.
+            HostingState.Ending -> Unit // Later host commands stay queued while owned cleanup joins.
             is HostingState.Setup -> SetupScreen(state, false, null, onSettingsChanged, onCreate)
             is HostingState.HttpWarning -> HttpWarningScreen(onConfirmHttpWarning, onCancelHttpWarning)
             is HostingState.Pending -> SetupScreen(
@@ -51,5 +51,5 @@ internal fun HostingScreen(
 private object NoOpLiveRoomHandler : LiveRoomHandler {
     override fun onStartOrNext() = Unit
     override fun onInvite() = Unit
-    override fun onBack(): LiveRoomBackResult = LiveRoomBackResult.IGNORED
+    override fun onBack(onExit: () -> Unit) = Unit
 }

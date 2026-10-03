@@ -44,7 +44,7 @@ class PlayerStatePublisher(
     private class Selection(val trackId: String)
 
     private val sessionJob = SupervisorJob(requireNotNull(parentScope.coroutineContext[Job]))
-    private val scope = CoroutineScope(parentScope.coroutineContext + sessionJob + mutationContext.dispatcher)
+    private val scope = CoroutineScope(parentScope.coroutineContext + sessionJob + mutationContext.coroutineContext)
     private val listener = listener
     private var selection: Selection? = null
     private var latest: PlayerReport? = null
@@ -127,6 +127,8 @@ class PlayerStatePublisher(
         if (latest?.state == PlayerReportState.PLAYING) latest = null
         if (pending?.state == PlayerReportState.PLAYING) pending = null
     }
+
+    internal fun foregroundWorkers(): List<Job> = sessionJob.children.toList()
 
     fun setForeground(active: Boolean): Unit = mutationContext.run {
         if (!sessionJob.isActive || foreground == active) return@run
@@ -221,6 +223,9 @@ class PlayerStatePublisher(
             }
         }
         reportJob = job
+        // Cancellation before posted body-entry skips its finally. Retire the exact
+        // slot only at whole-Job completion, including any owned child cleanup.
+        job.invokeOnCompletion { mutationContext.run { releaseCompletedReport(job) } }
         job.start()
     }
 
@@ -309,7 +314,7 @@ class PlayerStatePublisher(
             mode == expectedMode
 
     private fun releaseCompletedReport(completedJob: Job) {
-        if (reportJob !== completedJob) return
+        if (reportJob !== completedJob || !completedJob.isCompleted) return
         val activeSelection = selection
         val next = pending
         reportJob = null

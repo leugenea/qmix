@@ -18,6 +18,8 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -25,6 +27,65 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlayerStatePublisherTest {
+    @Test
+    fun selection_change_before_posted_report_entry_retires_old_slot_and_reports_new_track() = runTest {
+        val reporter = SuspendedReporter()
+        val publisher = publisher(reporter)
+        try {
+            publisher.selectTrack("old")
+            publisher.update(PlayerReport("old", PlayerReportState.PLAYING, 4), immediate = true)
+            publisher.selectTrack("new")
+            publisher.update(PlayerReport("new", PlayerReportState.PAUSED, 0), immediate = true)
+            runCurrent()
+            assertEquals("cancelled old body never enters; current selection progresses",
+                listOf("new"), reporter.calls.map { it.report.trackId })
+            assertEquals(1, reporter.maxInFlight)
+            reporter.complete(0, PlayerReportResult.ACCEPTED)
+            runCurrent()
+        } finally { publisher.close() }
+    }
+
+    @Test
+    fun ordinary_slot_waits_for_owned_child_cleanup_after_report_body_returns() = runTest {
+        val release = CompletableDeferred<Unit>()
+        val childStarted = CompletableDeferred<Unit>()
+        val calls = mutableListOf<String>()
+        lateinit var predecessor: Job
+        val publisher = PlayerStatePublisher("ABCD", "fixture", { _, _, report ->
+            calls += report.trackId
+            if (report.trackId == "old") {
+                predecessor = requireNotNull(currentCoroutineContext()[Job])
+                CoroutineScope(currentCoroutineContext()).launch {
+                    withContext(NonCancellable) {
+                        childStarted.complete(Unit)
+                        release.await()
+                    }
+                }
+            }
+            PlayerReportResult.ACCEPTED
+        }, backgroundScope, QueueMutationContext(StandardTestDispatcher(testScheduler)) { true }, backgroundScope)
+        try {
+            publisher.selectTrack("old")
+            publisher.update(PlayerReport("old", PlayerReportState.PLAYING, 0), immediate = true)
+            runCurrent()
+            assertTrue(childStarted.isCompleted)
+            assertFalse("body returned but its exact Job still owns cleanup", predecessor.isCompleted)
+            publisher.selectTrack("new")
+            publisher.update(PlayerReport("new", PlayerReportState.PAUSED, 0), immediate = true)
+            runCurrent()
+            assertEquals("new report cannot overtake full predecessor cleanup", listOf("old"), calls)
+            assertFalse(predecessor.isCompleted)
+            release.complete(Unit)
+            runCurrent()
+            assertTrue(predecessor.isCompleted)
+            assertEquals(listOf("old", "new"), calls)
+        } finally {
+            release.complete(Unit)
+            publisher.close()
+            runCurrent()
+        }
+    }
+
     @Test
     fun cadence_coalesces_latest_progress_with_no_more_than_one_report_in_flight() = runTest {
         val reporter = SuspendedReporter()

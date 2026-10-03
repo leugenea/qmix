@@ -262,7 +262,7 @@ class HostingScreenTest {
             override fun onSeekBy(offsetMs: Long) { seeks += offsetMs }
             override fun onRetryCurrent() = Unit
             override fun onInvite() = Unit
-            override fun onBack() = LiveRoomBackResult.IGNORED
+            override fun onBack(onExit: () -> Unit) = Unit
         }
         composeRule.setContent {
             HostingScreen(
@@ -454,7 +454,7 @@ class HostingScreenTest {
             override fun onSeekBy(offsetMs: Long) = Unit
             override fun onRetryCurrent() { retries++ }
             override fun onInvite() = Unit
-            override fun onBack() = LiveRoomBackResult.IGNORED
+            override fun onBack(onExit: () -> Unit) = Unit
         }
         composeRule.setContent {
             HostingScreen(
@@ -658,7 +658,7 @@ class HostingScreenTest {
             override fun onStartOrNext() = error("stale next")
             override fun onInvite() = error("stale invite")
             override fun onNewRoom() { replacements++ }
-            override fun onBack() = LiveRoomBackResult.IGNORED
+            override fun onBack(onExit: () -> Unit) = Unit
         }
         composeRule.setContent {
             HostingScreen(state.value, { _, _ -> }, {}, {}, liveRoomHandler = handler)
@@ -750,7 +750,7 @@ class HostingScreenTest {
         val handler = object : LiveRoomHandler {
             override fun onStartOrNext() { activations++ }
             override fun onInvite() = Unit
-            override fun onBack() = LiveRoomBackResult.IGNORED
+            override fun onBack(onExit: () -> Unit) = Unit
         }
         composeRule.setContent {
             HostingScreen(
@@ -795,11 +795,11 @@ class HostingScreenTest {
             override fun onInvite() {
                 presentation.value = presentation.value.copy(invitationVisible = true)
             }
-            override fun onBack(): LiveRoomBackResult = if (presentation.value.invitationVisible) {
+            override fun onBack(onExit: () -> Unit) = if (presentation.value.invitationVisible) {
                 presentation.value = presentation.value.copy(invitationVisible = false)
-                LiveRoomBackResult.HANDLED
+                Unit
             } else {
-                LiveRoomBackResult.EXIT_ACTIVITY
+                onExit()
             }
         }
         composeRule.setContent {

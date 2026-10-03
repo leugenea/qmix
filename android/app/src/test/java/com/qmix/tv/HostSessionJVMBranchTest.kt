@@ -10,12 +10,13 @@ import org.junit.Test
 /** qmix#217: controller admission and setup branches exercised without Robolectric. */
 class HostSessionJVMBranchTest {
     @Test fun invalid_endpoint_rejects_create_and_clears_untrusted_input() {
-        val controller = HostSessionController(OkHttpClient())
+        val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined), httpClient = OkHttpClient())
         controller.updateSettings("https://user:secret@host.example", "https://guest.example")
-        assertFalse(controller.createRoom())
+        controller.createRoom()
+        controller.awaitStateForTest("invalid endpoint rejected") { it is HostingState.Error }
         assertEquals(HostingState.Error(UserMessage.INVALID_ENDPOINT, "", ""), controller.state)
         assertFalse(controller.state.toString().contains("secret"))
-        assertFalse(controller.confirmHttpWarning())
+        controller.confirmHttpWarning()
         controller.cancelHttpWarning()
         assertEquals(HostingState.Error(UserMessage.INVALID_ENDPOINT, "", ""), controller.state)
         controller.enterRoom()
@@ -30,18 +31,21 @@ class HostSessionJVMBranchTest {
             override fun isHttpWarningAcknowledged() = false
             override fun acknowledgeHttpWarning() { acknowledgements.incrementAndGet() }
         }
-        val controller = HostSessionController(OkHttpClient(), settingsPersistence = persistence)
-        assertTrue(controller.createRoom())
+        val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined), httpClient = OkHttpClient(), settingsPersistence = persistence)
+        controller.createRoom()
+        controller.awaitStateForTest("HTTP warning published") { it is HostingState.HttpWarning }
         assertEquals(HostingState.HttpWarning("http://backend.example", "https://guest.example"), controller.state)
-        assertFalse(controller.createRoom())
+        controller.createRoom()
         controller.enterRoom()
         controller.setCommandPending(true)
-        assertFalse(controller.onPlaybackEnded("unknown"))
+        controller.onPlaybackEnded("unknown")
         controller.cancelHttpWarning()
+        controller.awaitSetupForTest()
         assertEquals(HostingState.Setup("http://backend.example", "https://guest.example"), controller.state)
         assertEquals(0, acknowledgements.get())
-        assertFalse(controller.confirmHttpWarning())
-        assertTrue(controller.createRoom())
+        controller.confirmHttpWarning()
+        controller.createRoom()
+        controller.awaitStateForTest("HTTP warning published") { it is HostingState.HttpWarning }
         assertEquals(HostingState.HttpWarning("http://backend.example", "https://guest.example"), controller.state)
         assertEquals(0, acknowledgements.get())
     }
@@ -59,19 +63,21 @@ class HostSessionJVMBranchTest {
                 throw IllegalStateException("disk unavailable")
             }
         }
-        val controller = HostSessionController(OkHttpClient(), settingsPersistence = persistence)
-        assertTrue(controller.createRoom())
-        assertFalse(controller.confirmHttpWarning())
+        val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined), httpClient = OkHttpClient(), settingsPersistence = persistence)
+        controller.createRoom()
+        controller.confirmHttpWarning()
+        controller.awaitStateForTest("durable warning persistence failed") { it is HostingState.Error }
         assertEquals(HostingState.Error(UserMessage.PERSISTENCE_ERROR, "http://backend.example", "https://guest.example"), controller.state)
-        assertTrue(controller.createRoom())
+        controller.createRoom()
+        controller.awaitStateForTest("HTTP warning published") { it is HostingState.HttpWarning }
         assertEquals(HostingState.HttpWarning("http://backend.example", "https://guest.example"), controller.state)
         assertEquals(1, attempts.get())
     }
 
     @Test fun no_session_actions_leave_setup_unchanged() {
-        val controller = HostSessionController(OkHttpClient())
+        val controller = HostSessionController(queueMutationContext = QueueMutationContext(kotlinx.coroutines.Dispatchers.Unconfined), httpClient = OkHttpClient())
         val initial = controller.state
-        assertFalse(controller.confirmHttpWarning())
+        controller.confirmHttpWarning()
         controller.cancelHttpWarning()
         controller.enterRoom()
         controller.onHostStopped()
@@ -87,9 +93,11 @@ class HostSessionJVMBranchTest {
         controller.pausePlayback()
         controller.resumePlayback()
         controller.retryCurrent()
-        assertFalse(controller.onPlaybackEnded("unknown"))
-        assertEquals(LiveRoomBackResult.IGNORED, controller.onBack())
-        assertEquals(initial, controller.state)
+        controller.onPlaybackEnded("unknown")
+        controller.onBack()
+        controller.updateSettings("https://backend.example", "https://guest.example")
+        controller.awaitStateForTest("ineligible inputs processed before settings") { it is HostingState.Setup && it.backendUrl == "https://backend.example" }
+        assertEquals(HostingState.Setup("https://backend.example", "https://guest.example"), controller.state)
     }
 
     @Test fun removed_last_queue_item_restores_focus_to_the_previous_survivor() {
@@ -135,7 +143,7 @@ class HostSessionJVMBranchTest {
         val handler = object : LiveRoomHandler {
             override fun onStartOrNext() { commands.incrementAndGet() }
             override fun onInvite() { commands.incrementAndGet() }
-            override fun onBack() = LiveRoomBackResult.IGNORED
+            override fun onBack(onExit: () -> Unit) = Unit
         }
         handler.onPlayPause()
         handler.onPlay()
@@ -143,6 +151,6 @@ class HostSessionJVMBranchTest {
         handler.onSeekBy(12_000)
         handler.onRetryCurrent()
         assertEquals(0, commands.get())
-        assertEquals(LiveRoomBackResult.IGNORED, handler.onBack())
+        handler.onBack()
     }
 }

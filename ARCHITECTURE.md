@@ -530,10 +530,15 @@ or 24-hour non-empty lifetime.
   Cancel/join the old observer, reconnect/refresh work, playback, queue commands,
   and reports before activating a replacement; old callbacks must not affect it.
   Missing is a local teardown, not a host `DELETE` of the already missing backend
-  room. Do not create rooms in the background: if the old-worker join completes
-  after Home, defer the replacement POST until foreground return. If Home occurs
-  during a pending replacement POST, finish it without monitoring the new invite;
-  mark foreground recovery pending and check that code once on return. A missing
+  room. Lifecycle decisions now use FIFO processing order (qmix#312): a Stop
+  handled before a replacement decision suppresses background creation. A manual
+  **New room** after processed Stop leaves Missing visible, allowing a new request
+  after Start. A Stop
+  merely offered while Missing is already joining cleanup cannot interrupt that
+  handler or prevent its replacement POST. When that queued Stop is processed,
+  the new room remains recovery-pending and is checked on foreground return.
+  If Home occurs during a pending replacement POST, finish it without monitoring
+  the new invite; mark foreground recovery pending and check that code once on return. A missing
   automatic replacement is not replaced again until a fresh authoritative read
   has confirmed it; show the explicit missing state and **New room** instead.
   Foreground recovery reconciles the old code before enabling commands or
@@ -543,7 +548,10 @@ or 24-hour non-empty lifetime.
   looping `POST /rooms`. Guest clients holding the old code retain their existing
   terminal-event/404 handling.
 - The Android host publishes actual playback through one serialized request
-  pipeline. Immediate transitions supersede queued progress, old-track callbacks
+  pipeline. Ordinary report slots retire
+  only after exact whole-Job completion, including cancellation before posted body
+  entry and owned child cleanup. Immediate transitions supersede queued progress,
+  old-track callbacks
   are excluded by selection-bound Job cancellation, and 409 responses force a
   GET reconciliation without retrying the rejected report. Foreground loss
   while playing, buffering, or paused cancels ordinary reports and sends one
@@ -575,16 +583,57 @@ or 24-hour non-empty lifetime.
   accepted report.
 - State loss on backend restart is acceptable because MVP rooms are ephemeral.
 
-## Future approved host ownership design
+## Sequential Android host ownership (qmix#312)
 
-On October 1, 2026, the owner approved Option B: typed hosting messages, one
-process-owned operation/resource ledger, and one callback-free shared actual
-authority gate. The [approved decision and exact reviewed design](docs/design/host-ownership/README.md)
-preserve the scope, ownership matrices, conditional bounds and static evidence.
-This is **future design**, not current runtime: main at
-`9454d705a2eddc2669c964a552395f1ede35088a` does not implement Option B. Adoption
-requires independently validated implementation boundaries, coherent production
-activation and actual source/runtime acceptance; static review is not that proof.
+`HostSessionController` runs one ordinary coroutine on Android Main. UI,
+Activity lifecycle, coordinator callbacks and IO workers offer typed events to
+an unbounded FIFO `Channel`; only its current handler writes the directly exposed
+`HostingState` StateFlow. The session holds resource handles, credentials, a
+worker operation identity and the lifetime used/replacement flags, not a second
+host presentation state. Independent queue, repository, player and report
+algorithms retain their own domain ownership.
+
+UI command APIs return Unit, not a business acceptance Boolean. Room creation
+and durable HTTP-warning outcomes are published as states. Back dismisses the
+invitation or ends the room when processed, invoking the supplied exit callback
+only for the latter outcome. Playback completion offers a session-tagged event;
+the playback coordinator never depended on its old Boolean result.
+
+Decisions use state at processing time. An observer-offered Stop or End cannot
+preempt the current handler, even during its suspended cleanup. Consequently,
+a Pending observer cannot promise zero POSTs, and a recovery observer's Stop
+does not prevent that recovery handler from finishing coordinator reconciliation.
+Once Stop is processed, playback and queue eligibility are closed, coordinators
+are paused, and the loop joins cancelled monitoring/command/report workers before
+handling the next event. Recovery-pending is published before suspension; that
+first publication is not a receipt that playback has already reached PAUSED.
+Start then performs a genuinely fresh matching GET; a transient or wrong-code
+result does not reopen playback or commands. Monitoring restarts after a failed
+read, on either the invitation or live screen; fresh matching monitored data
+triggers another recovery GET rather than bypassing that read.
+
+Replacement and End publish Ending; foreground loss publishes recovery-pending.
+Cleanup cancels the owned tree and **suspends** in the same loop until it joins,
+leaving Main available for rendering and unrelated work. Later host events wait
+in the inbox rather than passing an admission reservation. Workers and callbacks
+only offer tagged results; they never await a host acknowledgement inside the
+tree being joined. Each coordinator close is isolated so a media-close exception
+cannot skip the other closer or the owned-tree join. The pre-suspension worker
+snapshot covers the coordinators' existing session-owned jobs. The existing
+best-effort final PAUSED report is deliberately process-owned, not a new
+session-owned shutdown worker: local teardown does not join it, and the publisher
+keeps later reports behind its ordering barrier and bounded attempt deadline.
+Session, operation and coordinator-state identities reject obsolete results
+without after-every-callback preemption guards or detached session finalizers.
+An explicit End schedules its application-owned authenticated DELETE
+before joining cancelled session workers; it does not await that DELETE to show
+Setup. A later queued End still waits for the handler already in progress.
+
+This deliberately trades command latency and bounded retention for fewer owners
+and a straightforward control flow: there is no finite inbox/burst guarantee,
+coalescing/service-quanta scheduler, shadow UI authority or universal resource
+ledger. The [retired ownership-design archive](docs/design/host-ownership/README.md)
+is historical evidence, not a future adoption promise or a required protocol.
 
 ## 9. Deployment
 

@@ -19,12 +19,12 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -47,7 +47,15 @@ class MainActivityInstrumentationTest {
 
     @After
     fun cancelRoomScope() {
-        roomScope.cancel()
+        try {
+            kotlinx.coroutines.runBlocking {
+                kotlinx.coroutines.withTimeout(5_000) {
+                    roomScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()
+                }
+            }
+        } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+            throw AssertionError("join native Activity test root: timed out", timeout)
+        }
     }
 
     @Test
@@ -62,6 +70,7 @@ class MainActivityInstrumentationTest {
             val firstController = HostSessionController(
                 OkHttpClient(),
                 settingsPersistence = EndpointSettingsStore(application),
+                roomCollectionScope = roomScope,
             )
             val firstLease = application.installActivityHostSessionProvider { firstController }
             try {
@@ -77,6 +86,7 @@ class MainActivityInstrumentationTest {
             val replacementController = HostSessionController(
                 OkHttpClient(),
                 settingsPersistence = EndpointSettingsStore(application),
+                roomCollectionScope = roomScope,
             )
             val replacementLease = application.installActivityHostSessionProvider { replacementController }
             try {
@@ -113,23 +123,38 @@ class MainActivityInstrumentationTest {
         val lease = application.installActivityHostSessionProvider { controller }
         try {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                assertTrue(controller.createRoom())
-                controller.awaitCreatedForTest()
+                controller.createRoom()
+                controller.awaitCreatedForTest(step = "stopped Activity: invitation published")
                 scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                controller.awaitStateForTest(step = "stopped Activity: invitation marked for foreground recovery") {
+                    (it as? HostingState.Invitation)?.foregroundRecoveryPending == true
+                }
                 controller.enterRoom()
+                controller.awaitStateForTest(step = "stopped Activity: live room published while collector stopped") {
+                    it is HostingState.LiveRoom
+                }
                 assertTrue(controller.state is HostingState.LiveRoom)
                 scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
                 val title = application.getString(R.string.room_title, "ABCD")
-                composeRule.waitUntilAtLeastOneExists(hasText(title), timeoutMillis = 10_000)
+                try {
+                    composeRule.waitUntilAtLeastOneExists(hasText(title), timeoutMillis = 10_000)
+                } catch (timeout: ComposeTimeoutException) {
+                    throw AssertionError("stopped Activity: latest room title not rendered after resume; state=${controller.state}", timeout)
+                }
                 scenario.recreate()
                 scenario.onActivity { activity ->
                     assertTrue((activity.application as QMixApplication).hostSessionForActivity() === controller)
                 }
-                composeRule.waitUntilAtLeastOneExists(hasText(title), timeoutMillis = 10_000)
+                try {
+                    composeRule.waitUntilAtLeastOneExists(hasText(title), timeoutMillis = 10_000)
+                } catch (timeout: ComposeTimeoutException) {
+                    throw AssertionError("recreated Activity: same session room title not rendered; state=${controller.state}", timeout)
+                }
                 assertTrue(controller.state is HostingState.LiveRoom)
             }
         } finally {
             controller.endRoom()
+            controller.awaitSetupForTest(step = "stopped Activity: session teardown joined")
             lease.close()
             server.shutdown()
         }
@@ -155,8 +180,8 @@ class MainActivityInstrumentationTest {
             val application = ApplicationProvider.getApplicationContext<QMixApplication>()
             providerLease = application.installActivityHostSessionProvider { createdController }
 
-            assertTrue(createdController.createRoom())
-            createdController.awaitCreatedForTest()
+            createdController.createRoom()
+            createdController.awaitCreatedForTest(step = "Activity session: invitation published")
             awaitInvitationObservation(repository)
             createdController.enterRoom()
             awaitLiveObservation(repository)
@@ -172,80 +197,87 @@ class MainActivityInstrumentationTest {
                     LiveConnection.CONNECTED,
                 ),
             )
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "media keys: initial current selected")
+            awaitConditionForTest(step = "media keys: initial engine prepare and play completed") {
+                playback.prepared == listOf("current") && playback.playCount == 1
+            }
             playback.emit(playingState())
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PLAYING, "media keys: initial playing callback")
 
             scenario = ActivityScenario.launch(MainActivity::class.java)
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-            device.waitForIdle()
+            awaitUiCondition("media keys: injected onCreate controller bound to Compose") {
+                device.hasObject(By.text("Room ABCD"))
+            }
             assertTrue(
                 "MainActivity did not bind the injected onCreate controller to Compose",
                 device.hasObject(By.text("Room ABCD")),
             )
 
-            scenario.onActivity { activity ->
-                createdController.pausePlayback()
-                assertInitialDownDispatchesOnce(
-                    activity,
-                    KeyEvent.KEYCODE_MEDIA_PLAY,
-                    playback.playCount,
-                ) { playback.playCount }
-                createdController.pausePlayback()
-                assertRepeatDownAndUpAreConsumedWithoutRedispatch(
-                    activity,
-                    KeyEvent.KEYCODE_MEDIA_PLAY,
-                    playback.playCount,
-                ) { playback.playCount }
+            scenario.onActivity { createdController.pausePlayback() }
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PAUSED, "media PLAY: prepare explicit pause")
+            assertInitialDownDispatchesOnce(
+                scenario, createdController, KeyEvent.KEYCODE_MEDIA_PLAY, playback.playCount,
+            ) { playback.playCount }
+            scenario.onActivity { createdController.pausePlayback() }
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PAUSED, "media PLAY: prepare repeat/up check")
+            assertRepeatDownAndUpAreConsumedWithoutRedispatch(
+                scenario, createdController, KeyEvent.KEYCODE_MEDIA_PLAY, playback.playCount,
+            ) { playback.playCount }
 
-                createdController.resumePlayback()
-                playback.emit(playingState())
-                assertInitialDownDispatchesOnce(
-                    activity,
-                    KeyEvent.KEYCODE_MEDIA_PAUSE,
-                    playback.pauseCount,
-                ) { playback.pauseCount }
-                createdController.resumePlayback()
-                playback.emit(playingState())
-                assertRepeatDownAndUpAreConsumedWithoutRedispatch(
-                    activity,
-                    KeyEvent.KEYCODE_MEDIA_PAUSE,
-                    playback.pauseCount,
-                ) { playback.pauseCount }
+            scenario.onActivity { createdController.resumePlayback() }
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "media PAUSE: prepare resume")
+            playback.emit(playingState())
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PLAYING, "media PAUSE: prepare playing callback")
+            assertInitialDownDispatchesOnce(
+                scenario, createdController, KeyEvent.KEYCODE_MEDIA_PAUSE, playback.pauseCount,
+            ) { playback.pauseCount }
+            scenario.onActivity { createdController.resumePlayback() }
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "media PAUSE: prepare repeat/up resume")
+            playback.emit(playingState())
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PLAYING, "media PAUSE: prepare repeat/up playing")
+            assertRepeatDownAndUpAreConsumedWithoutRedispatch(
+                scenario, createdController, KeyEvent.KEYCODE_MEDIA_PAUSE, playback.pauseCount,
+            ) { playback.pauseCount }
 
-                createdController.resumePlayback()
-                playback.emit(playingState())
-                assertInitialDownDispatchesOnce(
-                    activity,
-                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-                    playback.pauseCount,
-                ) { playback.pauseCount }
-                createdController.resumePlayback()
-                playback.emit(playingState())
-                assertRepeatDownAndUpAreConsumedWithoutRedispatch(
-                    activity,
-                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-                    playback.pauseCount,
-                ) { playback.pauseCount }
+            scenario.onActivity { createdController.pausePlayback() }
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PAUSED, "media toggle: prepare explicit pause")
+            scenario.onActivity { createdController.resumePlayback() }
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "media toggle: prepare resume")
+            playback.emit(playingState())
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PLAYING, "media toggle: prepare playing callback")
+            assertInitialDownDispatchesOnce(
+                scenario, createdController, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, playback.pauseCount,
+            ) { playback.pauseCount }
+            scenario.onActivity { createdController.resumePlayback() }
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "media toggle: prepare repeat/up resume")
+            playback.emit(playingState())
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PLAYING, "media toggle: prepare repeat/up playing")
+            assertRepeatDownAndUpAreConsumedWithoutRedispatch(
+                scenario, createdController, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, playback.pauseCount,
+            ) { playback.pauseCount }
 
-                listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT).forEach { keyCode ->
-                    assertDispatchDoesNotControlPlayback(
-                        activity,
-                        KeyEvent(KeyEvent.ACTION_DOWN, keyCode),
-                        playback,
-                    )
-                    assertDispatchDoesNotControlPlayback(
-                        activity,
-                        KeyEvent(KeyEvent.ACTION_UP, keyCode),
-                        playback,
-                    )
-                }
+            listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT).forEach { keyCode ->
+                assertDispatchDoesNotControlPlayback(
+                    scenario, createdController, KeyEvent(KeyEvent.ACTION_DOWN, keyCode), playback,
+                )
+                assertDispatchDoesNotControlPlayback(
+                    scenario, createdController, KeyEvent(KeyEvent.ACTION_UP, keyCode), playback,
+                )
             }
         } finally {
             try {
                 scenario?.close()
             } finally {
                 try {
-                    controller?.endRoom()
+                    controller?.let {
+                        it.endRoom()
+                        // Setup is published only after any admitted session has joined.
+                        if (it.state !is HostingState.Setup) {
+                            it.awaitSetupForTest(step = "Activity cleanup: admitted session teardown joined")
+                        }
+                    }
                 } finally {
                     try {
                         providerLease?.close()
@@ -280,7 +312,7 @@ class MainActivityInstrumentationTest {
             scenario = ActivityScenario.launch(MainActivity::class.java)
             composeRule.waitForIdle()
             assertKeepScreenOn(scenario, false, "initial setup")
-            assertTrue(createdController.createRoom())
+            createdController.createRoom()
             val invitation = createdController.awaitStep("room invitation") {
                 it is HostingState.Invitation || it is HostingState.Error
             }
@@ -327,14 +359,20 @@ class MainActivityInstrumentationTest {
             createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "current track restored")
             assertKeepScreenOn(scenario, true, "current track restored")
             createdController.endRoom()
-            createdController.awaitStep("room teardown") { it !is HostingState.LiveRoom }
+            createdController.awaitSetupForTest(step = "keep screen on: room teardown joined")
             assertKeepScreenOn(scenario, false, "room teardown")
         } finally {
             try {
                 scenario?.close()
             } finally {
                 try {
-                    controller?.endRoom()
+                    controller?.let {
+                        it.endRoom()
+                        // Setup is published only after any admitted session has joined.
+                        if (it.state !is HostingState.Setup) {
+                            it.awaitSetupForTest(step = "Activity cleanup: admitted session teardown joined")
+                        }
+                    }
                 } finally {
                     try {
                         providerLease?.close()
@@ -363,12 +401,20 @@ class MainActivityInstrumentationTest {
     }
 
     private fun awaitInvitationObservation(repository: RecordingRepository) {
-        composeRule.waitUntil(timeoutMillis = 5_000) { repository.observations.get() >= 1 }
+        awaitUiCondition("invitation repository subscription started") { repository.observations.get() >= 1 }
     }
 
     private fun awaitLiveObservation(repository: RecordingRepository) {
         // Wait through the Compose rule so its main-dispatcher effects can run.
-        composeRule.waitUntil(timeoutMillis = 5_000) { repository.observations.get() >= 2 }
+        awaitUiCondition("live room repository subscription started") { repository.observations.get() >= 2 }
+    }
+
+    private fun awaitUiCondition(step: String, predicate: () -> Boolean) {
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) { predicate() }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("$step: UI condition did not become true", timeout)
+        }
     }
 
     private fun RecordingRepository.publishCurrent(current: CurrentTrack?) {
@@ -379,11 +425,7 @@ class MainActivityInstrumentationTest {
 
     private fun HostSessionController.awaitStep(
         step: String, predicate: (HostingState) -> Boolean,
-    ): HostingState = try {
-        awaitStateForTest(predicate)
-    } catch (timeout: TimeoutCancellationException) {
-        throw AssertionError("$step: timed out; last controller state=$state", timeout)
-    }
+    ): HostingState = awaitStateForTest(step = step, predicate = predicate)
 
     private fun HostSessionController.awaitPlaybackStatus(status: LocalPlaybackStatus, step: String) {
         awaitStep("$step: expected local playback $status") {
@@ -419,8 +461,8 @@ class MainActivityInstrumentationTest {
             controller = createdController
             val application = ApplicationProvider.getApplicationContext<QMixApplication>()
             providerLease = application.installActivityHostSessionProvider { createdController }
-            assertTrue(createdController.createRoom())
-            createdController.awaitCreatedForTest()
+            createdController.createRoom()
+            createdController.awaitCreatedForTest(step = "Activity session: invitation published")
             awaitInvitationObservation(repository)
             createdController.enterRoom()
             awaitLiveObservation(repository)
@@ -430,13 +472,26 @@ class MainActivityInstrumentationTest {
                 listOf(QueuedTrack("next", "url", "Next", "Artist", 4, "fixture")),
             )
             repository.publish(RoomSyncState.Active("ABCD", initial, Freshness.FRESH, LiveConnection.CONNECTED))
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.BUFFERING, "Home/return: initial current selected")
+            awaitConditionForTest(step = "Home/return: initial engine prepare and play completed") {
+                playback.prepared == listOf("current") && playback.playCount == 1
+            }
             playback.emit(playingState())
+            createdController.awaitPlaybackStatus(LocalPlaybackStatus.PLAYING, "Home/return: initial playback published")
             scenario = ActivityScenario.launch(MainActivity::class.java)
+            composeRule.waitForIdle()
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val device = UiDevice.getInstance(instrumentation)
 
             device.pressHome()
-            device.waitForIdle()
+            createdController.awaitStateForTest(step = "Home/return: background pause and recovery gate published") {
+                (it as? HostingState.LiveRoom)?.let {
+                    it.foregroundRecoveryPending && it.playback.status == LocalPlaybackStatus.PAUSED
+                } == true
+            }
+            awaitConditionForTest(step = "Home/return: stopped subscription completed and engine paused") {
+                repository.activeObservations.get() == 0 && playback.pauseCount == 1
+            }
             assertEquals(1, playback.pauseCount)
             assertTrue((createdController.state as HostingState.LiveRoom).foregroundRecoveryPending)
 
@@ -458,22 +513,48 @@ class MainActivityInstrumentationTest {
                 device.wait(Until.hasObject(By.text(expectedRoomTitle)), 30_000),
             )
             instrumentation.waitForIdleSync()
+            awaitUiCondition("Home/return: original ActivityScenario resumed") {
+                scenario.state == androidx.lifecycle.Lifecycle.State.RESUMED
+            }
             assertEquals(androidx.lifecycle.Lifecycle.State.RESUMED, scenario.state)
+            awaitConditionForTest(step = "Home/return: original controller foreground fetch reached") { recovery.get() != null }
             assertTrue(recovery.get() != null)
             val replacement = initial.copy(
                 current = CurrentTrack("replacement", 0, "playing", "Replacement", "Artist"),
             )
             checkNotNull(recovery.getAndSet(null))(RoomFetchResult.Success(replacement))
-            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            createdController.awaitStateForTest(step = "Home/return: fresh replacement reconciled without autoplay") {
+                (it as? HostingState.LiveRoom)?.let {
+                    !it.foregroundRecoveryPending && it.playback.trackId == "replacement" &&
+                        it.playback.status == LocalPlaybackStatus.PAUSED
+                } == true
+            }
+            awaitConditionForTest(step = "Home/return: recovered repository subscription started") {
+                repository.observations.get() >= 3 && repository.activeObservations.get() == 1
+            }
 
             assertEquals(listOf("current", "replacement"), playback.prepared)
             assertEquals(1, playback.playCount)
             assertEquals(LocalPlaybackStatus.PAUSED, (createdController.state as HostingState.LiveRoom).playback.status)
         } finally {
-            scenario?.close()
-            controller?.endRoom()
-            providerLease?.close()
-            server.shutdown()
+            try {
+                scenario?.close()
+            } finally {
+                try {
+                    controller?.let {
+                        it.endRoom()
+                        if (it.state !is HostingState.Setup) {
+                            it.awaitSetupForTest(step = "Home/return cleanup: admitted session teardown joined")
+                        }
+                    }
+                } finally {
+                    try {
+                        providerLease?.close()
+                    } finally {
+                        server.shutdown()
+                    }
+                }
+            }
         }
     }
 
@@ -484,7 +565,11 @@ class MainActivityInstrumentationTest {
 
     @OptIn(ExperimentalTestApi::class)
     private fun assertEndpointText(label: String, expected: String) {
-        composeRule.waitUntilAtLeastOneExists(hasContentDescription(label), timeoutMillis = 5_000)
+        try {
+            composeRule.waitUntilAtLeastOneExists(hasContentDescription(label), timeoutMillis = 5_000)
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("restored setup: endpoint field '$label' not rendered; expected=$expected", timeout)
+        }
         composeRule.onNodeWithContentDescription(label)
             .assertTextEquals(expected, includeEditableText = true)
     }
@@ -520,39 +605,74 @@ class MainActivityInstrumentationTest {
     )
 
     private fun assertInitialDownDispatchesOnce(
-        activity: MainActivity,
+        scenario: ActivityScenario<MainActivity>,
+        controller: HostSessionController,
         keyCode: Int,
         before: Int,
         actualActions: () -> Int,
     ) {
-        assertTrue(activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode)))
+        scenario.onActivity { activity ->
+            assertTrue(activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode)))
+        }
+        awaitConditionForTest(step = "media key $keyCode: initial DOWN reached engine") {
+            actualActions() >= before + 1
+        }
+        controller.awaitPlaybackStatus(
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY) LocalPlaybackStatus.BUFFERING else LocalPlaybackStatus.PAUSED,
+            "media key $keyCode: initial DOWN playback published",
+        )
         assertEquals(before + 1, actualActions())
     }
 
     private fun assertRepeatDownAndUpAreConsumedWithoutRedispatch(
-        activity: MainActivity,
+        scenario: ActivityScenario<MainActivity>,
+        controller: HostSessionController,
         keyCode: Int,
         expectedActions: Int,
         actualActions: () -> Int,
     ) {
-        assertTrue(activity.dispatchKeyEvent(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, keyCode, 1)))
+        scenario.onActivity { activity ->
+            assertTrue(activity.dispatchKeyEvent(KeyEvent(0, 0, KeyEvent.ACTION_DOWN, keyCode, 1)))
+            controller.onInvite()
+        }
+        // Opening and dismissing the real invitation are positive FIFO state transitions,
+        // so a wrongly redispatched repeat/UP cannot hide behind a same-Main immediate read.
+        controller.awaitStateForTest(step = "media key $keyCode: invitation opened after repeated DOWN") {
+            (it as? HostingState.LiveRoom)?.invitationVisible == true
+        }
         assertEquals(expectedActions, actualActions())
-        assertTrue(activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode)))
+        scenario.onActivity { activity ->
+            assertTrue(activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode)))
+            controller.onBack { }
+        }
+        controller.awaitStateForTest(step = "media key $keyCode: invitation dismissed after UP") {
+            (it as? HostingState.LiveRoom)?.invitationVisible == false
+        }
         assertEquals(expectedActions, actualActions())
     }
 
     private fun assertDispatchDoesNotControlPlayback(
-        activity: MainActivity,
+        scenario: ActivityScenario<MainActivity>,
+        controller: HostSessionController,
         event: KeyEvent,
         playback: RecordingPlaybackEngine,
     ) {
         val playCount = playback.playCount
         val pauseCount = playback.pauseCount
 
-        activity.dispatchKeyEvent(event)
-
+        scenario.onActivity { activity ->
+            activity.dispatchKeyEvent(event)
+            controller.onInvite()
+        }
+        controller.awaitStateForTest(step = "D-pad ${event.keyCode}/${event.action}: invitation opened after dispatch") {
+            (it as? HostingState.LiveRoom)?.invitationVisible == true
+        }
         assertEquals(playCount, playback.playCount)
         assertEquals(pauseCount, playback.pauseCount)
+        scenario.onActivity { controller.onBack { } }
+        controller.awaitStateForTest(step = "D-pad ${event.keyCode}/${event.action}: invitation dismissed") {
+            (it as? HostingState.LiveRoom)?.invitationVisible == false
+        }
     }
 
     private fun playingState() = PlaybackState(
@@ -566,11 +686,17 @@ class MainActivityInstrumentationTest {
 
     private class RecordingRepository : RoomRepository {
         val observations = java.util.concurrent.atomic.AtomicInteger()
+        val activeObservations = java.util.concurrent.atomic.AtomicInteger()
         private val states = Channel<RoomSyncState>(Channel.UNLIMITED)
 
         override fun observe(roomCode: String): Flow<RoomSyncState> = flow {
-            observations.incrementAndGet()
-            for (state in states) emit(state)
+            activeObservations.incrementAndGet()
+            try {
+                observations.incrementAndGet()
+                for (state in states) emit(state)
+            } finally {
+                activeObservations.decrementAndGet()
+            }
         }
 
         fun publish(state: RoomSyncState) {
@@ -579,12 +705,12 @@ class MainActivityInstrumentationTest {
     }
 
     private class RecordingPlaybackEngine : PlaybackEngine {
-        override var state = PlaybackState()
+        @Volatile override var state = PlaybackState()
             private set
-        var playCount = 0
-        var pauseCount = 0
-        val prepared = mutableListOf<String>()
-        private val listeners = linkedSetOf<(PlaybackState) -> Unit>()
+        @Volatile var playCount = 0
+        @Volatile var pauseCount = 0
+        val prepared = CopyOnWriteArrayList<String>()
+        private val listeners = CopyOnWriteArrayList<(PlaybackState) -> Unit>()
 
         override fun prepare(media: PlaybackMedia) {
             prepared += media.trackId
