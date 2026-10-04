@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791081231891,
+  "lastUpdate": 1791092303749,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2360,6 +2360,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Kotlin erosion",
             "value": 26.921477138938616,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "53da64937f2937c0c9eb6405749b09949633e055",
+          "message": "fix(android): polish live and missing TV presentation (#321)\n\n* fix(android): polish live and missing TV presentation\n\n* test(android): repair native import and repeated invite focus history\n\n* test(android): register scaled text bounds in root coordinates\n\n* docs(android): publish approved native TV presentation gallery",
+          "timestamp": "2026-10-04T08:37:46+03:00",
+          "tree_id": "d86c79c7f0cff9e9a7fc497de77e6d132d9af0a5",
+          "url": "https://github.com/leugenea/qmix/commit/53da64937f2937c0c9eb6405749b09949633e055"
+        },
+        "date": 1791092303110,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.942874200577986,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 26.915899518668198,
             "unit": "%"
           },
           {
