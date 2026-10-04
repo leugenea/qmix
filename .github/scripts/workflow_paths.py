@@ -10,7 +10,8 @@ from erosion import is_in_scope
 ROUTES = ("ci", "android", "live")
 OUTPUTS = (*ROUTES, "erosion", "duplication")
 SHARED_GO_FILES = {"go.mod", "go.sum"}
-CI_ROOT_FILES = {".dockerignore", "Dockerfile", "docker-compose.yml", "Makefile"}
+CI_ROOT_FILES = {".dockerignore", "Dockerfile", "docker-compose.yml", "Makefile",
+                 "LICENSE", "THIRD_PARTY_NOTICES.md"}
 
 
 def classify(paths, root=None):
@@ -53,9 +54,9 @@ def classify(paths, root=None):
             routes.update(("ci", "live"))
         elif path.startswith(("cmd/", "internal/")) or pathlib.PurePosixPath(path).suffix == ".go":
             routes.add("ci")
-        if path in CI_ROOT_FILES or path.startswith(".github/scripts/"):
+        if path in CI_ROOT_FILES or path.startswith((".github/scripts/", "third_party/licenses/")):
             routes.add("ci")
-        if path.startswith(".github/scripts/generate_sbom"):
+        if path.startswith((".github/scripts/generate_sbom", ".github/scripts/release_payload")):
             routes.add("android")
         if path == ".github/workflows/ci.yml":
             routes.update(("ci", "erosion", "duplication"))

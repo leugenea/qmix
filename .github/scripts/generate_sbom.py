@@ -9,6 +9,7 @@ numbers, sorts every set, and runs Gradle with strict dependency verification.
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -150,9 +151,9 @@ def validate_bom(bom):
         raise ValueError("dependency graph must mention every component")
 
 
-def _run(command, cwd=ROOT):
+def _run(command, cwd=ROOT, env=None):
     completed = subprocess.run(
-        command, cwd=cwd, check=True, text=True, stdout=subprocess.PIPE
+        command, cwd=cwd, env=env, check=True, text=True, stdout=subprocess.PIPE
     )
     return completed.stdout
 
@@ -197,19 +198,36 @@ def _go_ref(path, version):
     return f"pkg:golang/{escaped_path}@{escaped_version}"
 
 
-def generate_go(output):
-    version = json.loads(
+def _go_targets(target_inventory, info):
+    if target_inventory is None:
+        return [(name, target, artifact, "type=binary", None)
+                for name, target, artifact in GO_TARGETS]
+    import release_payload
+    records = release_payload.validate_inventory(
+        release_payload.read_json(target_inventory), target_inventory.parent, info
+    )
+    # Validation precedes filtering: malformed non-Go records cannot disappear.
+    return [(item["component"], "./cmd/" + item["component"],
+             target_inventory.parent / item["filename"],
+             f'arch={item["arch"]}&os={item["os"]}&type=binary',
+             os.environ | {"GOOS": item["os"], "GOARCH": item["arch"], "CGO_ENABLED": "0"})
+            for item in records if (item["component"], item["os"], item["arch"]) in release_payload.TARGETS]
+
+
+def generate_go(output, target_inventory=None):
+    info = json.loads(
         _run(["go", "run", "./internal/buildinfo/cmd/version", "-format=json"])
-    )["version"]
+    )
+    version = info["version"]
     roots = []
     modules = {}
     root_modules = {}
 
-    for name, target, artifact in GO_TARGETS:
-        root = _artifact_component(name, version, artifact, "type=binary")
+    for name, target, artifact, qualifier, env in _go_targets(target_inventory, info):
+        root = _artifact_component(name, version, artifact, qualifier)
         roots.append(root)
         used = set()
-        listing = _run(["go", "list", "-deps", "-json", target])
+        listing = _run(["go", "list", "-deps", "-json", target], env=env)
         for package in _json_stream(listing):
             module = package.get("Module")
             if not module or module.get("Main"):
@@ -364,6 +382,7 @@ def main(argv=None):
     subparsers = parser.add_subparsers(dest="command", required=True)
     go_parser = subparsers.add_parser("go")
     go_parser.add_argument("--output", type=pathlib.Path, required=True)
+    go_parser.add_argument("--target-inventory", type=pathlib.Path)
     android_parser = subparsers.add_parser("android")
     android_parser.add_argument("--output", type=pathlib.Path, required=True)
     android_parser.add_argument("--apk", type=pathlib.Path, required=True)
@@ -372,7 +391,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.command == "go":
-        generate_go(args.output.resolve())
+        target_inventory = args.target_inventory.resolve() if args.target_inventory else None
+        generate_go(args.output.resolve(), target_inventory)
     elif args.command == "android":
         generate_android(args.output.resolve(), args.apk.resolve())
     else:
