@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791140642891,
+  "lastUpdate": 1791145234985,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2581,6 +2581,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Kotlin CCN > 10",
             "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0cc3f1eb8bfb1902ac8e2fae7fba729ef53cc9f0",
+          "message": "refactor(android): separate player report completion phases (#338)",
+          "timestamp": "2026-10-04T23:20:03+03:00",
+          "tree_id": "3ad339f8a5e36ea82f0d4db6d95f6e075d150cd6",
+          "url": "https://github.com/leugenea/qmix/commit/0cc3f1eb8bfb1902ac8e2fae7fba729ef53cc9f0"
+        },
+        "date": 1791145233956,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 20.11020892504966,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 10,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 23.106935251536786,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 10,
             "unit": "functions"
           },
           {
