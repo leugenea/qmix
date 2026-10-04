@@ -80,7 +80,7 @@ the resulting fields to `versionName`/`versionCode`.
 Issue #67 must attach both deterministic CycloneDX 1.6 inventories alongside
 the distributed artifacts:
 
-- `dist/sbom/qmix-go.cdx.json` covers the three shipped Go binaries, their
+- `dist/sbom/qmix-go.cdx.json` defaults to the three host-built Go binaries, their
   SHA-256 hashes, and the selected runtime module graph;
 - `dist/sbom/qmix-android.cdx.json` covers the unsigned release APK, its SHA-256
   hash, and the resolved `releaseRuntimeClasspath` graph.
@@ -96,6 +96,74 @@ tree, dependency state, and artifact bytes produce byte-identical SBOMs.
 Generated files are ignored and must not be committed. Distribute the license
 texts under `third_party/licenses/` with release artifacts, and update
 `THIRD_PARTY_NOTICES.md` whenever shipped runtime dependencies change.
+
+## Offline release payload (qmix#322)
+
+The offline helper requires a clean, single-release-tag checkout and consumes
+only the existing calculator. It does not create tags, sign, publish, or change
+registry state. Its output directory must be outside the source tree (hosted
+CI uses `RUNNER_TEMP`), or inside ignored `bin/`.
+
+```bash
+work=$(mktemp -d)
+python3 .github/scripts/release_payload.py build-go --output "$work/go"
+python3 .github/scripts/generate_sbom.py go \
+  --target-inventory "$work/go/go-inventory.json" --output "$work/go.cdx.json"
+make sbom-android
+python3 .github/scripts/release_payload.py package \
+  --go-inventory "$work/go/go-inventory.json" \
+  --apk android/app/build/outputs/apk/release/app-release-unsigned.apk \
+  --go-bom "$work/go.cdx.json" --android-bom dist/sbom/qmix-android.cdx.json \
+  --aapt "$ANDROID_HOME/build-tools/35.0.0/aapt" --output "$work/payload"
+(cd "$work/payload" && sha256sum -c SHA256SUMS)
+```
+
+The Go matrix is exactly twelve binaries: `qmix` for Linux amd64/arm64;
+`token-vk` and `token-ym` each for Linux amd64/arm64, Darwin amd64/arm64 and
+Windows amd64. Windows names end in `.exe`. Builds use `CGO_ENABLED=0`,
+`-mod=readonly`, `-buildvcs=true`, the calculator's exact ldflags and an empty
+linker build ID. `-trimpath` is deliberately not used: Go's embedded build
+settings must retain the ldflags for static identity verification. No claim of
+hermetic, cross-host byte-identical rebuilds is made.
+
+The schema-1 inventory binds the shared calculator identity and each artifact's
+component, version, commit, OS, architecture, producer source basename,
+final filename, positive byte size, SHA-256 and verification method. Consumers
+read final files by `filename`; `sourceArtifact` is provenance, not a path to
+follow. All records are validated before any Go-only filtering; missing,
+duplicate, unexpected, conflicting or malformed records fail closed.
+Cross-target SBOM roots use `arch=...&os=...&type=binary` qualifiers and each
+runtime graph is resolved with that target's `GOOS`, `GOARCH` and disabled CGO.
+Without `--target-inventory`, existing host SBOM generation is unchanged.
+
+The complete intermediate directory contains sixteen inventoried objects,
+`qmix-inventory-VERSION-any-any.json` and `SHA256SUMS` (eighteen files total).
+Target names contain component/version/OS/arch. SBOMs, the inventory and the
+license/notices archive use explicit `any-any`; fixed `SHA256SUMS` is the
+owner-approved sole naming exception. Checksums cover all seventeen other
+files, including the inventory; the inventory does not hash itself. The license
+archive preserves the six existing project/notices/license paths with fixed
+ordering, ownership, permissions and timestamps. Packaging identical inputs
+and bytes produces identical output bytes; nothing is published.
+
+`qmix-android-unsigned-VERSION-android-any.apk` and
+`qmix-android-unsigned-sbom-VERSION-any-any.cdx.json` are **unsigned
+intermediates**, never signed distribution substitutes. The helper accepts only
+`app-release-unsigned.apk`, checks `com.qmix.tv` and calculator versionName/code
+with pinned SDK `aapt`, and rejects debuggable or signed bytes. Issue #323 owns
+signing, final signed-APK SBOM regeneration through the existing `--apk` input,
+final inventory/checksums and publication; none is implemented here.
+
+Unprivileged hosted `release-payload` jobs use isolated, locally tagged RC and
+stable fixture clones of the exact tested source SHA, strict unsigned Gradle
+release builds, schema validation and repeated packaging comparisons. They
+retain `go-version-m+header` static evidence in the inventory. Five native runner
+platforms execute the exact downloaded Go bytes with `--version` and produce
+hash-bound receipts covering all twelve targets, not host-only replacements.
+Both producers and native checks feed the unchanged `CI result` context;
+existing Android build/lint/JVM/native coverage and quality gates remain intact.
+`make test-release-payload` exercises the focused offline contract tests without
+building Go/Android or accessing credentials.
 
 Docker accepts the required build args `VERSION`, `COMMIT`, `DIRTY`, and
 `ANDROID_VERSION_CODE`, embeds them in the binary, and verifies it during the

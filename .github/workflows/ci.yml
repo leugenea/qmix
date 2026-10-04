@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ci: ${{ steps.paths.outputs.ci }}
+      android: ${{ steps.paths.outputs.android }}
       erosion: ${{ steps.paths.outputs.erosion }}
       duplication: ${{ steps.paths.outputs.duplication }}
     steps:
@@ -70,7 +71,7 @@ jobs:
             --require-hashes --no-deps -r .github/requirements-lizard.txt
           echo "$RUNNER_TEMP/erosion-policy-venv/bin" >> "$GITHUB_PATH"
       - name: Repository policy and routing tests
-        run: make test-workflow-routing test-public-readiness test-sbom test-actionlint test-cyrillic check-cyrillic
+        run: make test-workflow-routing test-public-readiness test-sbom test-release-payload test-actionlint test-cyrillic check-cyrillic
 
   ci:
     needs: route
@@ -705,10 +706,146 @@ jobs:
         run: |
           docker image inspect qmix:ci --format 'image size: {{.Size}} bytes'
 
+  # qmix#322: offline RC/stable fixtures, never a release event or publisher.
+  release-payload:
+    needs: route
+    if: needs.route.outputs.ci == 'true' || needs.route.outputs.android == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['0.1.0-rc.1', '0.1.0']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - name: Install existing pinned Android SDK
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Build complete offline payload from a clean fixture
+        env:
+          FIXTURE_VERSION: ${{ matrix.version }}
+        run: |
+          sha=$(git rev-parse --verify --end-of-options 'HEAD^{commit}')
+          git clone --no-local --no-tags "$GITHUB_WORKSPACE" "$RUNNER_TEMP/release-source"
+          cd "$RUNNER_TEMP/release-source" || exit 1
+          git checkout --detach "$sha"
+          # Local-only tags in an isolated hosted fixture; never push them.
+          git tag "v$FIXTURE_VERSION" "$sha"
+          python .github/scripts/release_payload.py build-go --output "$RUNNER_TEMP/go-payload"
+          python .github/scripts/generate_sbom.py go \
+            --target-inventory "$RUNNER_TEMP/go-payload/go-inventory.json" \
+            --output "$RUNNER_TEMP/go.cdx.json"
+          (cd android && ./gradlew --no-daemon --dependency-verification=strict :app:assembleRelease)
+          apk="$RUNNER_TEMP/release-source/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          python .github/scripts/generate_sbom.py android --apk "$apk" --output "$RUNNER_TEMP/android.cdx.json"
+          .github/scripts/validate_sbom_schema.sh "$RUNNER_TEMP/go.cdx.json" "$RUNNER_TEMP/android.cdx.json"
+          for destination in offline-payload offline-repeat; do
+            python .github/scripts/release_payload.py package \
+              --go-inventory "$RUNNER_TEMP/go-payload/go-inventory.json" --apk "$apk" \
+              --go-bom "$RUNNER_TEMP/go.cdx.json" --android-bom "$RUNNER_TEMP/android.cdx.json" \
+              --aapt "$ANDROID_HOME/build-tools/35.0.0/aapt" --output "$RUNNER_TEMP/$destination"
+          done
+          diff -r "$RUNNER_TEMP/offline-payload" "$RUNNER_TEMP/offline-repeat"
+          (cd "$RUNNER_TEMP/offline-payload" && sha256sum -c SHA256SUMS)
+          test -z "$(git status --porcelain)"
+      - name: Preserve unpublished payload and source hashes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offline-payload-${{ matrix.version }}
+          path: ${{ runner.temp }}/offline-payload/
+          if-no-files-found: error
+
+  release-native:
+    needs: [route, release-payload]
+    if: needs.route.outputs.ci == 'true' || needs.route.outputs.android == 'true'
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['0.1.0-rc.1', '0.1.0']
+        target:
+          - runner: ubuntu-24.04
+            os: linux
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+          - runner: macos-15-intel
+            os: darwin
+            arch: amd64
+          - runner: macos-15
+            os: darwin
+            arch: arm64
+          - runner: windows-2025
+            os: windows
+            arch: amd64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: offline-payload-${{ matrix.version }}
+          path: ${{ runner.temp }}/offline-payload/
+      - name: Execute the exact distributed native bytes with --version
+        env:
+          FIXTURE_VERSION: ${{ matrix.version }}
+          TARGET_OS: ${{ matrix.target.os }}
+          TARGET_ARCH: ${{ matrix.target.arch }}
+        run: |
+          sha=$(git rev-parse --verify --end-of-options 'HEAD^{commit}')
+          git clone --no-local --no-tags "$GITHUB_WORKSPACE" "$RUNNER_TEMP/native-source"
+          cd "$RUNNER_TEMP/native-source" || exit 1
+          git checkout --detach "$sha"
+          git tag "v$FIXTURE_VERSION" "$sha"
+          python .github/scripts/release_payload.py verify-native \
+            --inventory "$RUNNER_TEMP/offline-payload/qmix-inventory-$FIXTURE_VERSION-any-any.json" \
+            --os "$TARGET_OS" --arch "$TARGET_ARCH" --receipt "$RUNNER_TEMP/native-receipt.json"
+          test -z "$(git status --porcelain)"
+      - name: Preserve native execution receipts bound to payload hashes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offline-native-${{ matrix.version }}-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          path: ${{ runner.temp }}/native-receipt.json
+          if-no-files-found: error
+
   result:
     name: CI result
     if: always()
-    needs: [route, policy, ci, integration-mandatory, publish-test-reports, docker, erosion, duplication, publish-erosion, erosion-history, erosion-pages]
+    needs: [route, policy, ci, integration-mandatory, publish-test-reports, docker, erosion, duplication, publish-erosion, erosion-history, erosion-pages, release-payload, release-native]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
@@ -722,6 +859,9 @@ jobs:
           EROSION_REPORT_RESULT: ${{ needs.publish-erosion.result }}
           HISTORY_RESULT: ${{ needs.erosion-history.result }}
           PAGES_RESULT: ${{ needs.erosion-pages.result }}
+          RELEASE_OUTPUT: ${{ needs.route.outputs.ci == 'true' || needs.route.outputs.android == 'true' }}
+          PAYLOAD_RESULT: ${{ needs.release-payload.result }}
+          NATIVE_RESULT: ${{ needs.release-native.result }}
           POLICY_RESULT: ${{ needs.policy.result }}
           CI_RESULT: ${{ needs.ci.result }}
           INTEGRATION_RESULT: ${{ needs.integration-mandatory.result }}
@@ -734,6 +874,13 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           [[ "$ROUTE_RESULT" == success && "$POLICY_RESULT" == success ]]
+          if [[ "$RELEASE_OUTPUT" == true ]]; then
+            [[ "$PAYLOAD_RESULT" == success && "$NATIVE_RESULT" == success ]]
+          elif [[ "$RELEASE_OUTPUT" == false ]]; then
+            [[ "$PAYLOAD_RESULT" == skipped && "$NATIVE_RESULT" == skipped ]]
+          else
+            exit 1
+          fi
           if [[ "$ROUTE_OUTPUT" == true ]]; then
             expected=success
           elif [[ "$ROUTE_OUTPUT" == false ]]; then

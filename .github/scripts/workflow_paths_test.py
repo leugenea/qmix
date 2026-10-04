@@ -14,6 +14,7 @@ MODULE_PATH = pathlib.Path(__file__).with_name("workflow_paths.py")
 sys.path.insert(0, str(MODULE_PATH.parent))  # Standalone import mirrors the route CLI.
 REPOSITORY_ROOT = MODULE_PATH.parents[2]
 WORKFLOW_DIR = REPOSITORY_ROOT / ".github" / "workflows"
+RELEASE_SKIPPED = {"RELEASE_OUTPUT": "false", "PAYLOAD_RESULT": "skipped", "NATIVE_RESULT": "skipped"}
 ROUTED_WORKFLOWS = ("ci.yml", "android.yml", "live.yml")
 SPEC = importlib.util.spec_from_file_location("workflow_paths", MODULE_PATH)
 workflow_paths = importlib.util.module_from_spec(SPEC)
@@ -25,6 +26,64 @@ EROSION_SPEC.loader.exec_module(erosion)
 
 
 class WorkflowPathsTest(unittest.TestCase):
+    def test_release_helpers_route_both_build_consumers(self):
+        for name in ("release_payload.py", "release_payload_test.py", "generate_sbom.py", "generate_sbom_test.py"):
+            with self.subTest(name=name):
+                self.assertEqual(workflow_paths.classify([".github/scripts/" + name]), {"ci", "android"})
+
+    def test_offline_release_jobs_cover_rc_stable_and_all_native_platforms(self):
+        ci = (WORKFLOW_DIR / "ci.yml").read_text()
+        build = self._job(ci, "release-payload")
+        native = self._job(ci, "release-native")
+        result = self._job(ci, "result")
+        for block in (build, native):
+            self.assertIn("needs.route.outputs.ci == 'true' || needs.route.outputs.android == 'true'", block)
+            self.assertIn("version: ['0.1.0-rc.1', '0.1.0']", block)
+            self.assertIn("contents: read", block)
+            self.assertIn("persist-credentials: false", block)
+            self.assertIn("github.event.pull_request.head.sha || github.sha", block)
+            self.assertNotIn("secrets.", block)
+            self.assertNotIn("self-hosted", block)
+            self.assertNotIn("contents: write", block)
+            self.assertIn("git rev-parse --verify --end-of-options", block)
+            self.assertIn("git clone --no-local --no-tags", block)
+        self.assertIn("--dependency-verification=strict :app:assembleRelease", build)
+        self.assertIn("app-release-unsigned.apk", build)
+        self.assertIn("--target-inventory", build)
+        self.assertIn("validate_sbom_schema.sh", build)
+        self.assertIn('sha256sum -c SHA256SUMS', build)
+        self.assertIn('diff -r "$RUNNER_TEMP/offline-payload"', build)
+        self.assertIn("target:\n", native)  # A Cartesian axis, not include-only matrix entries.
+        self.assertEqual(re.findall(r"runner: (\S+)", native),
+                         ["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15-intel", "macos-15", "windows-2025"])
+        self.assertEqual(re.findall(r"os: (\S+)\n            arch: (\S+)", native),
+                         [("linux", "amd64"), ("linux", "arm64"), ("darwin", "amd64"), ("darwin", "arm64"), ("windows", "amd64")])
+        self.assertIn('verify-native', native)
+        self.assertIn('--os "$TARGET_OS" --arch "$TARGET_ARCH"', native)
+        self.assertIn("release-payload, release-native]", result)
+        self.assertIn("RELEASE_OUTPUT", result)
+        self.assertIn("make test-workflow-routing test-public-readiness test-sbom test-release-payload", ci)
+
+    def test_ci_result_enforces_offline_payload_and_native_truth_table(self):
+        base = {"ROUTE_RESULT": "success", "POLICY_RESULT": "success", "ROUTE_OUTPUT": "false",
+                "CI_RESULT": "skipped", "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
+                "REPORT_RESULT": "skipped", "EROSION_OUTPUT": "false", "EROSION_RESULT": "skipped",
+                "DUPLICATION_OUTPUT": "false", "DUPLICATION_RESULT": "skipped",
+                "EROSION_REPORT_RESULT": "skipped", "HISTORY_RESULT": "skipped", "PAGES_RESULT": "skipped",
+                "EVENT_NAME": "pull_request", "HEAD_REPOSITORY": "contributor/qmix", "REPOSITORY": "leugenea/qmix",
+                "ACTOR": "contributor", "PR_AUTHOR": "contributor"}
+        script = self._result_script("ci.yml")
+        for route, payload, native, succeeds in (
+            ("true", "success", "success", True), ("false", "skipped", "skipped", True),
+            ("true", "failure", "skipped", False), ("true", "success", "failure", False),
+            ("true", "success", "cancelled", False), ("true", "success", "skipped", False),
+            ("false", "success", "success", False), ("", "skipped", "skipped", False),
+            ("invalid", "skipped", "skipped", False),
+        ):
+            env = base | {"RELEASE_OUTPUT": route, "PAYLOAD_RESULT": payload, "NATIVE_RESULT": native}
+            with self.subTest(route=route, payload=payload, native=native):
+                self.assertEqual(subprocess.run(["bash", "-e", "-c", script], env=env).returncode == 0, succeeds)
+
     def test_android_source_routes_android_erosion_and_duplication(self):
         self.assertEqual(
             workflow_paths.classify(["android/app/src/main/MainActivity.kt"]),
@@ -140,6 +199,9 @@ class WorkflowPathsTest(unittest.TestCase):
             "go.mod": {"ci", "android", "live"},
             "go.sum": {"ci", "android", "live"},
             "Makefile": {"ci"},
+            "LICENSE": {"ci"},
+            "THIRD_PARTY_NOTICES.md": {"ci"},
+            "third_party/licenses/go-BSD-3-Clause.txt": {"ci"},
             "Dockerfile": {"ci"},
             "docker-compose.yml": {"ci"},  # qmix#207 stop-grace contract is a Go test
             ".dockerignore": {"ci"},
@@ -435,7 +497,7 @@ class WorkflowPathsTest(unittest.TestCase):
             script = self._result_script(filename)
             base_env = {
                 "ROUTE_RESULT": "success",
-                "POLICY_RESULT": "success",
+                "POLICY_RESULT": "success", **RELEASE_SKIPPED,
                 "EROSION_OUTPUT": "false",
                 "EROSION_RESULT": "skipped",
                 "DUPLICATION_OUTPUT": "false",
@@ -475,7 +537,7 @@ class WorkflowPathsTest(unittest.TestCase):
         base = {
             "ROUTE_RESULT": "success",
             "ROUTE_OUTPUT": "true",
-            "POLICY_RESULT": "success",
+            "POLICY_RESULT": "success", **RELEASE_SKIPPED,
             "CI_RESULT": "success",
             "INTEGRATION_RESULT": "success",
             "DOCKER_RESULT": "success",
@@ -515,7 +577,7 @@ class WorkflowPathsTest(unittest.TestCase):
         script = self._result_script("ci.yml")
         base = {
             "ROUTE_RESULT": "success", "ROUTE_OUTPUT": "false",
-            "POLICY_RESULT": "success", "CI_RESULT": "skipped",
+            "POLICY_RESULT": "success", **RELEASE_SKIPPED, "CI_RESULT": "skipped",
             "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
             "REPORT_RESULT": "skipped", "EVENT_NAME": "pull_request",
             "DUPLICATION_OUTPUT": "false", "DUPLICATION_RESULT": "skipped",
@@ -550,7 +612,7 @@ class WorkflowPathsTest(unittest.TestCase):
     def test_ci_result_enforces_duplication_for_prs_and_main_pushes(self):
         script = self._result_script("ci.yml")
         base = {
-            "ROUTE_RESULT": "success", "POLICY_RESULT": "success",
+            "ROUTE_RESULT": "success", "POLICY_RESULT": "success", **RELEASE_SKIPPED,
             "ROUTE_OUTPUT": "false", "CI_RESULT": "skipped",
             "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
             "REPORT_RESULT": "skipped", "EROSION_OUTPUT": "false",
@@ -597,7 +659,7 @@ class WorkflowPathsTest(unittest.TestCase):
     def test_history_is_main_push_only_and_does_not_block_ci_result(self):
         script = self._result_script("ci.yml")
         base = {
-            "ROUTE_RESULT": "success", "POLICY_RESULT": "success",
+            "ROUTE_RESULT": "success", "POLICY_RESULT": "success", **RELEASE_SKIPPED,
             "ROUTE_OUTPUT": "false", "CI_RESULT": "skipped",
             "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
             "REPORT_RESULT": "skipped", "EROSION_OUTPUT": "true",
@@ -630,7 +692,7 @@ class WorkflowPathsTest(unittest.TestCase):
     def test_history_runs_for_either_successful_main_report(self):
         script = self._result_script("ci.yml")
         base = {
-            "ROUTE_RESULT": "success", "POLICY_RESULT": "success",
+            "ROUTE_RESULT": "success", "POLICY_RESULT": "success", **RELEASE_SKIPPED,
             "ROUTE_OUTPUT": "false", "CI_RESULT": "skipped",
             "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
             "REPORT_RESULT": "skipped", "EROSION_REPORT_RESULT": "skipped",
