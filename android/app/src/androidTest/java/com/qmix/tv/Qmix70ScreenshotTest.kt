@@ -8,6 +8,9 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import android.view.View
+import android.view.WindowManager
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
@@ -61,6 +64,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.tv.material3.ColorScheme
@@ -519,11 +524,47 @@ class Qmix70ScreenshotTest {
     private fun captureScreen(spec: NativeCaptureSpec, requests: List<ScreenTextRequest>, elements: List<ScreenElementRequest>) {
         composeRule.waitForIdle()
         val before = screenSnapshot(requests, elements)
+        val windowBefore = presentationWindowDiagnostic(before)
         captureCheckpoint(spec, before.native) { bitmap, evidence ->
+            // Save the exact asserted root even when the first geometry oracle fails.
+            evidence.put("rootWindowDiagnostic", JSONObject()
+                .put("rootUsedByOracle", before.native.root.json())
+                .put("bitmapBoundsPx", JSONArray(listOf(0, 0, bitmap.width, bitmap.height)))
+                .put("beforePng", windowBefore).put("afterPng", presentationWindowDiagnostic(before)))
             verifyScreenState(spec, before.native)
             verifyScreenPixels(bitmap, before, requests, elements, evidence)
             verifyScreenStable(before, screenSnapshot(requests, elements))
         }
+    }
+
+    /** qmix#318: observed diagnostics only; IME pan/resize is not inferred from the PNG. */
+    private fun presentationWindowDiagnostic(snapshot: ScreenSnapshot): JSONObject = composeRule.runOnIdle {
+        val view = snapshot.native.node.root as View
+        val decor = view.rootView
+        val insets = ViewCompat.getRootWindowInsets(view)
+        val ime = insets?.getInsets(WindowInsetsCompat.Type.ime())
+        JSONObject().put("uptimeMillis", SystemClock.uptimeMillis())
+            .put("observedRoot", nativeFrame(snapshot.native.node.layoutInfo.coordinates.findRootCoordinates()).json())
+            .put("view", presentationViewDiagnostic(view)).put("decor", presentationViewDiagnostic(decor))
+            .put("appWindowFocused", view.hasWindowFocus())
+            .put("imeVisible", insets?.isVisible(WindowInsetsCompat.Type.ime()) ?: JSONObject.NULL)
+            .put("imeInsetsPx", ime?.let { JSONArray(listOf(it.left, it.top, it.right, it.bottom)) } ?: JSONObject.NULL)
+            .put("softInputMode", (decor.layoutParams as? WindowManager.LayoutParams)?.softInputMode ?: JSONObject.NULL)
+            .put("elementsAtSnapshot", JSONArray(snapshot.elements.map { it.json() }))
+    }
+
+    private fun presentationViewDiagnostic(view: View): JSONObject {
+        val screen = IntArray(2)
+        val window = IntArray(2)
+        val visible = android.graphics.Rect()
+        view.getLocationOnScreen(screen)
+        view.getLocationInWindow(window)
+        view.getWindowVisibleDisplayFrame(visible)
+        return JSONObject().put("class", view.javaClass.name)
+            .put("sizePx", JSONArray(listOf(view.width, view.height)))
+            .put("locationOnScreenPx", JSONArray(screen.toList())).put("locationInWindowPx", JSONArray(window.toList()))
+            .put("visibleDisplayFramePx", JSONArray(listOf(visible.left, visible.top, visible.right, visible.bottom)))
+            .put("scrollPx", JSONArray(listOf(view.scrollX, view.scrollY)))
     }
 
     private fun verifyScreenState(spec: NativeCaptureSpec, snapshot: NativeCheckpoint) {
