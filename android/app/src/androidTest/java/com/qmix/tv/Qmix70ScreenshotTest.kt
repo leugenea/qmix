@@ -630,7 +630,7 @@ class Qmix70ScreenshotTest {
             assertTrue("SCREEN_TEXT: positionInRoot+size not contained", contained(text.semanticUnclipped, safe.translate(-root.topLeft)))
             assertTrue("SCREEN_TEXT: clipped semantics differ", rectDistance(text.semanticUnclipped, text.clipped) <= 0.5f)
             verifyScreenTextLayout(text, request.ellipsized)
-            textEvidence.put(glyphEvidence(bitmap, text, true, multiline = true, ellipsized = request.ellipsized).json()
+            textEvidence.put(glyphEvidence(bitmap, text, true, multiline = true, ellipsized = request.ellipsized, exactBackgroundChannels = true).json()
                 .put("text", text.expectedText).put("lineCount", text.layout.lineCount)
                 .put("lastLineEllipsized", text.layout.isLineEllipsized(text.layout.lineCount - 1)).put("frame", text.frame.json())
                 .put("positionInRootPlusSize", text.semanticUnclipped.array()).put("clippedSemanticBounds", text.clipped.array()))
@@ -980,7 +980,7 @@ private data class TransformedGlyphEvidence(
 }
 
 private fun glyphEvidence(bitmap: Bitmap, text: NativeTextSnapshot, active: Boolean,
-    multiline: Boolean = false, ellipsized: Boolean = false): TransformedGlyphEvidence {
+    multiline: Boolean = false, ellipsized: Boolean = false, exactBackgroundChannels: Boolean = false): TransformedGlyphEvidence {
     val layout = text.layout
     assertTrue("NATIVE_LAYOUT: semantics action rejected", text.actionAccepted)
     assertEquals("NATIVE_LAYOUT: wrong native Text", text.expectedText, layout.layoutInput.text.text)
@@ -1016,14 +1016,24 @@ private fun glyphEvidence(bitmap: Bitmap, text: NativeTextSnapshot, active: Bool
     val bottomEdges = edgeSamples(lastRow)
     assertTrue("NATIVE_BACKGROUND: missing transformed nonglyph edge samples", topEdges.isNotEmpty() && bottomEdges.isNotEmpty())
     val edges = topEdges + bottomEdges
-    val matchingEdges = edges.count { colorDistance(it, background) <= 2f / 255f }
-    assertTrue("NATIVE_BACKGROUND: nonuniform Text-local edges $matchingEdges/${edges.size}", matchingEdges >= edges.size * 0.9)
+    val matchingEdges = edges.count {
+        if (exactBackgroundChannels) nativeBackgroundMatches(it, background) else colorDistance(it, background) <= 2f / 255f
+    }
+    assertTrue("NATIVE_BACKGROUND: nonuniform Text-local edges $matchingEdges/${edges.size}; text=${text.expectedText} " +
+        "frame=$bounds rows=$firstRow/$lastRow backgroundArgb=${background.toArgb()}", matchingEdges >= edges.size * 0.9)
     val glyphs = pixelSamples(width, height) { x, y ->
         val local = text.frame.toLocal(Offset(left + x + 0.5f, top + y + 0.5f))
         if (boxes.any { it.contains(local) }) bitmap.color(left + x, top + y) else null
     }
     return TransformedGlyphEvidence(nativeGlyphEvidence(glyphs, background, layout.layoutInput.style.color, active),
         matchingEdges, topEdges.size, bottomEdges.size)
+}
+
+/** qmix#318: native sRGB8-bit samples retain the inclusive two-channel-level tolerance without Float subtraction error. */
+private fun nativeBackgroundMatches(first: Color, second: Color): Boolean {
+    val firstArgb = first.toArgb()
+    val secondArgb = second.toArgb()
+    return listOf(16, 8, 0).all { shift -> abs(((firstArgb ushr shift) and 255) - ((secondArgb ushr shift) and 255)) <= 2 }
 }
 
 private data class NativePaintEvidence(
