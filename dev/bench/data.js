@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791107814355,
+  "lastUpdate": 1791130676918,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2453,6 +2453,60 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/b29d2684d4fcfe8e6d775b5752089836b128a93c"
         },
         "date": 1791107811282,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.942874200577986,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 26.915899518668198,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b492bfe4256a0415aaf74e5b3adc80123655fc67",
+          "message": "feat(release): add inert signing and publication pipeline (#336)\n\n* feat(release): add inert signing and publication pipeline\n\n* fix(release): correct draft readback and fixture handoffs",
+          "timestamp": "2026-10-04T19:17:22+03:00",
+          "tree_id": "b80ef1dab176628b23fa89daf5ec7c0caca16024",
+          "url": "https://github.com/leugenea/qmix/commit/b492bfe4256a0415aaf74e5b3adc80123655fc67"
+        },
+        "date": 1791130676118,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
