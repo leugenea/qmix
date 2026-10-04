@@ -246,9 +246,13 @@ class PlayerStatePublisher(
             return
         }
 
+        val synchronizationNotification = applyReportResult(result)
+        notifyReportResult(expectedSelection, completedJob, result, synchronizationNotification)
+        releaseCompletedReport(completedJob)
+    }
+
+    private fun applyReportResult(result: PlayerReportResult): Boolean? {
         var synchronizationNotification: Boolean? = null
-        var notifyConflict = false
-        var notifyUnavailable = false
         when (result) {
             PlayerReportResult.ACCEPTED -> if (!synchronized) {
                 synchronized = true
@@ -265,7 +269,6 @@ class PlayerStatePublisher(
                 playingProgressEnabled = false
                 periodicJob?.cancel()
                 periodicJob = null
-                notifyConflict = true
             }
             PlayerReportResult.FORBIDDEN,
             PlayerReportResult.MISSING,
@@ -279,27 +282,37 @@ class PlayerStatePublisher(
                 playingProgressEnabled = false
                 periodicJob?.cancel()
                 periodicJob = null
-                notifyUnavailable = true
             }
             PlayerReportResult.FAILED -> if (synchronized) {
                 synchronized = false
                 synchronizationNotification = false
             }
         }
+        return synchronizationNotification
+    }
 
+    private fun notifyReportResult(
+        expectedSelection: Selection,
+        completedJob: Job,
+        result: PlayerReportResult,
+        synchronizationNotification: Boolean?,
+    ) {
         synchronizationNotification?.let { value -> safelyNotify { listener.onSynchronizationChanged(value) } }
-        if (notifyConflict &&
-            secondaryNotificationIsCurrent(expectedSelection, completedJob, ReportingMode.RECONCILING)
-        ) {
-            safelyNotify { listener.onConflict() }
+        when (result) {
+            PlayerReportResult.CONFLICT -> {
+                if (secondaryNotificationIsCurrent(expectedSelection, completedJob, ReportingMode.RECONCILING)) {
+                    safelyNotify { listener.onConflict() }
+                }
+            }
+            PlayerReportResult.FORBIDDEN,
+            PlayerReportResult.MISSING,
+            -> {
+                if (secondaryNotificationIsCurrent(expectedSelection, completedJob, ReportingMode.STOPPED)) {
+                    safelyNotify { listener.onRoomUnavailable() }
+                }
+            }
+            else -> Unit
         }
-        if (notifyUnavailable &&
-            secondaryNotificationIsCurrent(expectedSelection, completedJob, ReportingMode.STOPPED)
-        ) {
-            safelyNotify { listener.onRoomUnavailable() }
-        }
-
-        releaseCompletedReport(completedJob)
     }
 
     private fun secondaryNotificationIsCurrent(
