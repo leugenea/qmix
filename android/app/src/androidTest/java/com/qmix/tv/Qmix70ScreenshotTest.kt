@@ -290,7 +290,8 @@ class Qmix70ScreenshotTest {
             val layout = layouts.single()
             val frame = if (semantics.config.contains(SemanticsProperties.EditableText)) inputGlyphFrame(semantics, layout)
                 else nativeFrame(semantics.layoutInfo.coordinates)
-            NativeTextSnapshot(layout, frame, semantics.boundsInRoot, expectedText, accepted, Rect(semantics.positionInRoot, semantics.size.toSize()))
+            NativeTextSnapshot(layout, frame, semantics.boundsInRoot, expectedText, accepted,
+                Rect(semantics.positionInRoot, semantics.size.toSize()), unclippedTextBounds(semantics, expectedText))
         }
     }
 
@@ -384,8 +385,8 @@ class Qmix70ScreenshotTest {
         body.forEach { text ->
             verifySafeFrame(text.frame, root, safe, text.expectedText)
             verifyScreenTextLayout(text, ellipsized = false)
-            assertTrue("SHARED_SETUP: semantic text clipping", rectDistance(text.semanticUnclipped, text.clipped) <= 0.5f)
-            assertTrue("SHARED_SETUP: raw semantic containment", contained(text.semanticUnclipped, safe.translate(-root.topLeft)))
+            assertTrue("SHARED_SETUP: semantic text clipping", rectDistance(text.transformedSemanticUnclipped, text.clipped) <= 0.5f)
+            assertTrue("SHARED_SETUP: transformed semantic containment", contained(text.transformedSemanticUnclipped, safe.translate(-root.topLeft)))
             boxes.add(text.expectedText to text.frame.screen)
             textEvidence.put(glyphEvidence(bitmap, text, true, multiline = true).json().put("text", text.expectedText)
                 .put("frame", text.frame.json()).put("lineCount", text.layout.lineCount))
@@ -835,6 +836,7 @@ class Qmix70ScreenshotTest {
                 JSONObject().put("text", request.text).put("maxLines", request.maxLines).put("ellipsisRequired", request.ellipsized)
                     .put("active", request.active).put("lineCount", text.layout.lineCount)
                     .put("frame", text.frame.json()).put("positionInRootPlusSize", text.semanticUnclipped.array())
+                    .put("transformedUnclippedSemanticBounds", text.transformedSemanticUnclipped.array())
                     .put("clippedSemanticBounds", text.clipped.array())
             }))
     }
@@ -843,13 +845,19 @@ class Qmix70ScreenshotTest {
         root: Rect, safe: Rect, boxes: MutableList<Pair<String, Rect>>, evidence: JSONArray) {
         requests.zip(texts).forEach { (request, text) ->
             verifySafeFrame(text.frame, root, safe, request.text)
-            assertTrue("SCREEN_TEXT: positionInRoot+size not contained", contained(text.semanticUnclipped, safe.translate(-root.topLeft)))
-            assertTrue("SCREEN_TEXT: clipped semantics differ", rectDistance(text.semanticUnclipped, text.clipped) <= 0.5f)
+            assertTrue("SCREEN_TEXT: ${request.text} transformed bounds outside safe area",
+                contained(text.transformedSemanticUnclipped, safe.translate(-root.topLeft)))
+            assertTrue("SCREEN_TEXT: ${request.text} clipped semantics differ; transformed=${text.transformedSemanticUnclipped} clipped=${text.clipped}",
+                rectDistance(text.transformedSemanticUnclipped, text.clipped) <= 0.5f)
+            assertTrue("SCREEN_TEXT: ${request.text} transformed semantics differ from paint frame",
+                rectDistance(text.transformedSemanticUnclipped, text.frame.root) <= 0.5f)
             verifyScreenTextLayout(text, request.ellipsized, request.maxLines)
             evidence.put(glyphEvidence(bitmap, text, request.active, multiline = true, ellipsized = request.ellipsized,
                 exactBackgroundChannels = true).json().put("text", text.expectedText).put("lineCount", text.layout.lineCount)
                 .put("lastLineEllipsized", text.layout.isLineEllipsized(text.layout.lineCount - 1)).put("frame", text.frame.json())
-                .put("positionInRootPlusSize", text.semanticUnclipped.array()).put("clippedSemanticBounds", text.clipped.array()))
+                .put("positionInRootPlusSize", text.semanticUnclipped.array())
+                .put("transformedUnclippedSemanticBounds", text.transformedSemanticUnclipped.array())
+                .put("clippedSemanticBounds", text.clipped.array()))
             if (request.body) boxes.add(request.text to text.frame.screen)
         }
     }
@@ -1177,9 +1185,32 @@ private fun roundedOutline(shape: Shape, coordinates: LayoutCoordinates, density
     direction: androidx.compose.ui.unit.LayoutDirection): Outline.Rounded =
     shape.createOutline(coordinates.size.toSize(), direction, density) as Outline.Rounded
 
+/** qmix#319: size is local; map every corner independently of clipped semantics and paint bounds. */
+private fun unclippedTextBounds(node: SemanticsNode, label: String): Rect {
+    val coordinates = node.layoutInfo.coordinates
+    assertEquals("TEXT_REGISTRATION: $label local semantic/layout size", node.size, coordinates.size)
+    val local = Rect(Offset.Zero, node.size.toSize())
+    val corners = listOf(local.topLeft, local.topRight, local.bottomLeft, local.bottomRight).map(coordinates::localToRoot)
+    val origin = corners.first()
+    val unitX = coordinates.localToRoot(Offset(1f, 0f)) - origin
+    val unitY = coordinates.localToRoot(Offset(0f, 1f)) - origin
+    assertTrue("TEXT_REGISTRATION: $label non-finite corners", corners.all { it.x.isFinite() && it.y.isFinite() })
+    assertTrue("TEXT_REGISTRATION: $label non-axis-aligned", abs(unitX.y) <= 0.001f && abs(unitY.x) <= 0.001f)
+    assertTrue("TEXT_REGISTRATION: $label invalid scale", unitX.x > 0f && unitY.y > 0f)
+    val position = node.positionInRoot
+    assertTrue("TEXT_REGISTRATION: $label semantic/layout origin mismatch",
+        abs(origin.x - position.x) <= 0.5f && abs(origin.y - position.y) <= 0.5f)
+    val expected = listOf(origin, origin + unitX * local.width, origin + unitY * local.height,
+        origin + unitX * local.width + unitY * local.height)
+    assertTrue("TEXT_REGISTRATION: $label unsupported transform", corners.zip(expected).all { (actual, affine) ->
+        abs(actual.x - affine.x) <= 0.5f && abs(actual.y - affine.y) <= 0.5f
+    })
+    return Rect(corners.minOf { it.x }, corners.minOf { it.y }, corners.maxOf { it.x }, corners.maxOf { it.y })
+}
+
 private data class NativeTextSnapshot(
     val layout: TextLayoutResult, val frame: NativeFrame, val clipped: Rect, val expectedText: String, val actionAccepted: Boolean,
-    val semanticUnclipped: Rect,
+    val semanticUnclipped: Rect, val transformedSemanticUnclipped: Rect,
 )
 
 private data class NativeCheckpoint(
