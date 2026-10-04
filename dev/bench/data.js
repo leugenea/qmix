@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791092306135,
+  "lastUpdate": 1791107812187,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2399,6 +2399,60 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/53da64937f2937c0c9eb6405749b09949633e055"
         },
         "date": 1791092303110,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 23.942874200577986,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 26.915899518668198,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b29d2684d4fcfe8e6d775b5752089836b128a93c",
+          "message": "feat(release): prepare compatible offline payload (#324)",
+          "timestamp": "2026-10-04T12:56:18+03:00",
+          "tree_id": "7b25659ae7782dbeb409d239eeb640e37a50901f",
+          "url": "https://github.com/leugenea/qmix/commit/b29d2684d4fcfe8e6d775b5752089836b128a93c"
+        },
+        "date": 1791107811282,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
