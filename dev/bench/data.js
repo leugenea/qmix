@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791130679905,
+  "lastUpdate": 1791140640383,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -2517,6 +2517,60 @@ window.BENCHMARK_DATA = {
           {
             "name": "Go CCN > 10",
             "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "Kotlin erosion",
+            "value": 26.915899518668198,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin CCN > 10",
+            "value": 11,
+            "unit": "functions"
+          },
+          {
+            "name": "JS erosion",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS CCN > 10",
+            "value": 0,
+            "unit": "functions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6d039f0cbaf0149daa849e5af774948df2080bbb",
+          "message": "refactor(server): separate terminal shutdown result collection (#337)\n\n* refactor(server): isolate deadline shutdown result collection\n\n* refactor(server): separate bounded shutdown coordination",
+          "timestamp": "2026-10-04T22:02:19+03:00",
+          "tree_id": "d082cefd07500515a185e84e10b49522cf14b4d0",
+          "url": "https://github.com/leugenea/qmix/commit/6d039f0cbaf0149daa849e5af774948df2080bbb"
+        },
+        "date": 1791140639386,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Go erosion",
+            "value": 20.11020892504966,
+            "unit": "%"
+          },
+          {
+            "name": "Go CCN > 10",
+            "value": 10,
             "unit": "functions"
           },
           {
