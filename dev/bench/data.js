@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791130676918,
+  "lastUpdate": 1791130679905,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -5123,6 +5123,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/b29d2684d4fcfe8e6d775b5752089836b128a93c"
         },
         "date": 1791107813728,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b492bfe4256a0415aaf74e5b3adc80123655fc67",
+          "message": "feat(release): add inert signing and publication pipeline (#336)\n\n* feat(release): add inert signing and publication pipeline\n\n* fix(release): correct draft readback and fixture handoffs",
+          "timestamp": "2026-10-04T19:17:22+03:00",
+          "tree_id": "b80ef1dab176628b23fa89daf5ec7c0caca16024",
+          "url": "https://github.com/leugenea/qmix/commit/b492bfe4256a0415aaf74e5b3adc80123655fc67"
+        },
+        "date": 1791130679391,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
