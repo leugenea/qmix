@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791140640383,
+  "lastUpdate": 1791140642891,
   "repoUrl": "https://github.com/leugenea/qmix",
   "entries": {
     "Code erosion": [
@@ -5241,6 +5241,70 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/leugenea/qmix/commit/b492bfe4256a0415aaf74e5b3adc80123655fc67"
         },
         "date": 1791130679391,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Duplication clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Go duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Go clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "Kotlin duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "Kotlin clones",
+            "value": 0,
+            "unit": "clones"
+          },
+          {
+            "name": "JS duplication",
+            "value": 0,
+            "unit": "%"
+          },
+          {
+            "name": "JS clones",
+            "value": 0,
+            "unit": "clones"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "leugenea@gmail.com",
+            "name": "Luckyanets Eugene",
+            "username": "leugenea"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6d039f0cbaf0149daa849e5af774948df2080bbb",
+          "message": "refactor(server): separate terminal shutdown result collection (#337)\n\n* refactor(server): isolate deadline shutdown result collection\n\n* refactor(server): separate bounded shutdown coordination",
+          "timestamp": "2026-10-04T22:02:19+03:00",
+          "tree_id": "d082cefd07500515a185e84e10b49522cf14b4d0",
+          "url": "https://github.com/leugenea/qmix/commit/6d039f0cbaf0149daa849e5af774948df2080bbb"
+        },
+        "date": 1791140642220,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
