@@ -1,4 +1,4 @@
-.PHONY: run compose-up build version test test-integration test-workflow-routing test-erosion test-complexity-gate test-duplication test-clone-gate test-hotspots duplication hotspots test-public-readiness test-sbom test-release-payload test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
+.PHONY: run compose-up build version test test-integration test-workflow-routing test-erosion test-complexity-gate test-duplication test-clone-gate test-hotspots duplication hotspots test-public-readiness test-sbom test-release-payload test-release-pipeline test-actionlint test-cyrillic check-cyrillic lint sbom sbom-go sbom-android sbom-schema sbom-validate clean
 
 version:
 	go run ./internal/buildinfo/cmd/version -format=json
@@ -95,7 +95,10 @@ test-public-readiness:
 test-sbom:
 	python3 .github/scripts/generate_sbom_test.py -v
 
-# Offline packaging and inventory contracts (qmix#322), no builds or secrets.
+# Controlled publisher/SDK command protocols; no real builds or secrets.
+test-release-pipeline:
+	python3 .github/scripts/release_pipeline_test.py -v
+
 test-release-payload:
 	python3 .github/scripts/release_payload_test.py -v
 

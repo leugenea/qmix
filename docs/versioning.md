@@ -69,8 +69,12 @@ the resulting fields to `versionName`/`versionCode`.
    development line.
 3. For acceptance testing, tag `vX.Y.Z-rc.1`; subsequent candidates increment
    only `N`. Do not move an existing tag.
-4. Stable is a new `vX.Y.Z` tag on the accepted commit. The RC tag is not
-   renamed.
+4. Stable is a new `vX.Y.Z` tag on an otherwise-untagged eligible accepted
+   main-line SHA later selected by the owner. It cannot be added to the already
+   RC-tagged commit: the shared calculator deliberately rejects multiple tags
+   at HEAD. Accept that selected source SHA before tagging; do not manufacture
+   a dummy commit, move/delete the RC tag, hide tags or change the parser to
+   simulate promotion of the same SHA. The RC tag is not renamed.
 5. Before publication, compare the JSON from `--version` for all binaries and
    the image OCI labels with the tag and commit. Artifact publication remains
    tracked in #67.
@@ -150,9 +154,13 @@ and bytes produces identical output bytes; nothing is published.
 `qmix-android-unsigned-sbom-VERSION-any-any.cdx.json` are **unsigned
 intermediates**, never signed distribution substitutes. The helper accepts only
 `app-release-unsigned.apk`, checks `com.qmix.tv` and calculator versionName/code
-with pinned SDK `aapt`, and rejects debuggable or signed bytes. Issue #323 owns
-signing, final signed-APK SBOM regeneration through the existing `--apk` input,
-final inventory/checksums and publication; none is implemented here.
+with pinned SDK `aapt`, and rejects debuggable or signed bytes. The separate
+#334 implementation adds explicit schema-2 signed-final selection, SDK signing,
+signed-APK SBOM regeneration through the existing `--apk` input and immutable
+publication. It does not weaken schema 1 or turn an unsigned intermediate into
+a distribution. Production remains default-denied until owner #335 setup and
+exact approval. See [releasing.md](releasing.md) for the full owner runbook;
+#323 remains open until real RC acceptance.
 
 Unprivileged hosted `release-payload` jobs use isolated, locally tagged RC and
 stable fixture clones of the exact tested source SHA, strict unsigned Gradle
@@ -160,7 +168,10 @@ release builds, schema validation and repeated packaging comparisons. They
 retain `go-version-m+header` static evidence in the inventory. Five native runner
 platforms execute the exact downloaded Go bytes with `--version` and produce
 hash-bound receipts covering all twelve targets, not host-only replacements.
-Both producers and native checks feed the unchanged `CI result` context;
+Disposable SDK signing/finalization extends these same RC/stable producers;
+native consumers explicitly select the complete signed-final inventory.
+Separate downloaded signed-APK hosted TV install/Leanback and native amd64/arm64
+image identity/readiness jobs feed the unchanged `CI result` context;
 existing Android build/lint/JVM/native coverage and quality gates remain intact.
 `make test-release-payload` exercises the focused offline contract tests without
 building Go/Android or accessing credentials.
