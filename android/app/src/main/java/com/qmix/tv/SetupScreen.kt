@@ -1,12 +1,14 @@
 package com.qmix.tv
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
@@ -17,14 +19,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 
 @Composable
@@ -40,15 +43,28 @@ internal fun SetupScreen(
     val actionFocus = remember { FocusRequester() }
     LaunchedEffect(pending, error) { actionFocus.requestFocus() }
     Column(
-        Modifier.fillMaxSize().background(Color(0xFF101218)).padding(48.dp),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(48.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(stringResource(R.string.setup_title), fontSize = 42.sp)
+        Text(
+            stringResource(R.string.setup_title),
+            style = MaterialTheme.typography.displayMedium,
+            modifier = Modifier.padding(bottom = 16.dp),
+        )
         if (error != null) {
-            Text(stringResource(error.resourceId()), color = Color(0xFFFFB4AB), modifier = Modifier.padding(12.dp))
+            Text(
+                stringResource(error.resourceId()),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.widthIn(max = 760.dp).padding(12.dp),
+            )
         }
-        if (pending) Text(stringResource(R.string.creating_room), modifier = Modifier.padding(12.dp))
+        if (pending) Text(
+            stringResource(R.string.creating_room),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(12.dp),
+        )
         FocusedButton(
             text = stringResource(if (error == null) R.string.create_room else R.string.retry),
             enabled = !pending,
@@ -71,15 +87,19 @@ internal fun HttpWarningScreen(onConfirm: () -> Unit, onCancel: () -> Unit) {
     val confirmFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { confirmFocus.requestFocus() }
     Column(
-        Modifier.fillMaxSize().background(Color(0xFF101218)).padding(48.dp),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(48.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(stringResource(R.string.http_warning_title), fontSize = 36.sp, color = Color(0xFFFFB4AB))
+        Text(
+            stringResource(R.string.http_warning_title),
+            style = MaterialTheme.typography.headlineLarge,
+            color = MaterialTheme.colorScheme.error,
+        )
         Text(
             stringResource(R.string.http_warning_body),
-            fontSize = 22.sp,
-            modifier = Modifier.width(760.dp).padding(vertical = 24.dp),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.widthIn(max = 760.dp).padding(vertical = 24.dp),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             FocusedButton(stringResource(R.string.use_http), true, confirmFocus, onClick = onConfirm)
@@ -90,17 +110,27 @@ internal fun HttpWarningScreen(onConfirm: () -> Unit, onCancel: () -> Unit) {
 
 @Composable
 private fun UrlInput(label: String, value: String, enabled: Boolean, onValueChange: (String) -> Unit) {
-    Column(Modifier.width(620.dp).padding(top = 16.dp)) {
-        Text(label)
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(8.dp)
+    val colors = MaterialTheme.colorScheme
+    Column(Modifier.widthIn(max = 620.dp).fillMaxWidth().padding(top = 16.dp)) {
+        Text(label, style = MaterialTheme.typography.titleMedium)
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
             enabled = enabled,
             singleLine = true,
-            textStyle = TextStyle(color = Color.White, fontSize = 20.sp),
+            textStyle = MaterialTheme.typography.titleLarge.copy(
+                color = colors.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.4f),
+                fontSize = 20.sp,
+            ),
+            cursorBrush = SolidColor(colors.onSurfaceVariant),
             modifier = Modifier
-                .width(620.dp)
-                .background(Color(0xFF252833), RoundedCornerShape(8.dp))
+                .fillMaxWidth()
+                .onFocusChanged { focused = it.isFocused }
+                .background(colors.surfaceVariant, shape)
+                // Foundation owns editing/focus; thickness makes focus visible without color alone.
+                .border(if (focused) 4.dp else 1.dp, colors.onSurfaceVariant, shape)
                 .padding(14.dp)
                 .semantics { contentDescription = label },
         )

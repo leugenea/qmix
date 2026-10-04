@@ -18,11 +18,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 
 @Composable
@@ -39,7 +39,7 @@ internal fun InvitationScreen(
         Bitmap.createBitmap(qr.pixels, qr.width, qr.height, Bitmap.Config.ARGB_8888).asImageBitmap()
     }
     Row(
-        Modifier.fillMaxSize().background(Color(0xFF101218)).padding(48.dp),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(48.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
@@ -49,21 +49,27 @@ internal fun InvitationScreen(
             modifier = Modifier.size(360.dp),
         )
         Spacer(Modifier.width(48.dp))
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
             if (roomReplacementNotice) {
                 Text(
                     stringResource(R.string.replacement_invitation_notice),
-                    fontSize = 20.sp,
+                    style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
             }
-            Text(stringResource(R.string.join_this_room), fontSize = 32.sp)
+            Text(stringResource(R.string.join_this_room), style = MaterialTheme.typography.headlineMedium)
             Text(
                 stringResource(R.string.invitation_room_code, invite.code),
-                fontSize = 64.sp,
+                style = MaterialTheme.typography.displaySmall,
                 modifier = Modifier.padding(12.dp),
             )
-            Text(invite.guestUrl, fontSize = 20.sp, modifier = Modifier.padding(bottom = 24.dp))
+            Text(
+                invite.guestUrl,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(bottom = 24.dp),
+            )
             FocusedButton(
                 text = stringResource(actionText),
                 enabled = true,

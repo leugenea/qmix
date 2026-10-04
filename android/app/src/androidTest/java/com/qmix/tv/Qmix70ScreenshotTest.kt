@@ -1,20 +1,29 @@
 package com.qmix.tv
 
+import android.content.Context
+import android.content.res.Resources
+import android.content.res.Configuration
+import android.os.LocaleList
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import android.view.View
+import android.view.WindowManager
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
@@ -22,6 +31,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.InspectableValue
 import androidx.compose.ui.platform.isDebugInspectorInfoEnabled
 import androidx.compose.ui.platform.testTag
@@ -35,25 +48,33 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
 import androidx.tv.material3.ColorScheme
 import androidx.tv.material3.MaterialTheme
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -72,7 +93,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** qmix#315: one native history, four diagnostic frames; not the final #70 gallery. */
+/** qmix#315/#318: continuous shared history plus bounded screen checkpoints; diagnostic captures. */
 private const val FOCUS_PARKING_TAG = "qmix70-focus-parking"
 
 @RunWith(AndroidJUnit4::class)
@@ -82,8 +103,15 @@ class Qmix70ScreenshotTest {
 
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val pending = mutableStateOf(false)
+    private val screenState = mutableStateOf<HostingState?>(null)
+    private val resourceContext = mutableStateOf<Context?>(null)
+    private lateinit var renderedResources: Resources
+    private lateinit var renderedContext: Context
+    private lateinit var renderedDensity: Density
+    private var screenActions = 0
     private val focusParking = FocusRequester()
     private var creates = 0
+    private var settingsChanges = 0
     private lateinit var button: SemanticsNodeInteraction
     private lateinit var buttonLabel: String
     private lateinit var backendLabel: String
@@ -93,6 +121,8 @@ class Qmix70ScreenshotTest {
     private var held = false
     private var defaultPaint: NativePaintEvidence? = null
     private var focusedPaint: NativePaintEvidence? = null
+    private var fieldFocusBaseline: ScreenElementSnapshot? = null
+    private var defaultInputGlyphs: List<NativeGlyphEvidence> = emptyList()
 
     @Test
     fun shared_setup_button_states_contrast_and_captures() {
@@ -125,7 +155,9 @@ class Qmix70ScreenshotTest {
             button.performKeyInput { keyDown(Key.DirectionCenter); keyUp(Key.DirectionCenter) }
             composeRule.runOnIdle { assertEquals("STATE_DISABLED: zero callback delta", 1, creates) }
             collector.receipts.put("disabledDelta", creates - collector.receipts.getInt("releaseCallbacks"))
+            verifyPendingFields()
             stateCheckpoint(collector.planned[3])
+            capturePresentationScreens()
             collector.persist()
         } catch (error: Throwable) {
             failure = error
@@ -145,14 +177,30 @@ class Qmix70ScreenshotTest {
         buttonLabel = instrumentation.targetContext.getString(R.string.create_room)
         backendLabel = instrumentation.targetContext.getString(R.string.backend_url)
         composeRule.setContent {
-            QMixTvTheme {
-                colors = MaterialTheme.colorScheme
-                Box(Modifier.fillMaxSize()) {
-                    SetupScreen(
-                        HostingState.Setup("https://api.example", "https://guest.example"),
-                        pending.value, null, { _, _ -> }, { creates++ },
-                    )
-                    Spacer(Modifier.size(1.dp).testTag(FOCUS_PARKING_TAG).focusRequester(focusParking).focusable())
+            val context = resourceContext.value ?: LocalContext.current
+            CompositionLocalProvider(
+                LocalContext provides context,
+                LocalConfiguration provides context.resources.configuration,
+                LocalResources provides context.resources,
+            ) {
+                renderedContext = LocalContext.current
+                renderedResources = LocalResources.current
+                renderedDensity = LocalDensity.current
+                QMixTvTheme {
+                    colors = MaterialTheme.colorScheme
+                    Box(Modifier.fillMaxSize()) {
+                        val state = screenState.value
+                        if (state == null) {
+                            SetupScreen(
+                                HostingState.Setup("https://api.example", "https://guest.example"),
+                                pending.value, null, { _, _ -> settingsChanges++ }, { creates++ },
+                            )
+                        } else {
+                            HostingScreen(state, { _, _ -> }, { screenActions++ }, { screenActions++ },
+                                onConfirmHttpWarning = { screenActions++ }, onCancelHttpWarning = { screenActions++ })
+                        }
+                        Spacer(Modifier.size(1.dp).testTag(FOCUS_PARKING_TAG).focusRequester(focusParking).focusable())
+                    }
                 }
             }
         }
@@ -212,7 +260,9 @@ class Qmix70ScreenshotTest {
             val outer = nativeFrame(border.coordinates)
             val inner = nativeFrame(info.coordinates)
             val root = nativeFrame(info.coordinates.findRootCoordinates())
-            val configuration = instrumentation.targetContext.resources.configuration
+            val configuration = renderedResources.configuration
+            assertEquals("NATIVE_DENSITY: LocalDensity/layout density", renderedDensity.density, info.density.density, 0f)
+            assertEquals("NATIVE_DENSITY: LocalDensity/layout fontScale", renderedDensity.fontScale, info.density.fontScale, 0f)
             NativeCheckpoint(
                 node, text, backend, outer, inner, root,
                 roundedOutline(borderValues.getValue("shape") as Shape, border.coordinates, info.density, info.layoutDirection),
@@ -220,7 +270,7 @@ class Qmix70ScreenshotTest {
                 (borderValues.getValue("width") as Dp).value * info.density.density,
                 borderValues.getValue("color") as Color, backgroundValues.getValue("color") as Color,
                 node.config.getOrElse(SemanticsProperties.Focused) { false },
-                !node.config.contains(SemanticsProperties.Disabled), creates, keyDown,
+                !node.config.contains(SemanticsProperties.Disabled), captureCallbacks(), keyDown,
                 configuration.locales.toLanguageTags(), info.density.density, info.density.fontScale,
             )
         }
@@ -232,7 +282,10 @@ class Qmix70ScreenshotTest {
         node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> accepted = action(layouts) }
         val semantics = node.fetchSemanticsNode()
         return composeRule.runOnIdle {
-            NativeTextSnapshot(layouts.single(), nativeFrame(semantics.layoutInfo.coordinates), semantics.boundsInRoot, expectedText, accepted)
+            val layout = layouts.single()
+            val frame = if (semantics.config.contains(SemanticsProperties.EditableText)) inputGlyphFrame(semantics, layout)
+                else nativeFrame(semantics.layoutInfo.coordinates)
+            NativeTextSnapshot(layout, frame, semantics.boundsInRoot, expectedText, accepted, Rect(semantics.positionInRoot, semantics.size.toSize()))
         }
     }
 
@@ -240,19 +293,33 @@ class Qmix70ScreenshotTest {
         button.assertTextEquals(buttonLabel).assertIsDisplayed()
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
         val before = checkpointSnapshot()
+        val inputs = sharedInputSnapshots()
+        val body = sharedSetupTextSnapshots()
+        captureCheckpoint(spec, before) { bitmap, evidence ->
+            verifyCheckpoint(spec, before, checkpointSnapshot())
+            verifyNativeImage(bitmap, before, evidence, spec.state)
+            verifySharedInputs(bitmap, inputs, spec, evidence)
+            verifySharedSetupGeometry(bitmap, before, inputs, body, evidence)
+            body.zip(sharedSetupTextSnapshots()).forEach { (first, second) ->
+                assertTrue("SHARED_SETUP_POSTCAPTURE: text moved", rectDistance(first.frame.screen, second.frame.screen) <= 0.5f)
+            }
+            assertEquals("SHARED_INPUT_POSTCAPTURE: fields moved/state changed", inputs.map { it.first.receipt() },
+                sharedInputSnapshots().map { it.first.receipt() })
+            verifyCheckpoint(spec, before, checkpointSnapshot())
+        }
+    }
+
+    private fun captureCheckpoint(spec: NativeCaptureSpec, before: NativeCheckpoint, verify: (Bitmap, JSONObject) -> Unit) {
         val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot()) { "CAPTURE_${spec.state}: no native screenshot" }
         var primary: Throwable? = null
         try {
             val bytes = encodePng(bitmap)
             writeCaptureBytes(spec.name, bytes)
-            // This checkpoint exists only after checked native bytes were renamed successfully.
+            // A checked write commits a pending-oracle receipt before visual assertions.
             val frame = collector.complete(spec, before, bitmap.width, bitmap.height, sha256(bytes))
-            collector.persist() // oraclePassed=false survives any subsequent visual assertion.
-            val after = checkpointSnapshot()
-            verifyCheckpoint(spec, before, after)
+            collector.persist()
             val evidence = frame.getJSONObject("evidence")
-            verifyNativeImage(bitmap, before, evidence, spec.state)
-            verifyCheckpoint(spec, before, checkpointSnapshot())
+            verify(bitmap, evidence)
             frame.put("oraclePassed", true)
             evidence.put("stage", "all_oracles_and_postcapture_receipts_passed")
             collector.persist()
@@ -262,6 +329,354 @@ class Qmix70ScreenshotTest {
         } finally {
             preserveFailure(primary) { bitmap.recycle() }
         }
+    }
+
+    private fun sharedInputSnapshots(): List<Pair<ScreenElementSnapshot, NativeTextSnapshot>> =
+        listOf(R.string.backend_url to "https://api.example", R.string.guest_origin to "https://guest.example").map { (label, value) ->
+            val input = composeRule.onNodeWithContentDescription(renderedContext.getString(label))
+            val text = textSnapshot(input, value)
+            val node = input.fetchSemanticsNode()
+            composeRule.runOnIdle { screenElementSnapshot(node) } to text
+        }
+
+    private fun verifySharedInputs(bitmap: Bitmap, inputs: List<Pair<ScreenElementSnapshot, NativeTextSnapshot>>,
+        spec: NativeCaptureSpec, evidence: JSONObject) {
+        val glyphs = inputs.map { (element, text) ->
+            assertEquals("SHARED_INPUT: disabled semantics", spec.enabled, element.enabled)
+            verifyScreenTextLayout(text, ellipsized = false)
+            val measured = glyphEvidence(bitmap, text, spec.enabled).glyph
+            assertEquals("SHARED_INPUT: source alpha", if (spec.enabled) 1f else 0.4f, text.layout.layoutInput.style.color.alpha, 0.001f)
+            assertTrue("SHARED_INPUT: actual composited glyph/source binding",
+                colorDistance(measured.foreground, text.layout.layoutInput.style.color.compositeOver(measured.background)) <= 3f / 255f)
+            measured
+        }
+        if (spec.state == "default") defaultInputGlyphs = glyphs
+        if (!spec.enabled) {
+            glyphs.zip(defaultInputGlyphs).forEach { (disabled, active) ->
+                assertTrue("SHARED_INPUT: visibly disabled foreground missing", colorDistance(disabled.foreground, active.foreground) > 4f / 255f)
+            }
+        }
+        evidence.put("inputGlyphs", JSONArray(glyphs.map { it.json().put("numericContrastExempt", !spec.enabled) }))
+    }
+
+    private fun sharedSetupTextSnapshots(): List<NativeTextSnapshot> {
+        val resources = mutableListOf(R.string.setup_title, R.string.backend_url, R.string.guest_origin)
+        if (pending.value) resources.add(R.string.creating_room)
+        return resources.map { resource ->
+            val label = renderedContext.getString(resource)
+            textSnapshot(composeRule.onNodeWithText(label, useUnmergedTree = true), label)
+        }
+    }
+
+    private fun verifySharedSetupGeometry(bitmap: Bitmap, native: NativeCheckpoint,
+        inputs: List<Pair<ScreenElementSnapshot, NativeTextSnapshot>>, body: List<NativeTextSnapshot>, evidence: JSONObject) {
+        val root = native.root.screen
+        val safe = safeRectangle(native)
+        val boxes = mutableListOf("primary action paint" to unionBounds(native.outer.screen, native.inner.screen))
+        verifySafeFrame(native.outer, root, safe, "shared outline")
+        verifySafeFrame(native.inner, root, safe, "shared surface")
+        val textEvidence = JSONArray()
+        body.forEach { text ->
+            verifySafeFrame(text.frame, root, safe, text.expectedText)
+            verifyScreenTextLayout(text, ellipsized = false)
+            assertTrue("SHARED_SETUP: semantic text clipping", rectDistance(text.semanticUnclipped, text.clipped) <= 0.5f)
+            assertTrue("SHARED_SETUP: raw semantic containment", contained(text.semanticUnclipped, safe.translate(-root.topLeft)))
+            boxes.add(text.expectedText to text.frame.screen)
+            textEvidence.put(glyphEvidence(bitmap, text, true, multiline = true).json().put("text", text.expectedText)
+                .put("frame", text.frame.json()).put("lineCount", text.layout.lineCount))
+        }
+        inputs.forEach { (element, text) ->
+            verifySafeFrame(element.frame, root, safe, text.expectedText)
+            verifySafeFrame(requireNotNull(element.borderFrame), root, safe, text.expectedText + " outline")
+            assertTrue("SHARED_INPUT: clipped semantic bounds", rectDistance(element.semanticUnclipped, element.semanticClipped) <= 0.5f)
+            assertTrue("SHARED_INPUT: raw semantic containment", contained(element.semanticUnclipped, safe.translate(-root.topLeft)))
+            boxes.add(text.expectedText to element.paintBounds())
+        }
+        verifyDisjoint(boxes)
+        evidence.put("safeRectanglePx", safe.array()).put("setupBody", textEvidence)
+            .put("inputGeometry", JSONArray(inputs.map { it.first.json() }))
+    }
+
+    private fun verifyPendingFields() {
+        val context = instrumentation.targetContext
+        listOf(R.string.backend_url to "https://api.example", R.string.guest_origin to "https://guest.example").forEach { (label, value) ->
+            val input = composeRule.onNodeWithContentDescription(context.getString(label)).assertIsNotEnabled()
+            val node = input.fetchSemanticsNode()
+            assertEquals("PENDING_FIELD: full editable value", value, node.config[SemanticsProperties.EditableText].text)
+            composeRule.runOnIdle {
+                if (node.config.contains(SemanticsActions.SetText)) {
+                    assertTrue("PENDING_FIELD: disabled edit accepted",
+                        node.config[SemanticsActions.SetText].action?.invoke(AnnotatedString("https://changed.example")) != true)
+                }
+                assertEquals("PENDING_FIELD: no settings callback", 0, settingsChanges)
+            }
+        }
+    }
+
+    private fun captureCallbacks(): Int = if (screenState.value == null) creates else screenActions
+
+    private fun capturePresentationScreens() {
+        val english = localizedContext("en")
+        val russian = localizedContext("ru")
+        showScreen(english, HostingState.Setup("https://api.example", "https://guest.example"),
+            R.string.create_room, R.string.backend_url)
+        val backend = composeRule.onNodeWithContentDescription(english.getString(R.string.backend_url))
+        val beforeFocus = backend.fetchSemanticsNode()
+        fieldFocusBaseline = composeRule.runOnIdle { screenElementSnapshot(beforeFocus) }
+        assertTrue("FIELD_BASELINE: unexpectedly focused", !requireNotNull(fieldFocusBaseline).focused)
+        val rootBeforeFocus = composeRule.runOnUiThread {
+            nativeFrame(beforeFocus.layoutInfo.coordinates.findRootCoordinates()).screen
+        }
+        assertEquals("FIELD_ROOT_BASELINE: unshifted", Offset.Zero, rootBeforeFocus.topLeft)
+        backend.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue("FIELD_FOCUS: rejected", it()) }
+        backend.assertIsFocused()
+        dismissPresentationIme(backend, rootBeforeFocus)
+        settleScale(1f, "setup field focus")
+        captureScreen(collector.planned[4], setupTextRequests(english), setupElements(english))
+        captureWarning(english, 5)
+        captureWarning(russian, 6)
+        showScreen(russian, HostingState.Error(UserMessage.INVALID_ENDPOINT, "https://api.example", "https://guest.example"),
+            R.string.retry, R.string.backend_url)
+        settleScale(1.1f, "RU setup error")
+        captureScreen(collector.planned[7], setupTextRequests(russian) + bodyText(russian.getString(UserMessage.INVALID_ENDPOINT.resourceId())),
+            setupElements(russian))
+        captureInvitation(english, 8)
+        captureInvitation(russian, 9)
+    }
+
+    /** qmix#318: dismiss the observed platform IME without changing field focus or window policy. */
+    private fun dismissPresentationIme(field: SemanticsNodeInteraction, expectedRoot: Rect) {
+        val node = field.fetchSemanticsNode() // Instrumentation thread; no synchronizing fetch on Main.
+        awaitPresentationWindow(node, expectedRoot, imeVisible = true, step = "backend IME shown")
+        val device = UiDevice.getInstance(instrumentation)
+        assertTrue("FIELD_IME: public system Back rejected", device.pressBack())
+        awaitPresentationWindow(node, expectedRoot, imeVisible = false, step = "backend IME hidden/unshifted root")
+        field.assertIsFocused()
+    }
+
+    private fun awaitPresentationWindow(node: SemanticsNode, expectedRoot: Rect, imeVisible: Boolean, step: String) {
+        var observed: PresentationWindowReadiness? = null
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                val current = composeRule.runOnUiThread {
+                    val view = node.root as View
+                    PresentationWindowReadiness(
+                        ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()),
+                        view.hasWindowFocus(), nativeFrame(node.layoutInfo.coordinates.findRootCoordinates()).screen,
+                    )
+                }
+                observed = current
+                current.imeVisible == imeVisible && (imeVisible || (current.appWindowFocused && current.root == expectedRoot))
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("FIELD_WINDOW $step: expected IME=$imeVisible root=$expectedRoot; last=$observed", timeout)
+        }
+    }
+
+    private data class PresentationWindowReadiness(val imeVisible: Boolean?, val appWindowFocused: Boolean, val root: Rect)
+
+    private fun localizedContext(language: String): Context {
+        val base = instrumentation.targetContext
+        val configuration = Configuration(base.resources.configuration).apply {
+            setLocales(LocaleList(Locale.forLanguageTag(language)))
+        }
+        return base.createConfigurationContext(configuration)
+    }
+
+    private fun showScreen(context: Context, state: HostingState, action: Int, tracer: Int) {
+        buttonLabel = context.getString(action)
+        backendLabel = context.getString(tracer)
+        composeRule.runOnIdle {
+            resourceContext.value = context
+            screenState.value = state
+        }
+        var observed = 0
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                observed = composeRule.onAllNodesWithText(buttonLabel).fetchSemanticsNodes().size
+                observed == 1
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("SCREEN_SHOW ${state.javaClass.simpleName}: last action count=$observed", timeout)
+        }
+        button = composeRule.onNodeWithText(buttonLabel)
+        composeRule.runOnIdle {
+            assertEquals("SCREEN_CONTEXT: observed rendered resources", context.resources.configuration.locales.toLanguageTags(),
+                renderedResources.configuration.locales.toLanguageTags())
+            assertSame("SCREEN_CONTEXT: effective resources/context", renderedContext.resources, renderedResources)
+        }
+    }
+
+    private fun bodyText(text: String, ellipsized: Boolean = false): ScreenTextRequest =
+        ScreenTextRequest(composeRule.onNodeWithText(text, useUnmergedTree = true), text, true, ellipsized)
+
+    private fun setupTextRequests(context: Context): List<ScreenTextRequest> = listOf(
+        bodyText(context.getString(R.string.setup_title)),
+        bodyText(context.getString(R.string.backend_url)),
+        bodyText(context.getString(R.string.guest_origin)),
+        ScreenTextRequest(composeRule.onNodeWithContentDescription(context.getString(R.string.backend_url)), "https://api.example"),
+        ScreenTextRequest(composeRule.onNodeWithContentDescription(context.getString(R.string.guest_origin)), "https://guest.example"),
+    )
+
+    private fun setupElements(context: Context): List<ScreenElementRequest> = listOf(
+        ScreenElementRequest(button, "primary action", button = true),
+        ScreenElementRequest(composeRule.onNodeWithContentDescription(context.getString(R.string.backend_url)), "backend input", input = true),
+        ScreenElementRequest(composeRule.onNodeWithContentDescription(context.getString(R.string.guest_origin)), "guest input", input = true),
+    )
+
+    private fun captureWarning(context: Context, index: Int) {
+        showScreen(context, HostingState.HttpWarning("http://192.168.1.20:8180", "http://192.168.1.20:8180"),
+            R.string.use_http, R.string.http_warning_title)
+        settleScale(1.1f, "warning ${context.resources.configuration.locales}")
+        val cancelLabel = context.getString(R.string.cancel)
+        captureScreen(collector.planned[index], listOf(bodyText(backendLabel), bodyText(context.getString(R.string.http_warning_body)),
+            ScreenTextRequest(composeRule.onNodeWithText(cancelLabel, useUnmergedTree = true), cancelLabel)),
+            listOf(ScreenElementRequest(button, "confirm action", button = true),
+                ScreenElementRequest(composeRule.onNodeWithText(cancelLabel), "cancel action", button = true)))
+    }
+
+    private fun captureInvitation(context: Context, index: Int) {
+        val url = "https://guest.example/" + "deterministic-long-invitation-path/".repeat(8) + "r/WXYZ"
+        showScreen(context, HostingState.Invitation(GuestInvite("WXYZ", url), roomReplacementNotice = true),
+            R.string.enter_room, R.string.join_this_room)
+        settleScale(1.1f, "invitation ${context.resources.configuration.locales}")
+        val description = context.getString(R.string.invitation_qr_description, url)
+        val qr = composeRule.onNodeWithContentDescription(description).assertIsDisplayed()
+        captureScreen(collector.planned[index], listOf(bodyText(backendLabel),
+            bodyText(context.getString(R.string.invitation_room_code, "WXYZ")),
+            bodyText(context.getString(R.string.replacement_invitation_notice)), bodyText(url, ellipsized = true)),
+            listOf(ScreenElementRequest(button, "enter action", button = true), ScreenElementRequest(qr, description)))
+    }
+
+    private fun screenSnapshot(texts: List<ScreenTextRequest>, elements: List<ScreenElementRequest>): ScreenSnapshot {
+        val textSnapshots = texts.map { textSnapshot(it.node.assertIsDisplayed(), it.text) }
+        val nodes = elements.map { it.node.assertIsDisplayed().fetchSemanticsNode() }
+        val native = checkpointSnapshot()
+        val elementSnapshots = composeRule.runOnIdle {
+            nodes.map { node -> screenElementSnapshot(node) }
+        }
+        return ScreenSnapshot(native, textSnapshots, elementSnapshots)
+    }
+
+    private fun captureScreen(spec: NativeCaptureSpec, requests: List<ScreenTextRequest>, elements: List<ScreenElementRequest>) {
+        composeRule.waitForIdle()
+        val before = screenSnapshot(requests, elements)
+        val windowBefore = presentationWindowDiagnostic(before)
+        captureCheckpoint(spec, before.native) { bitmap, evidence ->
+            // Save the exact asserted root even when the first geometry oracle fails.
+            evidence.put("rootWindowDiagnostic", JSONObject()
+                .put("rootUsedByOracle", before.native.root.json())
+                .put("bitmapBoundsPx", JSONArray(listOf(0, 0, bitmap.width, bitmap.height)))
+                .put("beforePng", windowBefore).put("afterPng", presentationWindowDiagnostic(before)))
+            verifyScreenState(spec, before.native)
+            verifyScreenPixels(bitmap, before, requests, elements, evidence)
+            verifyScreenStable(before, screenSnapshot(requests, elements))
+        }
+    }
+
+    /** qmix#318: observed diagnostics only; IME pan/resize is not inferred from the PNG. */
+    private fun presentationWindowDiagnostic(snapshot: ScreenSnapshot): JSONObject = composeRule.runOnUiThread {
+        val view = snapshot.native.node.root as View
+        val decor = view.rootView
+        val insets = ViewCompat.getRootWindowInsets(view)
+        val ime = insets?.getInsets(WindowInsetsCompat.Type.ime())
+        JSONObject().put("uptimeMillis", SystemClock.uptimeMillis())
+            .put("observedRoot", nativeFrame(snapshot.native.node.layoutInfo.coordinates.findRootCoordinates()).json())
+            .put("view", presentationViewDiagnostic(view)).put("decor", presentationViewDiagnostic(decor))
+            .put("appWindowFocused", view.hasWindowFocus())
+            .put("imeVisible", insets?.isVisible(WindowInsetsCompat.Type.ime()) ?: JSONObject.NULL)
+            .put("imeInsetsPx", ime?.let { JSONArray(listOf(it.left, it.top, it.right, it.bottom)) } ?: JSONObject.NULL)
+            .put("softInputMode", (decor.layoutParams as? WindowManager.LayoutParams)?.softInputMode ?: JSONObject.NULL)
+            .put("elementsAtSnapshot", JSONArray(snapshot.elements.map { it.json() }))
+    }
+
+    private fun presentationViewDiagnostic(view: View): JSONObject {
+        val screen = IntArray(2)
+        val window = IntArray(2)
+        val visible = android.graphics.Rect()
+        view.getLocationOnScreen(screen)
+        view.getLocationInWindow(window)
+        view.getWindowVisibleDisplayFrame(visible)
+        return JSONObject().put("class", view.javaClass.name)
+            .put("sizePx", JSONArray(listOf(view.width, view.height)))
+            .put("locationOnScreenPx", JSONArray(screen.toList())).put("locationInWindowPx", JSONArray(window.toList()))
+            .put("visibleDisplayFramePx", JSONArray(listOf(visible.left, visible.top, visible.right, visible.bottom)))
+            .put("scrollPx", JSONArray(listOf(view.scrollX, view.scrollY)))
+    }
+
+    private fun verifyScreenState(spec: NativeCaptureSpec, snapshot: NativeCheckpoint) {
+        assertEquals("SCREEN_STATE: enabled", spec.enabled, snapshot.enabled)
+        assertEquals("SCREEN_STATE: focused primary", spec.focused, snapshot.focused)
+        assertEquals("SCREEN_STATE: callbacks", spec.callbacks, snapshot.callbacks)
+        assertEquals("SCREEN_STATE: keyDown", spec.keyDown, snapshot.keyDown)
+        assertEquals("SCREEN_STATE: API", 36, Build.VERSION.SDK_INT)
+        button.assertTextEquals(buttonLabel).assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+        verifyContentProvider(spec, snapshot.text.layout.layoutInput.style.color)
+    }
+
+    private fun verifyScreenPixels(bitmap: Bitmap, snapshot: ScreenSnapshot, requests: List<ScreenTextRequest>,
+        elements: List<ScreenElementRequest>, evidence: JSONObject) {
+        val native = snapshot.native
+        val root = native.root.screen
+        assertEquals("SCREEN_ROOT: width", 1920, bitmap.width)
+        assertEquals("SCREEN_ROOT: height", 1080, bitmap.height)
+        assertTrue("SCREEN_ROOT: complete root containment", contained(root, Rect(0f, 0f, 1920f, 1080f)))
+        val inset = 48f * native.density
+        val safe = safeRectangle(native)
+        val boxes = mutableListOf<Pair<String, Rect>>()
+        val textEvidence = JSONArray()
+        requests.zip(snapshot.texts).forEach { (request, text) ->
+            verifySafeFrame(text.frame, root, safe, request.text)
+            assertTrue("SCREEN_TEXT: positionInRoot+size not contained", contained(text.semanticUnclipped, safe.translate(-root.topLeft)))
+            assertTrue("SCREEN_TEXT: clipped semantics differ", rectDistance(text.semanticUnclipped, text.clipped) <= 0.5f)
+            verifyScreenTextLayout(text, request.ellipsized)
+            textEvidence.put(glyphEvidence(bitmap, text, true, multiline = true, ellipsized = request.ellipsized, exactBackgroundChannels = true).json()
+                .put("text", text.expectedText).put("lineCount", text.layout.lineCount)
+                .put("lastLineEllipsized", text.layout.isLineEllipsized(text.layout.lineCount - 1)).put("frame", text.frame.json())
+                .put("positionInRootPlusSize", text.semanticUnclipped.array()).put("clippedSemanticBounds", text.clipped.array()))
+            if (request.body) boxes.add(request.text to text.frame.screen)
+        }
+        val elementEvidence = JSONArray()
+        elements.zip(snapshot.elements).forEach { (request, element) ->
+            verifyScreenElement(element, request, root, safe)
+            boxes.add(request.name to element.paintBounds())
+            elementEvidence.put(element.json().put("name", request.name))
+            if (request.input && element.focused) {
+                val baseline = requireNotNull(fieldFocusBaseline)
+                assertEquals("FIELD_HISTORY: same semantic widget", baseline.node.id, element.node.id)
+                assertSame("FIELD_HISTORY: same layout", baseline.node.layoutInfo, element.node.layoutInfo)
+                assertSame("FIELD_HISTORY: same root", baseline.node.root, element.node.root)
+                assertEquals("FIELD_HISTORY: unfocused source border 1dp", native.density, baseline.borderWidth, 0.001f)
+                evidence.put("fieldFocus", verifyFieldFocus(bitmap, element, native.density)
+                    .put("unfocusedSourceBorderWidthPx", baseline.borderWidth).put("sameWidgetId", element.node.id))
+            }
+        }
+        verifyDisjoint(boxes)
+        verifySafeFrame(native.outer, root, safe, "primary outline")
+        verifySafeFrame(native.inner, root, safe, "primary scaled surface")
+        val glyph = glyphEvidence(bitmap, native.text, true)
+        val paint = nativePaintEvidence(bitmap, native, glyph.background)
+        if (native.focused) {
+            assertTrue("SCREEN_FOCUS: essential container/root adjacency >=3", paint.adjacentRatio >= 3.0)
+            assertTrue("SCREEN_FOCUS: intervening essential edge paint", paint.adjacentGap <= 3)
+        }
+        evidence.put("safeRectanglePx", safe.array()).put("densityInsetPx", inset)
+            .put("texts", textEvidence).put("elements", elementEvidence)
+            .put("primaryGlyph", glyph.json()).put("primaryPaint", paint.json())
+            .put("focusSubject", "primary action").put("effectiveResourceLocale", native.locale).put("deviceGlobalLocaleClaim", false)
+    }
+
+    private fun verifyScreenStable(before: ScreenSnapshot, after: ScreenSnapshot) {
+        assertEquals("SCREEN_POSTCAPTURE: real identity/config/state", before.native.receipt(), after.native.receipt())
+        assertSame("SCREEN_POSTCAPTURE: primary layout", before.native.node.layoutInfo, after.native.node.layoutInfo)
+        assertSame("SCREEN_POSTCAPTURE: root", before.native.node.root, after.native.node.root)
+        assertEquals("SCREEN_POSTCAPTURE: elements", before.elements.map { it.receipt() }, after.elements.map { it.receipt() })
+        before.texts.zip(after.texts).forEach { (first, second) ->
+            assertEquals("SCREEN_POSTCAPTURE: text/layout content", first.layout.layoutInput, second.layout.layoutInput)
+            assertTrue("SCREEN_POSTCAPTURE: text moved", rectDistance(first.frame.screen, second.frame.screen) <= 0.5f)
+        }
+        assertTrue("SCREEN_POSTCAPTURE: primary border moved", rectDistance(before.native.outer.screen, after.native.outer.screen) <= 0.5f)
+        assertTrue("SCREEN_POSTCAPTURE: primary surface moved", rectDistance(before.native.inner.screen, after.native.inner.screen) <= 0.5f)
     }
 
     private fun verifyCheckpoint(spec: NativeCaptureSpec, before: NativeCheckpoint, after: NativeCheckpoint) {
@@ -340,6 +755,142 @@ class Qmix70ScreenshotTest {
     }
 }
 
+private data class ScreenTextRequest(
+    val node: SemanticsNodeInteraction, val text: String, val body: Boolean = false, val ellipsized: Boolean = false,
+)
+
+private data class ScreenElementRequest(
+    val node: SemanticsNodeInteraction, val name: String, val button: Boolean = false, val input: Boolean = false,
+)
+
+private data class ScreenSnapshot(
+    val native: NativeCheckpoint, val texts: List<NativeTextSnapshot>, val elements: List<ScreenElementSnapshot>,
+)
+
+private data class ScreenElementSnapshot(
+    val node: SemanticsNode, val frame: NativeFrame, val semanticUnclipped: Rect, val semanticClipped: Rect,
+    val borderFrame: NativeFrame?, val borderWidth: Float, val borderColor: Color?,
+    val enabled: Boolean, val focused: Boolean, val editable: Boolean, val buttonRole: Boolean,
+) {
+    fun paintBounds(): Rect = borderFrame?.screen?.let { border ->
+        unionBounds(frame.screen, border)
+    } ?: frame.screen
+    fun receipt(): List<Any?> = listOf(node.id, System.identityHashCode(node.layoutInfo), System.identityHashCode(node.root),
+        frame.screen, borderFrame?.screen, borderWidth, borderColor, enabled, focused, editable, buttonRole)
+    fun json(): JSONObject = JSONObject().put("id", node.id).put("frame", frame.json())
+        .put("positionInRootPlusSize", semanticUnclipped.array()).put("clippedSemanticBounds", semanticClipped.array())
+        .put("paintBounds", paintBounds().array()).put("sourceBorderWidthPx", borderWidth)
+        .put("enabled", enabled).put("focused", focused).put("editable", editable).put("buttonRole", buttonRole)
+}
+
+private fun screenElementSnapshot(node: SemanticsNode): ScreenElementSnapshot {
+    val border = node.layoutInfo.getModifierInfo().singleOrNull { (it.modifier as? InspectableValue)?.nameFallback == "border" }
+    val values = (border?.modifier as? InspectableValue)?.inspectableElements?.associate { it.name to it.value }
+    return ScreenElementSnapshot(node, nativeFrame(node.layoutInfo.coordinates), Rect(node.positionInRoot, node.size.toSize()),
+        node.boundsInRoot, border?.let { nativeFrame(it.coordinates) },
+        (values?.get("width") as? Dp)?.value?.times(node.layoutInfo.density.density) ?: 0f,
+        values?.get("color") as? Color, !node.config.contains(SemanticsProperties.Disabled),
+        node.config.getOrElse(SemanticsProperties.Focused) { false },
+        node.config.contains(SemanticsActions.SetText) && node.config.contains(SemanticsProperties.EditableText),
+        node.config.contains(SemanticsProperties.Role) && node.config[SemanticsProperties.Role] == Role.Button)
+}
+
+private fun safeRectangle(native: NativeCheckpoint): Rect {
+    val root = native.root.screen
+    val inset = 48f * native.density
+    return Rect(root.left + inset, root.top + inset, root.right - inset, root.bottom - inset)
+}
+
+private fun unionBounds(first: Rect, second: Rect): Rect = Rect(
+    minOf(first.left, second.left), minOf(first.top, second.top), maxOf(first.right, second.right), maxOf(first.bottom, second.bottom),
+)
+
+private fun verifySafeFrame(frame: NativeFrame, root: Rect, safe: Rect, label: String) {
+    verifyFrame(frame, root)
+    assertTrue("SCREEN_SAFE: $label outside 48dp rectangle; ${frame.screen} safe=$safe", contained(frame.screen, safe))
+}
+
+private fun verifyScreenTextLayout(text: NativeTextSnapshot, ellipsized: Boolean) {
+    val layout = text.layout
+    assertTrue("SCREEN_TEXT: native layout action rejected", text.actionAccepted)
+    assertEquals("SCREEN_TEXT: full semantic/layout text", text.expectedText, layout.layoutInput.text.text)
+    assertTrue("SCREEN_TEXT: no visible lines", layout.lineCount > 0)
+    if (ellipsized) {
+        assertEquals("SCREEN_URL: bounded two lines", 2, layout.lineCount)
+        assertTrue("SCREEN_URL: deterministic long URL must ellipsize", layout.isLineEllipsized(1))
+    } else {
+        assertTrue("SCREEN_TEXT: important copy lost", !layout.hasVisualOverflow)
+        assertTrue("SCREEN_TEXT: important copy ellipsized", (0 until layout.lineCount).none { layout.isLineEllipsized(it) })
+    }
+}
+
+private fun verifyScreenElement(element: ScreenElementSnapshot, request: ScreenElementRequest, root: Rect, safe: Rect) {
+    verifySafeFrame(element.frame, root, safe, request.name)
+    element.borderFrame?.let { verifySafeFrame(it, root, safe, request.name + " outline") }
+    val rootSafe = safe.translate(-root.topLeft)
+    assertTrue("SCREEN_SEMANTICS: raw positionInRoot+size outside safe area ${request.name}", contained(element.semanticUnclipped, rootSafe))
+    if (request.button) {
+        assertTrue("SCREEN_ACTION: Button role missing ${request.name}", element.buttonRole)
+        assertTrue("SCREEN_ACTION: unexpected disabled action", element.enabled)
+        assertTrue("SCREEN_ACTION: click action missing", element.node.config.contains(SemanticsActions.OnClick))
+    }
+    if (request.input) {
+        assertTrue("SCREEN_INPUT: edit action/text missing", element.editable)
+        assertTrue("SCREEN_INPUT: unexpectedly disabled", element.enabled)
+        assertEquals("SCREEN_INPUT: source-bound non-color border width", if (element.focused) 4f else 1f,
+            element.borderWidth / element.node.layoutInfo.density.density, 0.001f)
+        assertTrue("SCREEN_INPUT: clipped", rectDistance(element.semanticUnclipped, element.semanticClipped) <= 0.5f)
+    }
+}
+
+private fun verifyDisjoint(boxes: List<Pair<String, Rect>>) {
+    boxes.forEachIndexed { index, first ->
+        boxes.drop(index + 1).forEach { second ->
+            val overlapWidth = minOf(first.second.right, second.second.right) - maxOf(first.second.left, second.second.left)
+            val overlapHeight = minOf(first.second.bottom, second.second.bottom) - maxOf(first.second.top, second.second.top)
+            assertTrue("SCREEN_OVERLAP: ${first.first} / ${second.first}", overlapWidth <= 0f || overlapHeight <= 0f)
+        }
+    }
+}
+
+private fun verifyFieldFocus(bitmap: Bitmap, element: ScreenElementSnapshot, density: Float): JSONObject {
+    val border = requireNotNull(element.borderFrame) { "FIELD_FOCUS: actual border modifier missing" }
+    val expected = requireNotNull(element.borderColor)
+    assertEquals("FIELD_FOCUS: non-color 4dp thickness", 4f * density, element.borderWidth, 0.001f)
+    val x = border.screen.center.x.roundToInt()
+    val firstRow = ceil(border.screen.top).toInt()
+    val sample = bitmap.color(x, (border.screen.top + element.borderWidth / 2f).roundToInt())
+    val outside = bitmap.color(x, floor(border.screen.top).toInt() - 2)
+    val coreRows = (firstRow until firstRow + floor(element.borderWidth).toInt()).count {
+        colorDistance(bitmap.color(x, it), expected) <= 3f / 255f
+    }
+    assertTrue("FIELD_FOCUS: rendered border/source mismatch", colorDistance(sample, expected) <= 3f / 255f)
+    assertTrue("FIELD_FOCUS: visible thickness missing", coreRows >= element.borderWidth - 2f)
+    val ratio = contrast(sample, outside)
+    assertTrue("FIELD_FOCUS: essential outline/exterior adjacency >=3; $ratio", ratio >= 3.0)
+    return JSONObject().put("sourceWidthPx", element.borderWidth).put("paintCoreRows", coreRows)
+        .put("nativeBorderArgb", sample.toArgb()).put("adjacentExteriorArgb", outside.toArgb()).put("unroundedContrast", ratio)
+}
+
+/** Bind Foundation's short, unscrolled URL glyphs to its source-declared 14dp inset. */
+private fun inputGlyphFrame(node: SemanticsNode, layout: TextLayoutResult): NativeFrame {
+    val modifiers = node.layoutInfo.getModifierInfo()
+    val padding = modifiers.single { (it.modifier as? InspectableValue)?.nameFallback == "padding" }
+    val appliedPadding = (padding.modifier as InspectableValue).valueOverride as Dp
+    assertEquals("INPUT_REGISTRATION: real source padding", 14.dp, appliedPadding)
+    val border = modifiers.single { (it.modifier as? InspectableValue)?.nameFallback == "border" }
+    val outer = nativeFrame(border.coordinates)
+    val inset = appliedPadding.value * node.layoutInfo.density.density
+    assertEquals("INPUT_REGISTRATION: unscaled", 1f, outer.scaleX, 0.001f)
+    assertTrue("INPUT_REGISTRATION: unexpected horizontal scrolling", layout.size.width <= outer.local.width - 2f * inset + 0.5f)
+    assertEquals("INPUT_REGISTRATION: native text height/viewport", outer.local.height - 2f * inset, layout.size.height.toFloat(), 0.5f)
+    val offset = Offset(inset, inset)
+    val local = Rect(Offset.Zero, layout.size.toSize())
+    return outer.copy(origin = outer.origin + offset, local = local,
+        screen = Rect(outer.screen.topLeft + offset, local.size), root = Rect(outer.root.topLeft + offset, local.size),
+        clippedRoot = Rect(outer.root.topLeft + offset, local.size))
+}
+
 private data class NativeCaptureSpec(
     val name: String, val state: String, val enabled: Boolean, val focused: Boolean, val callbacks: Int, val keyDown: Boolean,
 ) {
@@ -376,6 +927,7 @@ private fun roundedOutline(shape: Shape, coordinates: LayoutCoordinates, density
 
 private data class NativeTextSnapshot(
     val layout: TextLayoutResult, val frame: NativeFrame, val clipped: Rect, val expectedText: String, val actionAccepted: Boolean,
+    val semanticUnclipped: Rect,
 )
 
 private data class NativeCheckpoint(
@@ -427,19 +979,23 @@ private data class TransformedGlyphEvidence(
         .put("totalBackgroundEdgeSamples", topBackgroundEdges + bottomBackgroundEdges)
 }
 
-private fun glyphEvidence(bitmap: Bitmap, text: NativeTextSnapshot, active: Boolean): TransformedGlyphEvidence {
+private fun glyphEvidence(bitmap: Bitmap, text: NativeTextSnapshot, active: Boolean,
+    multiline: Boolean = false, ellipsized: Boolean = false, exactBackgroundChannels: Boolean = false): TransformedGlyphEvidence {
     val layout = text.layout
     assertTrue("NATIVE_LAYOUT: semantics action rejected", text.actionAccepted)
     assertEquals("NATIVE_LAYOUT: wrong native Text", text.expectedText, layout.layoutInput.text.text)
-    assertEquals("NATIVE_LAYOUT: line count", 1, layout.lineCount)
-    assertTrue("NATIVE_LAYOUT: overflow", !layout.hasVisualOverflow)
+    if (!multiline) assertEquals("NATIVE_LAYOUT: line count", 1, layout.lineCount)
+    if (!ellipsized) assertTrue("NATIVE_LAYOUT: overflow", !layout.hasVisualOverflow)
     assertEquals("NATIVE_LAYOUT: local size", layout.size.toSize(), text.frame.local.size)
     val bounds = text.frame.screen
     val left = floor(bounds.left).toInt()
     val top = floor(bounds.top).toInt()
     val width = ceil(bounds.right).toInt() - left
     val height = ceil(bounds.bottom).toInt() - top
-    val boxes = layout.layoutInput.text.text.indices.filterNot { layout.layoutInput.text.text[it].isWhitespace() }
+    val visibleOffsets = if (ellipsized) (0 until layout.lineCount).flatMap { line ->
+        (layout.getLineStart(line) until layout.getLineEnd(line, visibleEnd = true)).toList()
+    } else layout.layoutInput.text.text.indices.toList()
+    val boxes = visibleOffsets.filterNot { layout.layoutInput.text.text[it].isWhitespace() }
         .map { layout.getBoundingBox(it) }
     val samples = pixelSamples(width, height) { x, y ->
         val local = text.frame.toLocal(Offset(left + x + 0.5f, top + y + 0.5f))
@@ -460,14 +1016,24 @@ private fun glyphEvidence(bitmap: Bitmap, text: NativeTextSnapshot, active: Bool
     val bottomEdges = edgeSamples(lastRow)
     assertTrue("NATIVE_BACKGROUND: missing transformed nonglyph edge samples", topEdges.isNotEmpty() && bottomEdges.isNotEmpty())
     val edges = topEdges + bottomEdges
-    val matchingEdges = edges.count { colorDistance(it, background) <= 2f / 255f }
-    assertTrue("NATIVE_BACKGROUND: nonuniform Text-local edges $matchingEdges/${edges.size}", matchingEdges >= edges.size * 0.9)
+    val matchingEdges = edges.count {
+        if (exactBackgroundChannels) nativeBackgroundMatches(it, background) else colorDistance(it, background) <= 2f / 255f
+    }
+    assertTrue("NATIVE_BACKGROUND: nonuniform Text-local edges $matchingEdges/${edges.size}; text=${text.expectedText} " +
+        "frame=$bounds rows=$firstRow/$lastRow backgroundArgb=${background.toArgb()}", matchingEdges >= edges.size * 0.9)
     val glyphs = pixelSamples(width, height) { x, y ->
         val local = text.frame.toLocal(Offset(left + x + 0.5f, top + y + 0.5f))
         if (boxes.any { it.contains(local) }) bitmap.color(left + x, top + y) else null
     }
     return TransformedGlyphEvidence(nativeGlyphEvidence(glyphs, background, layout.layoutInput.style.color, active),
         matchingEdges, topEdges.size, bottomEdges.size)
+}
+
+/** qmix#318: native sRGB8-bit samples retain the inclusive two-channel-level tolerance without Float subtraction error. */
+private fun nativeBackgroundMatches(first: Color, second: Color): Boolean {
+    val firstArgb = first.toArgb()
+    val secondArgb = second.toArgb()
+    return listOf(16, 8, 0).all { shift -> abs(((firstArgb ushr shift) and 255) - ((secondArgb ushr shift) and 255)) <= 2 }
 }
 
 private data class NativePaintEvidence(
@@ -553,6 +1119,12 @@ private class NativeCaptureCollector {
         NativeCaptureSpec("setup-button-focused.png", "focused", true, true, 0, false),
         NativeCaptureSpec("setup-button-held-pressed.png", "held_pressed", true, true, 0, true),
         NativeCaptureSpec("setup-button-disabled.png", "disabled", false, true, 1, false),
+        NativeCaptureSpec("setup-backend-focused.png", "setup_field_focused", true, false, 0, false),
+        NativeCaptureSpec("http-warning-en.png", "http_warning", true, true, 0, false),
+        NativeCaptureSpec("http-warning-ru.png", "http_warning", true, true, 0, false),
+        NativeCaptureSpec("setup-error-ru.png", "setup_error", true, true, 0, false),
+        NativeCaptureSpec("invitation-replacement-long-url-en.png", "invitation_replacement", true, true, 0, false),
+        NativeCaptureSpec("invitation-replacement-long-url-ru.png", "invitation_replacement", true, true, 0, false),
     )
     val receipts = JSONObject()
     var failure: String? = null
