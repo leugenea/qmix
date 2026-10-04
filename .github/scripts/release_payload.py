@@ -31,6 +31,10 @@ AUXILIARIES = (("qmix-android-unsigned", "android", "any"),
 SUFFIXES = {"qmix-android-unsigned": ".apk", "qmix-go-sbom": ".cdx.json",
             "qmix-android-unsigned-sbom": ".cdx.json", "qmix-licenses": ".tar.gz"}
 METHODS = {"go-version-m+header", "aapt+unsigned-zip", "sbom-hash-roots", "license-bundle"}
+FINAL_AUXILIARIES = (("qmix-android", "android", "any"),
+                     ("qmix-go-sbom", "any", "any"), ("qmix-android-sbom", "any", "any"),
+                     ("qmix-licenses", "any", "any"))
+SUFFIXES.update({"qmix-android": ".apk", "qmix-android-sbom": ".cdx.json"})
 LICENSES = ("LICENSE", "THIRD_PARTY_NOTICES.md", "third_party/licenses/Apache-2.0.txt",
             "third_party/licenses/goym-vantuz-MIT.txt",
             "third_party/licenses/go-querystring-BSD-3-Clause.txt",
@@ -116,19 +120,22 @@ def validate_source(item, name):
     source = item["sourceArtifact"]
     require(type(source) is str and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", source),
             "invalid source artifact")
-    if item["component"] == "qmix-android-unsigned":
+    if item["component"] == "qmix-android":
+        require(source == "app-release-signed.apk", "wrong signed source artifact")
+    elif item["component"] == "qmix-android-unsigned":
         require(source == "app-release-unsigned.apk", "wrong Gradle source artifact")
-    elif item["component"] in {"qmix-go-sbom", "qmix-android-unsigned-sbom"}:
+    elif item["component"] in {"qmix-go-sbom", "qmix-android-unsigned-sbom", "qmix-android-sbom"}:
         require(source.endswith(".json"), "wrong SBOM source artifact")
     else:
         require(source == name, "wrong source artifact")
 
 
-def validate_entry(item, info):
+def validate_entry(item, info, signed_final=False):
     require(type(item) is dict and set(item) == ENTRY_KEYS, "invalid artifact fields")
     target = (item["component"], item["os"], item["arch"])
     require(all(type(value) is str for value in target), "invalid target types")
-    require(target in TARGETS + AUXILIARIES, "unexpected target")
+    auxiliaries = FINAL_AUXILIARIES if signed_final else AUXILIARIES
+    require(target in TARGETS + auxiliaries, "unexpected target")
     require((item["version"], item["commit"]) == (info["version"], info["commit"]),
             "conflicting artifact identity")
     name = filename(*target[:1], info["version"], *target[1:])
@@ -137,28 +144,42 @@ def validate_entry(item, info):
     require(type(item["size"]) is int and item["size"] > 0, "empty or invalid artifact size")
     require(type(item["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", item["sha256"]),
             "invalid artifact hash")
-    require(type(item["verification"]) is str and item["verification"] in METHODS,
+    methods = METHODS | {"zipalign+apksigner+aapt"} if signed_final else METHODS
+    require(type(item["verification"]) is str and item["verification"] in methods,
             "invalid metadata verification method")
     expected = "go-version-m+header" if target in TARGETS else {
         "qmix-android-unsigned": "aapt+unsigned-zip", "qmix-licenses": "license-bundle",
         "qmix-go-sbom": "sbom-hash-roots", "qmix-android-unsigned-sbom": "sbom-hash-roots",
+        "qmix-android": "zipalign+apksigner+aapt", "qmix-android-sbom": "sbom-hash-roots",
     }[target[0]]
     require(item["verification"] == expected, "wrong metadata verification method")
     return target
 
 
-def validate_inventory(value, directory, expected):
-    require(type(value) is dict and set(value) == {"schemaVersion", "identity", "artifacts"},
+def inventory_identity(value, expected, signed_final):
+    keys = {"schemaVersion", "identity", "artifacts"}
+    if signed_final:
+        keys.add("certificateSha256")
+    require(type(value) is dict and set(value) == keys,
             "invalid inventory fields")
-    require(type(value["schemaVersion"]) is int and value["schemaVersion"] == 1,
+    require(type(value["schemaVersion"]) is int and value["schemaVersion"] == (2 if signed_final else 1),
             "unsupported inventory schema")
+    if signed_final:
+        require(type(value["certificateSha256"]) is str and
+                re.fullmatch(r"[0-9a-f]{64}", value["certificateSha256"]), "invalid final certificate pin")
     info = validate_identity(value["identity"])
     require(info == expected, "inventory differs from calculator")
+    return info
+
+
+def validate_inventory(value, directory, expected, signed_final=False):
+    info = inventory_identity(value, expected, signed_final)
     require(type(value["artifacts"]) is list, "invalid artifact list")
     # Validate EVERY record before selecting Go targets (including Android/auxiliaries).
-    targets = [validate_entry(item, info) for item in value["artifacts"]]
+    targets = [validate_entry(item, info, signed_final) for item in value["artifacts"]]
     require(len(targets) == len(set(targets)), "duplicate target")
-    require(set(targets) in (set(TARGETS), set(TARGETS + AUXILIARIES)), "missing targets")
+    allowed = (set(TARGETS + FINAL_AUXILIARIES),) if signed_final else (set(TARGETS), set(TARGETS + AUXILIARIES))
+    require(set(targets) in allowed, "missing targets")
     for item in value["artifacts"]:
         path = directory / item["filename"]
         require(path.is_file() and not path.is_symlink(), "missing or symlink artifact")
@@ -244,10 +265,10 @@ def native_target():
     return system, arch
 
 
-def verify_native(path, receipt, expected_target):
+def verify_native(path, receipt, expected_target, signed_final=False):
     value = read_json(path)
     info = identity()
-    items = validate_inventory(value, path.parent, info)
+    items = validate_inventory(value, path.parent, info, signed_final)
     system, arch = native_target()
     require((system, arch) == expected_target, "native runner target differs from matrix")
     selected = [item for item in items if (item["os"], item["arch"]) == (system, arch)]
@@ -363,6 +384,7 @@ def main(argv=None):
     native.add_argument("--receipt", type=pathlib.Path, required=True)
     native.add_argument("--os", choices=("linux", "darwin", "windows"), required=True)
     native.add_argument("--arch", choices=("amd64", "arm64"), required=True)
+    native.add_argument("--signed-final", action="store_true")
     pack = sub.add_parser("package")
     for name in ("go-inventory", "apk", "go-bom", "android-bom", "aapt", "output"):
         pack.add_argument("--" + name, type=pathlib.Path, required=True)
@@ -370,7 +392,7 @@ def main(argv=None):
     if args.command == "build-go":
         build_go(args.output)
     elif args.command == "verify-native":
-        verify_native(args.inventory, args.receipt, (args.os, args.arch))
+        verify_native(args.inventory, args.receipt, (args.os, args.arch), args.signed_final)
     else:
         package(args.go_inventory, args.apk, args.go_bom, args.android_bom, args.aapt, args.output)
     return 0

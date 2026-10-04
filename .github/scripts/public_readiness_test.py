@@ -223,6 +223,67 @@ class PublicReadinessPolicyTest(unittest.TestCase):
         self.assertLess(download, verify)
         self.assertLess(verify, execute)
 
+    def test_release_secrets_writers_are_separate_and_public_default_deny_gated(self):
+        text = read(".github/workflows/release.yml")
+        trigger = text.split("\nconcurrency:", 1)[0]
+        self.assertNotIn("pull_request", trigger)
+        self.assertNotIn("workflow_dispatch", trigger)
+        self.assertIn("tags: ['v*']", trigger)
+        preflight = job(text, "preflight")
+        self.assertNotIn("secrets.", preflight)
+        self.assertIn("vars.QMIX_RELEASE_POLICY", preflight)
+        self.assertIn("vars.QMIX_RELEASE_APPROVAL", preflight)
+        self.assertIn("QMIX_RELEASE_TAG: ${{ github.ref_name }}", preflight)
+        self.assertIn("release_guard.py", preflight)
+        for name, mode in (("sign-repository", "repository-writers"), ("sign-protected", "protected-environment")):
+            body = job(text, name)
+            self.assertIn("needs.preflight.outputs.admitted == 'true'", body)
+            self.assertIn("needs.preflight.outputs.trust_mode == '" + mode + "'", body)
+            match = re.search(r"(?m)^    if: (.+)$", body)
+            self.assertIsNotNone(match)
+            assert match is not None
+            condition = match.group(1)
+            self.assertNotIn("secrets.", condition)
+            self.assertLess(body.index("release_guard.py"), body.index("secrets.QMIX_RELEASE_KEYSTORE_BASE64"))
+            self.assertNotIn("contents: write", body)
+            self.assertNotIn("packages: write", body)
+        self.assertIn("environment: ${{ needs.preflight.outputs.environment }}", job(text, "sign-protected"))
+        self.assertNotIn("environment:", job(text, "sign-repository"))
+        self.assertNotIn("github-pages", text)
+        publisher = job(text, "publish")
+        self.assertIn("needs.preflight.outputs.admitted == 'true'", publisher)
+        self.assertIn("needs.native-images.result == 'success'", publisher)
+        self.assertIn("contents: write", publisher)
+        self.assertIn("packages: write", publisher)
+        self.assertIn("release_publish.py", publisher)
+        self.assertIn('trap \'rm -rf "$DOCKER_CONFIG"\' EXIT', publisher)
+        self.assertEqual(text.count("contents: write"), 1)
+        self.assertEqual(text.count("packages: write"), 1)
+
+    def test_signed_fixtures_have_actual_download_install_and_native_image_jobs(self):
+        ci = read(".github/workflows/ci.yml")
+        producer = job(ci, "release-payload")
+        self.assertIn("release_fixture.py finalize", producer)
+        self.assertIn("validate_sbom_schema.sh", producer)
+        tv = job(ci, "release-tv")
+        self.assertIn("name: final-payload-${{ matrix.version }}", tv)
+        self.assertIn("release_fixture.py verify", tv)
+        self.assertIn("release_tv_install.sh", tv)
+        image = job(ci, "release-images")
+        self.assertIn("runner: ubuntu-24.04-arm", image)
+        self.assertIn("runner: ubuntu-24.04", image)
+        self.assertIn("release_images.py", image)
+        for body in (producer, tv, image, job(ci, "release-image-plan")):
+            self.assertNotIn("secrets.", body)
+            self.assertNotRegex(body, r"[a-z-]+: write")
+            self.assertNotIn("self-hosted", body)
+        installer = read(".github/scripts/release_tv_install.sh")
+        for requirement in ("-wipe-data", "-no-snapshot", 'install "$apk"', "LEANBACK_LAUNCHER", "verify_apk(installed", "p.sha256(apk) == p.sha256(installed)"):
+            self.assertIn(requirement, installer)
+        self.assertNotIn("connectedDebugAndroidTest", tv)
+        self.assertNotIn("docker/", image)
+        self.assertIn("--signed-final", job(ci, "release-native"))
+
     def test_pull_request_workflows_receive_no_repository_secrets(self):
         for path in WORKFLOWS.glob("*.yml"):
             text = path.read_text(encoding="utf-8")

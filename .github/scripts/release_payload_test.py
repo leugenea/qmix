@@ -299,6 +299,88 @@ class ReleasePayloadTest(unittest.TestCase):
             self.assertEqual(edges[item["bom-ref"]], [generate_sbom._go_ref(module, "v1.0.0")])
             self.assertEqual(item["hashes"][0]["content"], hashes[item["bom-ref"]])
 
+    def unsigned_package_fixture(self):
+        apk = self.apk_fixture()
+        go_bom, android_bom = self.root / "go.cdx.json", self.root / "android.cdx.json"
+        roots = {f'pkg:generic/{row["component"]}@{INFO["version"]}?arch={row["arch"]}&os={row["os"]}&type=binary': row["sha256"]
+                 for row in self.value["artifacts"]}
+        self.bom_fixture(go_bom, roots)
+        self.bom_fixture(android_bom, {f'pkg:generic/qmix-android@{INFO["version"]}?type=apk': payload.sha256(apk)})
+        with mock.patch.object(payload, "identity", return_value=INFO), mock.patch.object(payload, "inspect_go"), mock.patch.object(payload, "inspect_apk"), mock.patch.object(payload, "run", return_value=FLAGS):
+            output = self.root / "unsigned-complete"
+            payload.package(self.manifest, apk, go_bom, android_bom, pathlib.Path("aapt"), output)
+        return output
+
+    def test_finalizer_binds_changed_apk_bom_checksums_and_preserves_go_license_bytes(self):
+        import os
+        import release_signing as signing
+        unsigned = self.unsigned_package_fixture()
+        signed = self.root / "app-release-signed.apk"
+        signed.write_bytes(b"controlled signed-byte stand-in; SDK verification mocked explicitly")
+        bom = self.root / "signed.cdx.json"
+        self.bom_fixture(bom, {f'pkg:generic/qmix-android@{INFO["version"]}?type=apk': payload.sha256(signed)})
+        output = self.root / "final"
+        with mock.patch.dict(os.environ, {"RUNNER_TEMP": str(self.root)}), mock.patch.object(signing, "verify_apk"), mock.patch.object(payload, "inspect_go"), mock.patch.object(payload, "run", return_value=FLAGS):
+            signing.finalize(unsigned, signed, bom, output, INFO, pathlib.Path("sdk"), "1" * 64)
+            names = signing.verify_final(output, INFO, pathlib.Path("sdk"), "1" * 64)
+            self.assertEqual(len(names), 18)
+            self.assertTrue(all("unsigned" not in name for name in names))
+            value = payload.read_json(signing.inventory_path(output, INFO))
+            self.assertEqual(value["schemaVersion"], 2)
+            self.assertEqual(value["certificateSha256"], "1" * 64)
+            self.assertEqual([row for row in value["artifacts"] if row["component"] in {"qmix", "token-vk", "token-ym"}], self.value["artifacts"])
+            for name in names:
+                if (unsigned / name).exists() and name not in {"SHA256SUMS", signing.inventory_path(output, INFO).name}:
+                    self.assertEqual((unsigned / name).read_bytes(), (output / name).read_bytes())
+            (output / "unlisted.keystore").write_bytes(b"not a real key")
+            with self.assertRaisesRegex(ValueError, "unexpected final files"):
+                signing.verify_final(output, INFO, pathlib.Path("sdk"), "1" * 64)
+            (output / "unlisted.keystore").unlink()
+            (output / "SHA256SUMS").write_text("wrong checksum list")
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                signing.verify_final(output, INFO, pathlib.Path("sdk"), "1" * 64)
+
+    def final_inventory_fixture(self):
+        records = copy.deepcopy(self.value["artifacts"])
+        for target in payload.FINAL_AUXILIARIES:
+            name = payload.filename(target[0], INFO["version"], *target[1:])
+            path = self.go / name
+            path.write_bytes(b"controlled inventory fixture, not a real signed APK")
+            source = self.root / ("app-release-signed.apk" if target[0] == "qmix-android" else "bom.json")
+            provenance = source if target[0] != "qmix-licenses" else None
+            method = "zipalign+apksigner+aapt" if target[0] == "qmix-android" else (
+                "license-bundle" if target[0] == "qmix-licenses" else "sbom-hash-roots")
+            records.append(payload.entry(path, INFO, target, method, provenance))
+        return payload.inventory(INFO, records) | {"schemaVersion": 2, "certificateSha256": "1" * 64}
+
+    def test_explicit_signed_final_mode_does_not_weaken_unsigned_schema(self):
+        value = self.final_inventory_fixture()
+        self.assertEqual(len(payload.validate_inventory(value, self.go, INFO, signed_final=True)), 16)
+        with self.assertRaises(ValueError):
+            payload.validate_inventory(value, self.go, INFO)
+        with self.assertRaises(ValueError):
+            payload.validate_inventory(self.value, self.go, INFO, signed_final=True)
+        for field, replacement in (("schemaVersion", True), ("certificateSha256", ""),
+                                   ("certificateSha256", "A" * 64), ("artifacts", [])):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                payload.validate_inventory(value | {field: replacement}, self.go, INFO, signed_final=True)
+
+    def test_signed_native_consumer_validates_every_row_before_go_filter(self):
+        value = self.final_inventory_fixture()
+        receipt = self.root / "final-native.json"
+        payload.write_json(self.manifest, value)
+        with mock.patch.object(payload, "identity", return_value=INFO), mock.patch.object(payload, "native_target", return_value=("linux", "amd64")):
+            with mock.patch.object(payload, "run", return_value=json.dumps(INFO)) as runner:
+                payload.verify_native(self.manifest, receipt, ("linux", "amd64"), signed_final=True)
+            self.assertEqual(runner.call_count, 3)
+            bad = copy.deepcopy(value)
+            apk = next(row for row in bad["artifacts"] if row["component"] == "qmix-android")
+            apk["sourceArtifact"] = "app-debug.apk"
+            payload.write_json(self.manifest, bad)
+            with mock.patch.object(payload, "run") as runner, self.assertRaises(ValueError):
+                payload.verify_native(self.manifest, receipt, ("linux", "amd64"), signed_final=True)
+            runner.assert_not_called()
+
     def test_default_sbom_target_contract_and_output_guard_are_preserved(self):
         defaults = generate_sbom._go_targets(None, {})
         self.assertEqual([item[:3] for item in defaults], list(generate_sbom.GO_TARGETS))

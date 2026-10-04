@@ -14,7 +14,8 @@ MODULE_PATH = pathlib.Path(__file__).with_name("workflow_paths.py")
 sys.path.insert(0, str(MODULE_PATH.parent))  # Standalone import mirrors the route CLI.
 REPOSITORY_ROOT = MODULE_PATH.parents[2]
 WORKFLOW_DIR = REPOSITORY_ROOT / ".github" / "workflows"
-RELEASE_SKIPPED = {"RELEASE_OUTPUT": "false", "PAYLOAD_RESULT": "skipped", "NATIVE_RESULT": "skipped"}
+RELEASE_SKIPPED = {"RELEASE_OUTPUT": "false", "PAYLOAD_RESULT": "skipped", "NATIVE_RESULT": "skipped",
+                   "TV_RESULT": "skipped", "IMAGES_RESULT": "skipped", "IMAGE_PLAN_RESULT": "skipped"}
 ROUTED_WORKFLOWS = ("ci.yml", "android.yml", "live.yml")
 SPEC = importlib.util.spec_from_file_location("workflow_paths", MODULE_PATH)
 workflow_paths = importlib.util.module_from_spec(SPEC)
@@ -30,6 +31,29 @@ class WorkflowPathsTest(unittest.TestCase):
         for name in ("release_payload.py", "release_payload_test.py", "generate_sbom.py", "generate_sbom_test.py"):
             with self.subTest(name=name):
                 self.assertEqual(workflow_paths.classify([".github/scripts/" + name]), {"ci", "android"})
+
+    def test_release_paths_route_actual_sdk_tv_image_dependencies(self):
+        for path in (".github/workflows/release.yml", ".github/scripts/release_guard.py",
+                     ".github/scripts/release_signing.py", ".github/scripts/release_images.py",
+                     ".github/scripts/release_publish.py", ".github/scripts/release_fixture.py",
+                     ".github/scripts/release_tv_install.sh", ".github/scripts/release_pipeline_test.py"):
+            with self.subTest(path=path):
+                self.assertTrue({"ci", "android"} <= workflow_paths.classify([path]))
+
+    def test_ci_result_rejects_each_missing_signed_fixture_proof(self):
+        script = self._result_script("ci.yml")
+        base = {"ROUTE_RESULT": "success", "POLICY_RESULT": "success", "ROUTE_OUTPUT": "false",
+                "CI_RESULT": "skipped", "INTEGRATION_RESULT": "skipped", "DOCKER_RESULT": "skipped",
+                "REPORT_RESULT": "skipped", "EROSION_OUTPUT": "false", "EROSION_RESULT": "skipped",
+                "DUPLICATION_OUTPUT": "false", "DUPLICATION_RESULT": "skipped", "EROSION_REPORT_RESULT": "skipped",
+                "HISTORY_RESULT": "skipped", "PAGES_RESULT": "skipped", "EVENT_NAME": "pull_request",
+                "RELEASE_OUTPUT": "true", "PAYLOAD_RESULT": "success", "NATIVE_RESULT": "success",
+                "TV_RESULT": "success", "IMAGES_RESULT": "success", "IMAGE_PLAN_RESULT": "success"}
+        self.assertEqual(subprocess.run(["bash", "-e", "-c", script], env=base).returncode, 0)
+        for name in ("TV_RESULT", "IMAGES_RESULT", "IMAGE_PLAN_RESULT"):
+            for result in ("skipped", "failure", "cancelled", ""):
+                with self.subTest(job=name, result=result):
+                    self.assertNotEqual(subprocess.run(["bash", "-e", "-c", script], env=base | {name: result}).returncode, 0)
 
     def test_offline_release_jobs_cover_rc_stable_and_all_native_platforms(self):
         ci = (WORKFLOW_DIR / "ci.yml").read_text()
@@ -60,7 +84,8 @@ class WorkflowPathsTest(unittest.TestCase):
                          [("linux", "amd64"), ("linux", "arm64"), ("darwin", "amd64"), ("darwin", "arm64"), ("windows", "amd64")])
         self.assertIn('verify-native', native)
         self.assertIn('--os "$TARGET_OS" --arch "$TARGET_ARCH"', native)
-        self.assertIn("release-payload, release-native]", result)
+        self.assertIn("release-payload, release-native, release-tv, release-images, release-image-plan]", result)
+        self.assertIn("--signed-final", native)
         self.assertIn("RELEASE_OUTPUT", result)
         self.assertIn("make test-workflow-routing test-public-readiness test-sbom test-release-payload", ci)
 
@@ -80,9 +105,83 @@ class WorkflowPathsTest(unittest.TestCase):
             ("false", "success", "success", False), ("", "skipped", "skipped", False),
             ("invalid", "skipped", "skipped", False),
         ):
-            env = base | {"RELEASE_OUTPUT": route, "PAYLOAD_RESULT": payload, "NATIVE_RESULT": native}
+            env = base | {"RELEASE_OUTPUT": route, "PAYLOAD_RESULT": payload, "NATIVE_RESULT": native,
+                          "TV_RESULT": payload, "IMAGES_RESULT": payload, "IMAGE_PLAN_RESULT": payload}
             with self.subTest(route=route, payload=payload, native=native):
                 self.assertEqual(subprocess.run(["bash", "-e", "-c", script], env=env).returncode == 0, succeeds)
+
+    def test_image_plan_downloads_exact_disjoint_rc_and_stable_native_receipts(self):
+        ci = (WORKFLOW_DIR / "ci.yml").read_text()
+        producer = self._job(ci, "release-images")
+        plan = self._job(ci, "release-image-plan")
+        self.assertIn("name: fixture-image-${{ matrix.version }}-${{ matrix.target.arch }}", producer)
+        self.assertEqual(re.findall(r"arch: (\S+)", producer), ["amd64", "arm64"])
+        self.assertIn("version: ['0.1.0-rc.1', '0.1.0']", plan)
+        downloads = re.findall(r"(?m)^      - uses: actions/download-artifact@([^\n]+)\n(.*?)(?=^      - )", plan, re.S)
+        self.assertEqual(len(downloads), 2)
+        names = []
+        for pin, inputs in downloads:
+            self.assertEqual(pin, "d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4")
+            self.assertNotIn("pattern:", inputs)
+            self.assertNotIn("merge-multiple:", inputs)
+            self.assertIn("path: ${{ runner.temp }}/images/", inputs)
+            name = re.findall(r"name: (\S.*)", inputs)
+            self.assertEqual(len(name), 1)
+            names.append(name[0])
+        artifacts = {f"fixture-image-{version}-{arch}" for version in ("0.1.0-rc.1", "0.1.0") for arch in ("amd64", "arm64")}
+        selected = []
+        for version in ("0.1.0-rc.1", "0.1.0"):
+            exact = {name.replace("${{ matrix.version }}", version) for name in names}
+            self.assertEqual(exact & artifacts, {f"fixture-image-{version}-amd64", f"fixture-image-{version}-arm64"})
+            selected.append(exact)
+        self.assertFalse(selected[0] & selected[1])
+
+    def test_tv_launch_uses_one_validated_resolved_leanback_component(self):
+        installer = (REPOSITORY_ROOT / ".github/scripts/release_tv_install.sh").read_text()
+        # Execute the actual command-selection/runtime assertion block, not an emulator.
+        block = installer.split("timeout 60 adb -s emulator-5554 shell cmd package resolve-activity", 1)[1].split('python3 - "$apk" "$inventory" "$receipt"', 1)[0]
+        block = "timeout 60 adb -s emulator-5554 shell cmd package resolve-activity" + block
+        intent = "-a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER"
+        resolve = "-s emulator-5554 shell cmd package resolve-activity --brief " + intent + " -p com.qmix.tv"
+        start = "-s emulator-5554 shell am start -W " + intent + " -n "
+        stub = textwrap.dedent('''
+            adb() {
+              printf '%s\\n' "$*" >> "$RUNNER_TEMP/commands.txt"
+              case "$*" in
+                "$RESOLVE") printf '%s' "$RESOLUTION"; return "$RESOLVE_EXIT" ;;
+                "$START"*) printf '%s\\n' "$LAUNCH_STATUS" ;;
+                '-s emulator-5554 shell pidof com.qmix.tv') printf '%s' "$PID" ;;
+                '-s emulator-5554 shell dumpsys activity activities') printf '%s' "$FOREGROUND" ;;
+                *) return 90 ;;
+              esac
+            }
+            timeout() { [[ "$1" == 60 ]]; shift; "$@"; }
+        ''')
+        short, full = "com.qmix.tv/.MainActivity", "com.qmix.tv/com.qmix.tv.MainActivity"
+        metadata = "priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false\r\n"
+        valid = {"RESOLVE_EXIT": "0", "LAUNCH_STATUS": "Status: ok", "PID": "123",
+                 "FOREGROUND": "topResumedActivity=ActivityRecord{ com.qmix.tv/.MainActivity }"}
+        cases = [(metadata + short + "\r\n", {}, short), (full + "\n", {}, full),
+                 ("No activity found\n", {}, None), (short + "\n" + short, {}, None),
+                 (short + "Suffix", {}, None), ("other.package/.MainActivity", {}, None),
+                 (short + "\nother.package/.Activity", {}, None),
+                 (short, {"RESOLVE_EXIT": "1"}, None), (short, {"LAUNCH_STATUS": "Error: unable to resolve"}, None),
+                 (short, {"PID": ""}, None), (short, {"FOREGROUND": "other.package/.Activity"}, None)]
+        for resolution, override, component in cases:
+            with self.subTest(resolution=resolution, override=override), tempfile.TemporaryDirectory() as temporary:
+                env = os.environ | valid | override | {"RUNNER_TEMP": temporary, "RESOLUTION": resolution,
+                                                       "RESOLVE": resolve, "START": start}
+                result = subprocess.run(["bash", "-euo", "pipefail", "-c", stub + block], env=env, capture_output=True, text=True, timeout=5)
+                commands = (pathlib.Path(temporary) / "commands.txt").read_text().splitlines()
+                self.assertEqual(commands[0], resolve)
+                self.assertEqual(result.returncode == 0, component is not None)
+                if component is not None:
+                    self.assertEqual(commands[1], start + component)
+                    self.assertEqual(len(commands), 4)  # Launch, running PID and resumed foreground all observed.
+                elif not override:
+                    self.assertEqual(commands, [resolve])  # No hardcoded fallback or raw multiline -n.
+        tv = self._job((WORKFLOW_DIR / "ci.yml").read_text(), "release-tv")
+        self.assertIn("${{ runner.temp }}/leanback-resolution.txt", tv)
 
     def test_android_source_routes_android_erosion_and_duplication(self):
         self.assertEqual(
@@ -263,6 +362,11 @@ class WorkflowPathsTest(unittest.TestCase):
                         block = self._job(text, name)
                         self.assertIn("queue: max", block)
                         self.assertIn("cancel-in-progress: false", block)
+                elif path.name == "release.yml":
+                    self.assertIn("group: qmix-production-release", text)
+                    self.assertIn("queue: max", text)
+                    self.assertIn("cancel-in-progress: false", text)
+                    self.assertNotIn("cancel-in-progress: true", text)
                 else:
                     self.assertIn(group, text)
                     self.assertIn("cancel-in-progress: true", text)

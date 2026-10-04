@@ -1,0 +1,286 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Immutable publishers must not cancel one another, including pending runs.
+concurrency:
+  group: qmix-production-release
+  queue: max
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    outputs:
+      admitted: ${{ steps.guard.outputs.admitted }}
+      environment: ${{ steps.guard.outputs.environment }}
+      trust_mode: ${{ steps.guard.outputs.trust_mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - id: guard
+        name: Public default-deny admission (no signing secrets)
+        env:
+          QMIX_RELEASE_POLICY: ${{ vars.QMIX_RELEASE_POLICY }}
+          QMIX_RELEASE_APPROVAL: ${{ vars.QMIX_RELEASE_APPROVAL }}
+          QMIX_RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 .github/scripts/release_guard.py --receipt "$RUNNER_TEMP/admission.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-admission
+          path: ${{ runner.temp }}/admission.json
+          if-no-files-found: error
+
+  unsigned:
+    needs: preflight
+    if: needs.preflight.outputs.admitted == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Build existing complete unsigned contract
+        run: |
+          python3 .github/scripts/release_payload.py build-go --output "$RUNNER_TEMP/go"
+          python3 .github/scripts/generate_sbom.py go --target-inventory "$RUNNER_TEMP/go/go-inventory.json" --output "$RUNNER_TEMP/go.cdx.json"
+          (cd android && ./gradlew --no-daemon --dependency-verification=strict :app:assembleRelease)
+          apk="$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          python3 .github/scripts/generate_sbom.py android --apk "$apk" --output "$RUNNER_TEMP/android.cdx.json"
+          .github/scripts/validate_sbom_schema.sh "$RUNNER_TEMP/go.cdx.json" "$RUNNER_TEMP/android.cdx.json"
+          python3 .github/scripts/release_payload.py package --go-inventory "$RUNNER_TEMP/go/go-inventory.json" \
+            --apk "$apk" --go-bom "$RUNNER_TEMP/go.cdx.json" --android-bom "$RUNNER_TEMP/android.cdx.json" \
+            --aapt "$ANDROID_HOME/build-tools/35.0.0/aapt" --output "$RUNNER_TEMP/unsigned"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-unsigned
+          path: ${{ runner.temp }}/unsigned/
+          if-no-files-found: error
+
+  sign-repository:
+    needs: [preflight, unsigned]
+    if: needs.preflight.outputs.admitted == 'true' && needs.preflight.outputs.trust_mode == 'repository-writers'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: production-unsigned
+          path: ${{ runner.temp }}/unsigned/
+      - name: Recheck exact public approval before accessing signing material
+        env:
+          QMIX_RELEASE_POLICY: ${{ vars.QMIX_RELEASE_POLICY }}
+          QMIX_RELEASE_APPROVAL: ${{ vars.QMIX_RELEASE_APPROVAL }}
+          QMIX_RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 .github/scripts/release_guard.py --receipt "$RUNNER_TEMP/admission.json"
+      - name: Isolated signing and complete signed-byte inventory
+        env:
+          QMIX_RELEASE_KEYSTORE_BASE64: ${{ secrets.QMIX_RELEASE_KEYSTORE_BASE64 }}
+          QMIX_RELEASE_KEY_ALIAS: ${{ secrets.QMIX_RELEASE_KEY_ALIAS }}
+          QMIX_RELEASE_STORE_PASSWORD: ${{ secrets.QMIX_RELEASE_STORE_PASSWORD }}
+          QMIX_RELEASE_KEY_PASSWORD: ${{ secrets.QMIX_RELEASE_KEY_PASSWORD }}
+        run: |
+          pin=$(jq -r .certificateSha256 "$RUNNER_TEMP/admission.json")
+          python3 .github/scripts/release_signing.py complete --unsigned "$RUNNER_TEMP/unsigned" \
+            --output "$RUNNER_TEMP/final" --certificate "$pin"
+          .github/scripts/validate_sbom_schema.sh "$RUNNER_TEMP/final/"*.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-final
+          path: ${{ runner.temp }}/final/
+          if-no-files-found: error
+
+  sign-protected:
+    needs: [preflight, unsigned]
+    if: needs.preflight.outputs.admitted == 'true' && needs.preflight.outputs.trust_mode == 'protected-environment'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: ${{ needs.preflight.outputs.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: production-unsigned
+          path: ${{ runner.temp }}/unsigned/
+      - name: Recheck exact public approval before accessing signing material
+        env:
+          QMIX_RELEASE_POLICY: ${{ vars.QMIX_RELEASE_POLICY }}
+          QMIX_RELEASE_APPROVAL: ${{ vars.QMIX_RELEASE_APPROVAL }}
+          QMIX_RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 .github/scripts/release_guard.py --receipt "$RUNNER_TEMP/admission.json"
+      - name: Isolated signing and complete signed-byte inventory
+        env:
+          QMIX_RELEASE_KEYSTORE_BASE64: ${{ secrets.QMIX_RELEASE_KEYSTORE_BASE64 }}
+          QMIX_RELEASE_KEY_ALIAS: ${{ secrets.QMIX_RELEASE_KEY_ALIAS }}
+          QMIX_RELEASE_STORE_PASSWORD: ${{ secrets.QMIX_RELEASE_STORE_PASSWORD }}
+          QMIX_RELEASE_KEY_PASSWORD: ${{ secrets.QMIX_RELEASE_KEY_PASSWORD }}
+        run: |
+          pin=$(jq -r .certificateSha256 "$RUNNER_TEMP/admission.json")
+          python3 .github/scripts/release_signing.py complete --unsigned "$RUNNER_TEMP/unsigned" \
+            --output "$RUNNER_TEMP/final" --certificate "$pin"
+          .github/scripts/validate_sbom_schema.sh "$RUNNER_TEMP/final/"*.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-final
+          path: ${{ runner.temp }}/final/
+          if-no-files-found: error
+
+  native-images:
+    needs: preflight
+    if: needs.preflight.outputs.admitted == 'true'
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Actual native image build/labels/identity/readiness
+        env:
+          TARGET_ARCH: ${{ matrix.target.arch }}
+        run: python3 .github/scripts/release_images.py --arch "$TARGET_ARCH" --output "$RUNNER_TEMP/images"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-image-${{ matrix.target.arch }}
+          path: ${{ runner.temp }}/images/
+          if-no-files-found: error
+
+  publish:
+    needs: [preflight, sign-repository, sign-protected, native-images]
+    if: >-
+      always() && needs.preflight.outputs.admitted == 'true' && needs.native-images.result == 'success' &&
+      ((needs.sign-repository.result == 'success' && needs.sign-protected.result == 'skipped') ||
+       (needs.sign-protected.result == 'success' && needs.sign-repository.result == 'skipped'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: production-final
+          path: ${{ runner.temp }}/final/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: production-image-*
+          path: ${{ runner.temp }}/images/
+          merge-multiple: true
+      - name: Immutable complete-set publication and fresh download verification
+        env:
+          QMIX_RELEASE_POLICY: ${{ vars.QMIX_RELEASE_POLICY }}
+          QMIX_RELEASE_APPROVAL: ${{ vars.QMIX_RELEASE_APPROVAL }}
+          QMIX_RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          DOCKER_CONFIG: ${{ runner.temp }}/release-docker-auth
+        run: |
+          mkdir -m 700 "$DOCKER_CONFIG"
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+          python3 .github/scripts/release_publish.py --directory "$RUNNER_TEMP/final" \
+            --images "$RUNNER_TEMP/images" --receipt "$RUNNER_TEMP/publication.json"
+      - name: Preserve public partial-state IDs/digests (never credentials)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-publication-receipt
+          path: ${{ runner.temp }}/publication.json
+          if-no-files-found: warn
