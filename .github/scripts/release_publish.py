@@ -92,10 +92,24 @@ class Services:
     def gh(self, *args):
         return signing.tool(["gh", "release", *args, "--repo", REPOSITORY]).decode().strip()
 
-    def release(self, tag):
-        status, _, body = self.github("/releases/tags/" + tag)
+    def draft_id(self, tag):
+        # Authenticated inventory includes drafts; the tag endpoint is published-only.
+        rows = self.releases()
+        matches = [item for item in rows if item.get("tag_name") == tag]
+        payload.require(len(matches) == 1, "created draft lookup UNKNOWN")
+        release_id = matches[0].get("id")
+        payload.require(type(release_id) is int and release_id > 0 and
+                        sum(item.get("id") == release_id for item in rows) == 1,
+                        "created draft ID UNKNOWN")
+        return release_id
+
+    def release(self, release_id):
+        status, _, body = self.github("/releases/" + str(release_id))
         payload.require(status == 200, "Release readback UNKNOWN")
-        return parsed(body)
+        release = parsed(body)
+        payload.require(type(release.get("id")) is int and release["id"] == release_id,
+                        "Release ID differs")
+        return release
 
     def latest(self):
         status, _, body = self.github("/releases/latest")
@@ -136,8 +150,8 @@ def preflight(service, tag, admission):
     return {alias: service.registry(image, alias) for alias in admission["distribution"]["aliases"]}
 
 
-def verify_release(service, tag, policy, files, draft):
-    release = service.release(tag)
+def verify_release(service, release_id, tag, policy, files, draft):
+    release = service.release(release_id)
     payload.require(release["tag_name"] == tag and release["draft"] is draft and
                     release["prerelease"] is policy["prerelease"], "Release metadata differs")
     rows = release["assets"]
@@ -233,14 +247,15 @@ def execute(directory, image_directory, receipt_path):
 def publish_set(service, tag, admission, files, sdk, local, receipts, receipt_path, state):
     policy = admission["distribution"]
     service.create(tag, policy)
-    state["releaseId"] = service.release(tag)["id"]
+    state["releaseId"] = service.draft_id(tag)
     save(receipt_path, state)
+    verify_release(service, state["releaseId"], tag, policy, [], draft=True)
     service.upload(tag, files)
-    verify_release(service, tag, policy, files, draft=True)
+    verify_release(service, state["releaseId"], tag, policy, files, draft=True)
     verify_download(service, tag, files, admission, sdk)
     publish_images(service, admission, local, receipts, receipt_path, state)
     service.publish(tag, policy)
-    verify_release(service, tag, policy, files, draft=False)
+    verify_release(service, state["releaseId"], tag, policy, files, draft=False)
     verify_download(service, tag, files, admission, sdk)
     latest = service.latest()
     if policy["latest"]:

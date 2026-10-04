@@ -924,6 +924,7 @@ jobs:
             ${{ runner.temp }}/tv-receipt.json
             ${{ runner.temp }}/release-tv-emulator.log
             ${{ runner.temp }}/installed-package.txt
+            ${{ runner.temp }}/leanback-resolution.txt
             ${{ runner.temp }}/leanback-launch.txt
             ${{ runner.temp }}/leanback-activity.txt
           if-no-files-found: error
@@ -996,9 +997,12 @@ jobs:
           python-version: '3.13'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: fixture-image-${{ matrix.version }}-*
+          name: fixture-image-${{ matrix.version }}-amd64
           path: ${{ runner.temp }}/images/
-          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: fixture-image-${{ matrix.version }}-arm64
+          path: ${{ runner.temp }}/images/
       - name: Bind both native proofs to an offline config-digest plan
         env:
           FIXTURE_VERSION: ${{ matrix.version }}

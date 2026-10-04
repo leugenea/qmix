@@ -56,14 +56,23 @@ p.require(p.sha256(apk) == p.sha256(installed), 'installed APK bytes differ')
 s.verify_apk(installed, value['identity'], s.sdk_tools(), value['certificateSha256'])
 PY
 adb -s emulator-5554 shell dumpsys package com.qmix.tv > "$RUNNER_TEMP/installed-package.txt"
-activity=$(adb -s emulator-5554 shell cmd package resolve-activity --brief \
-  -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER -p com.qmix.tv | tr -d '\r')
-[[ "$activity" == *com.qmix.tv/.MainActivity* ]]
-adb -s emulator-5554 shell am start -W -a android.intent.action.MAIN \
-  -c android.intent.category.LEANBACK_LAUNCHER -p com.qmix.tv > "$RUNNER_TEMP/leanback-launch.txt"
+timeout 60 adb -s emulator-5554 shell cmd package resolve-activity --brief \
+  -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER -p com.qmix.tv \
+  > "$RUNNER_TEMP/leanback-resolution.txt" 2>&1
+# --brief also prints priority/match metadata. Accept one exact resolved component.
+mapfile -t activities < <(tr -d '\r' < "$RUNNER_TEMP/leanback-resolution.txt" | grep '/')
+if [[ ${#activities[@]} -ne 1 ]]; then
+  printf 'Leanback resolution did not return one component\n' >&2
+  exit 1
+fi
+activity=${activities[0]}
+[[ "$activity" == com.qmix.tv/.MainActivity || "$activity" == com.qmix.tv/com.qmix.tv.MainActivity ]]
+# Implicit starts require DEFAULT; use the verified TV launcher without changing its filter.
+timeout 60 adb -s emulator-5554 shell am start -W -a android.intent.action.MAIN \
+  -c android.intent.category.LEANBACK_LAUNCHER -n "$activity" > "$RUNNER_TEMP/leanback-launch.txt" 2>&1
 grep -q '^Status: ok' "$RUNNER_TEMP/leanback-launch.txt"
-[[ -n "$(adb -s emulator-5554 shell pidof com.qmix.tv | tr -d '\r')" ]]
-adb -s emulator-5554 shell dumpsys activity activities > "$RUNNER_TEMP/leanback-activity.txt"
+[[ -n "$(timeout 60 adb -s emulator-5554 shell pidof com.qmix.tv | tr -d '\r')" ]]
+timeout 60 adb -s emulator-5554 shell dumpsys activity activities > "$RUNNER_TEMP/leanback-activity.txt"
 grep -E 'mResumedActivity|topResumedActivity' "$RUNNER_TEMP/leanback-activity.txt" | grep -q 'com.qmix.tv/.MainActivity'
 python3 - "$apk" "$inventory" "$receipt" <<'PY'
 import pathlib, sys

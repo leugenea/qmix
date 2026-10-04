@@ -218,7 +218,7 @@ class Protocol:
         self.info = INFO
 
     def response(self, value, status=200):
-        return status, {}, json.dumps(value).encode()
+        return (404 if value is None else status), {}, json.dumps(value).encode()
 
     def request(self, url, headers):
         self.events.append(("GET", url))
@@ -226,15 +226,25 @@ class Protocol:
             return self.response({"token": "controlled-registry-token"})
         if "/manifests/" in url:
             return self.manifest_response(url.rsplit("/", 1)[1])
+        assert headers["Authorization"] == "Bearer test-only-token"
         return self.github_response(url)
 
     def github_response(self, url):
         if "/releases/latest" in url:
-            return self.response(self.latest or {}, 200 if self.latest else 404)
+            return self.response(self.latest)
         if "/releases/tags/" in url:
-            return self.response(self.release or {}, 200 if self.release else 404)
+            # GitHub's tag endpoint exposes published releases, never drafts.
+            visible = self.release
+            if visible and visible["draft"]:
+                visible = None
+            return self.response(visible)
         if "/releases?" in url:
             return self.response([self.release] if self.release else [])
+        if "/releases/" in url:
+            visible = self.release
+            if visible and not url.endswith("/" + str(visible["id"])):
+                visible = None
+            return self.response(visible)
         return self.response({"id": 1})
 
     def manifest_response(self, ref):
@@ -317,6 +327,10 @@ class PublisherTest(unittest.TestCase):
         self.assert_publish_order()
         state = payload.read_json(self.receipt)
         self.assertEqual(state["status"], "published-and-read-back")
+        self.assertEqual(state["releaseId"], 123)
+        readbacks = [event[1] for event in self.protocol.events if event[0] == "GET" and "/releases/123" in event[1]]
+        self.assertEqual(len(readbacks), 3)  # Fresh draft, uploaded draft, public: same ID.
+        self.assertFalse(any("/releases/tags/" in event[1] for event in self.protocol.events if event[0] == "GET"))
         self.assertEqual(set(state["platforms"]), {"amd64", "arm64"})
         self.assertEqual(state["aliases"], {})
         before = len(self.writes())
@@ -434,7 +448,74 @@ class PublisherTest(unittest.TestCase):
         for rows in ([], good * 2, good + [{"name": "key.keystore", "size": 1, "state": "uploaded"}]):
             self.protocol.release["assets"] = rows
             with self.subTest(rows=rows), self.assertRaises(ValueError):
-                publish.verify_release(service, APPROVAL["tag"], ADMISSION["distribution"], [self.file], True)
+                publish.verify_release(service, 123, APPROVAL["tag"], ADMISSION["distribution"], [self.file], True)
+
+    def test_draft_lookup_requires_exact_unique_tag_and_positive_unique_id(self):
+        good = {"id": 123, "tag_name": APPROVAL["tag"], "draft": True}
+        service = publish.Services()
+        for rows in ([], [good | {"tag_name": "v0.2.0"}], [good, good | {"id": 124}],
+                     [good, good | {"tag_name": "v0.2.0"}], [good | {"id": None}],
+                     [good | {"id": True}], [good | {"id": 0}], [good | {"id": "123"}]):
+            with self.subTest(rows=rows), mock.patch.object(service, "releases", return_value=rows), self.assertRaises(ValueError):
+                service.draft_id(APPROVAL["tag"])
+        self.protocol.release = good
+        self.assertEqual(self.protocol.github_response("/releases/tags/" + APPROVAL["tag"])[0], 404)
+        self.assertEqual(service.draft_id(APPROVAL["tag"]), 123)
+        self.assertEqual(service.release(123), good)
+
+    def test_post_create_inventory_unknown_stops_without_upload_or_repair(self):
+        original = self.protocol.github_response
+        good = {"id": 123, "tag_name": APPROVAL["tag"]}
+        for response in ((401, {}, b"{}"), (403, {}, b"{}"), (500, {}, b"{}"), (200, {}, b"[]"),
+                         self.protocol.response([good, good | {"id": 124}]),
+                         self.protocol.response([good, good | {"tag_name": "v0.2.0"}]),
+                         self.protocol.response([good | {"tag_name": "v0.2.0"}]),
+                         ValueError("remote state UNKNOWN")):
+            self.protocol.release = None
+            self.protocol.events.clear()
+            def fail_inventory(url):
+                if self.protocol.release and "/releases?" in url:
+                    if isinstance(response, Exception):
+                        raise response
+                    return response
+                return original(url)
+            with self.subTest(response=response), mock.patch.object(self.protocol, "github_response", side_effect=fail_inventory), self.assertRaisesRegex(ValueError, "publication stopped"):
+                self.run_publisher()
+            self.assertEqual([event[1][2] for event in self.writes()], ["create"])
+            state = payload.read_json(self.receipt)
+            self.assertIsNone(state["releaseId"])
+            self.assertIn("partial-or-unknown", state["status"])
+            with self.assertRaisesRegex(ValueError, "conflict"):
+                self.run_publisher()
+            self.assertEqual(payload.read_json(self.receipt), state)
+
+    def test_observed_draft_id_saved_before_unknown_or_mismatched_readback(self):
+        original = self.protocol.github_response
+        good = {"id": 123, "tag_name": APPROVAL["tag"], "draft": True, "prerelease": True, "assets": []}
+        for response in ((401, {}, b"{}"), (403, {}, b"{}"), (404, {}, b"{}"),
+                         self.protocol.response(good | {"id": 124}),
+                         self.protocol.response(good | {"tag_name": "v0.2.0"}),
+                         self.protocol.response(good | {"draft": False}),
+                         self.protocol.response(good | {"prerelease": False}),
+                         ValueError("remote state UNKNOWN")):
+            self.protocol.release = None
+            self.protocol.events.clear()
+            def fail_readback(url):
+                if url.endswith("/releases/123"):
+                    self.assertEqual(payload.read_json(self.receipt)["releaseId"], 123)
+                    if isinstance(response, Exception):
+                        raise response
+                    return response
+                return original(url)
+            with self.subTest(response=response), mock.patch.object(self.protocol, "github_response", side_effect=fail_readback), self.assertRaisesRegex(ValueError, "publication stopped"):
+                self.run_publisher()
+            state = payload.read_json(self.receipt)
+            self.assertEqual(state["releaseId"], 123)
+            self.assertIn("partial-or-unknown", state["status"])
+            self.assertEqual([event[1][2] for event in self.writes()], ["create"])
+            with self.assertRaisesRegex(ValueError, "conflict"):
+                self.run_publisher()
+            self.assertEqual(payload.read_json(self.receipt), state)
 
     def test_actual_manifest_protocol_rejects_wrong_platform_and_digest(self):
         digests = {"amd64": "sha256:" + "a" * 64, "arm64": "sha256:" + "b" * 64}
