@@ -202,6 +202,11 @@ func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, ca
 	case <-ctx.Done():
 	}
 
+	return shutdownHTTP(server, serveErr, cancelRequests, stopSSE, deadline)
+}
+
+// shutdownHTTP coordinates bounded shutdown after process cancellation.
+func shutdownHTTP(server httpServer, serveErr <-chan error, cancelRequests context.CancelFunc, stopSSE func(), deadline time.Duration) error {
 	if deadline < 0 {
 		deadline = 0
 	}
@@ -250,13 +255,7 @@ func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, ca
 		case err := <-shutdownErr:
 			shutdownErr = nil
 			shutdownDone = true
-			if !(shutdownCanceled && errors.Is(err, context.Canceled)) {
-				shutdownResult = err
-			}
-			cancelRequests()
-			if err != nil && !errors.Is(err, context.Canceled) {
-				startClose()
-			}
+			shutdownResult = handleShutdownResult(err, shutdownCanceled, cancelRequests, startClose)
 		case err := <-closeErr:
 			closeErr = nil
 			closeDone = true
@@ -279,6 +278,19 @@ func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, ca
 			return shutdownDeadlineError(shutdownErr, closeErr, serveErr, shutdownResult, closeResult, serveResult)
 		}
 	}
+}
+
+// handleShutdownResult handles observed Shutdown completion, not overall cleanup.
+func handleShutdownResult(err error, shutdownCanceled bool, cancelRequests context.CancelFunc, startClose func()) error {
+	var result error
+	if !(shutdownCanceled && errors.Is(err, context.Canceled)) {
+		result = err
+	}
+	cancelRequests()
+	if err != nil && !errors.Is(err, context.Canceled) {
+		startClose()
+	}
+	return result
 }
 
 // shutdownDeadlineError collects ready results after Shutdown was canceled.
