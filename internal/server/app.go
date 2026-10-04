@@ -202,6 +202,11 @@ func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, ca
 	case <-ctx.Done():
 	}
 
+	return shutdownHTTP(server, serveErr, cancelRequests, stopSSE, deadline)
+}
+
+// shutdownHTTP coordinates bounded shutdown after process cancellation.
+func shutdownHTTP(server httpServer, serveErr <-chan error, cancelRequests context.CancelFunc, stopSSE func(), deadline time.Duration) error {
 	if deadline < 0 {
 		deadline = 0
 	}
@@ -250,13 +255,7 @@ func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, ca
 		case err := <-shutdownErr:
 			shutdownErr = nil
 			shutdownDone = true
-			if !(shutdownCanceled && errors.Is(err, context.Canceled)) {
-				shutdownResult = err
-			}
-			cancelRequests()
-			if err != nil && !errors.Is(err, context.Canceled) {
-				startClose()
-			}
+			shutdownResult = handleShutdownResult(err, shutdownCanceled, cancelRequests, startClose)
 		case err := <-closeErr:
 			closeErr = nil
 			closeDone = true
@@ -276,23 +275,42 @@ func serveHTTP(ctx context.Context, server httpServer, listener net.Listener, ca
 			shutdownCanceled = true
 			cancelShutdown()
 			startClose()
-			for {
-				select {
-				case err := <-shutdownErr:
-					shutdownErr = nil
-					if !(shutdownCanceled && errors.Is(err, context.Canceled)) {
-						shutdownResult = err
-					}
-				case err := <-closeErr:
-					closeErr = nil
-					closeResult = err
-				case err := <-serveErr:
-					serveErr = nil
-					serveResult = intentionalServeError(err)
-				default:
-					return errors.Join(context.DeadlineExceeded, shutdownResult, closeResult, serveResult)
-				}
+			return shutdownDeadlineError(shutdownErr, closeErr, serveErr, shutdownResult, closeResult, serveResult)
+		}
+	}
+}
+
+// handleShutdownResult handles observed Shutdown completion, not overall cleanup.
+func handleShutdownResult(err error, shutdownCanceled bool, cancelRequests context.CancelFunc, startClose func()) error {
+	var result error
+	if !(shutdownCanceled && errors.Is(err, context.Canceled)) {
+		result = err
+	}
+	cancelRequests()
+	if err != nil && !errors.Is(err, context.Canceled) {
+		startClose()
+	}
+	return result
+}
+
+// shutdownDeadlineError collects ready results after Shutdown was canceled.
+// It never waits for unfinished Shutdown, Close, Serve, or SSE cleanup.
+func shutdownDeadlineError(shutdownErr, closeErr, serveErr <-chan error, shutdownResult, closeResult, serveResult error) error {
+	for {
+		select {
+		case err := <-shutdownErr:
+			shutdownErr = nil
+			if !errors.Is(err, context.Canceled) {
+				shutdownResult = err
 			}
+		case err := <-closeErr:
+			closeErr = nil
+			closeResult = err
+		case err := <-serveErr:
+			serveErr = nil
+			serveResult = intentionalServeError(err)
+		default:
+			return errors.Join(context.DeadlineExceeded, shutdownResult, closeResult, serveResult)
 		}
 	}
 }
