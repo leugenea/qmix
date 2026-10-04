@@ -2,6 +2,15 @@ package com.qmix.tv
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Typography
+import androidx.tv.material3.darkColorScheme
+import org.junit.Assert.assertEquals
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertIsDisplayed
@@ -67,6 +76,47 @@ class LiveRoomScreenCharacterizationTest {
     private fun press(from: String, key: Key, step: String, to: String) {
         composeRule.onNodeWithTag(from).performKeyInput { pressKey(key) }
         waitForFocus(step, to)
+    }
+
+    /** qmix#319: discriminate shared-role adoption while #104/#111 histories retain their original meaning. */
+    @Test
+    fun live_and_missing_use_shared_type_and_color_roles_with_distinct_current_hierarchy() {
+        val model = mutableStateOf(state())
+        lateinit var typography: Typography
+        composeRule.setContent {
+            QMixTvTheme {
+                typography = MaterialTheme.typography
+                HostingScreen(model.value, { _, _ -> }, {}, {})
+            }
+        }
+        waitForFocus("role adoption composed", "room-next")
+        val colors = darkColorScheme()
+        assertPresentationText("Room ABCD", typography.displaySmall, colors.onBackground)
+        assertPresentationText("Server-selected track", typography.headlineMedium, colors.primary)
+        assertPresentationText("Now title", typography.titleLarge, colors.onBackground)
+        assertPresentationText("First title", typography.titleMedium, colors.onSurface)
+        assertPresentationText("First artist", typography.bodyLarge, colors.onSurfaceVariant)
+        assertPresentationText("1:05", typography.bodyMedium, colors.onSurfaceVariant)
+        assertTrue("qmix#319: current hierarchy must remain distinct from queue", typography.titleLarge.fontSize > typography.titleMedium.fontSize)
+        composeRule.runOnIdle {
+            model.value = model.value.copy(synchronization = RoomSyncState.Missing("ABCD"),
+                replacementError = UserMessage.SERVER_TIMEOUT)
+        }
+        composeRule.onNodeWithText("New room").assertIsFocused().assertIsEnabled()
+        assertPresentationText("Room unavailable", typography.displaySmall, colors.onBackground)
+        assertPresentationText("The server timed out. Try again.", typography.bodyLarge, colors.error)
+        composeRule.onNodeWithTag("queue-list").assertDoesNotExist()
+    }
+
+    private fun assertPresentationText(text: String, expected: TextStyle, color: Color) {
+        val layouts = mutableListOf<TextLayoutResult>()
+        composeRule.onNodeWithText(text, useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue("$text layout action", it(layouts)) }
+        val actual = layouts.single().layoutInput.style
+        assertEquals("$text shared type size", expected.fontSize, actual.fontSize)
+        assertEquals("$text shared type weight", expected.fontWeight, actual.fontWeight)
+        assertEquals("$text shared line height", expected.lineHeight, actual.lineHeight)
+        assertEquals("$text shared color role", color, actual.color)
     }
 
     @Test

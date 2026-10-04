@@ -69,11 +69,91 @@ The existing `android-tv-test-reports` artifact includes
 PNG decoding/dimensions and hashes, observed locale/density/configuration,
 checkout/event/nullable PR-head identities, run/attempt, source/resource/config/
 test/APK and canonical JUnit provenance. Unavailable failed-build outputs are
-reported as unavailable. These four representative frames contain only fixed
-`.example` fixture settings and are diagnostic evidence, not approved final
-#70 images or an EN/RU matrix. Screen-specific geometry/adoption and the final
-representative gallery remain separate units; this contract does not change
+reported as unavailable. The declared representative frames contain only fixed
+`.example` fixture settings and are diagnostic evidence until independently
+approved after green exact-candidate checks. The final repository gallery and
+issue embeds remain a separate evidence publication phase; this contract does not change
 navigation, callbacks, palette, dependencies or the 95% coverage gate.
+
+## Consumed screen patterns and exceptions (qmix#318/#319)
+
+Setup, warning, invitation, live and missing screens consume the shared TV
+Material dark roles and type hierarchy. Live uses `displaySmall` for the room,
+`headlineMedium` for current/queue sections, `titleLarge` for the server current,
+`titleMedium` for queued titles and body roles for artists, durations and notices.
+The labeled server current occupies the left content column, with the read-only
+queue on the right below notices and controls. This preserves a usable viewport
+at the target density with long current data and simultaneous notices; focus
+never selects a track locally. Synchronization notices use `tertiary`, errors use
+`error`, and queue shells use `surfaceVariant` with `onSurface` titles/focus
+outlines and `onSurfaceVariant` secondary text. Shared shapes replace queue shape
+literals. Important notices also retain explicit words, not just a color cue.
+
+TV Material Buttons own their default, focused, held-pressed and disabled
+states. The existing focus scale and outer 4dp border are retained. All screen
+margins remain 48dp; live action rows reserve another 16dp inside those margins
+and 24dp between actions for scaled paint, while Missing reserves 16dp around
+New room. Native geometry checks include the scaled surface and outer border,
+unclipped `positionInRoot + size`, full-root containment, action disjointness and
+a positive queue viewport. No navigation/restoration algorithm is restyled.
+
+Two Foundation exceptions preserve existing behavior. Address fields retain
+`BasicTextField` because pinned TV Material has no editable input equivalent;
+Foundation owns editing, keyboard and focus, with a visible thickness cue.
+Queue rows retain the custom noninteractive focus shell: its exact
+`focusProperties` → `focusRequester` → `onFocusChanged` → `focusable` → merged
+semantics ordering preserves #104. A clickable/selectable TV Surface would add
+queue actions or selection semantics; the existing shell keeps readable merged
+names without click, Button, selection or edit semantics. It has a 4dp focused
+outline without scaling the lazy row. Current title remains two-line ellipsis;
+current artist and queue title/artist remain one-line ellipsis. #111 still owns
+track keys, duration formatting and overflow policy; #112 owns action dispatch.
+
+### Reproducible bounded native evidence
+
+Use the existing hosted API 36 Android TV `android-tv`/x86 `tv_1080p` job in
+`.github/workflows/android.yml` on the frozen candidate. Its preparation creates
+the checked device writer and provenance before the unchanged strict dependency
+verification/combined coverage command; its collector pulls evidence before
+emulator shutdown. Do not run the capture test without that preparation. Review
+`android-tv-test-reports/app/build/reports/qmix70/` together with the exact job's
+JUnit and artifact/run/attempt identity. The manifest distinguishes observed
+capture checkout from event and nullable PR-head SHAs, and binds complete app,
+resource, configuration, fixture, APK and PNG hashes.
+
+`Qmix70ScreenshotTest` retains the continuous four-state shared widget history
+and every #318 field/warning/error/QR checkpoint. #319 adds acceptance-class
+checkpoints for empty, one 100-row Unicode long-current/title/artist fixture
+focused at row 19 and at row 99, retained data with simultaneous reconnect,
+playback HTTP error and command pending in RU, and Missing with a RU replacement
+error. A row is scrolled through the production lazy-list semantics before its
+virtualized text nodes are queried. `GetTextLayoutResult` proves visible ellipsis
+and the two/one-line limits; notices must have no visual overflow or ellipsis.
+The longest representative RU playback notice uses HTTP 503; the missing error
+uses the longer timeout copy. Gallery callbacks remain zero: existing functional
+tests establish real dispatch, Invite/Back and the twenty-step D-pad history.
+The API 36 system input receipts are observed synthetic HDMI injection; these
+checks do not claim a physical remote or an executed TalkBack service session.
+
+The PNG and pixel oracle use the same native bitmap. Text request, native layout
+line count and geometry are registered in the ledger before sampling, so a
+contrast failure identifies the current text. Actual composited glyph/background
+samples require active text >=4.5:1 and essential adjacent active focus indicators
+>=3:1, without rounding up. Text-local background edge uniformity retains the
+inclusive sRGB byte-channel delta <=2 and at least 90% prerequisite. Disabled
+controls remain visibly and semantically disabled and are numerically exempt.
+Observed effective resource locale is recorded per frame; global API, density
+and font scale stay invariant. Independent gallery widget identities/locales do
+not replace the exact continuous shared widget history.
+
+Native success is pending until hosted compilation, assembly, lint, JVM/native
+execution, combined instruction coverage >=95%, unchanged Go/quality/security
+gates and independent whole-candidate source/image review pass. After approval,
+publish only the original native PNG bytes and honest provenance in
+`docs/screenshots/qmix-tv-70/`. The evidence-only phase must preserve app/fixture/
+config hashes, rerun final gates, and verify immutable image embeds on both #319
+and aggregate #70 by exact comment and image readback. No repository PNGs or
+manifest are generated by source-only checks. #62 retains RC/hardware acceptance.
 
 ## Backend and guest web app addresses
 
