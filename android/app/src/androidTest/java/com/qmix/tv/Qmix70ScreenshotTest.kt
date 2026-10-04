@@ -68,6 +68,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
 import androidx.tv.material3.ColorScheme
 import androidx.tv.material3.MaterialTheme
 import java.io.ByteArrayOutputStream
@@ -423,8 +424,13 @@ class Qmix70ScreenshotTest {
         val beforeFocus = backend.fetchSemanticsNode()
         fieldFocusBaseline = composeRule.runOnIdle { screenElementSnapshot(beforeFocus) }
         assertTrue("FIELD_BASELINE: unexpectedly focused", !requireNotNull(fieldFocusBaseline).focused)
+        val rootBeforeFocus = composeRule.runOnUiThread {
+            nativeFrame(beforeFocus.layoutInfo.coordinates.findRootCoordinates()).screen
+        }
+        assertEquals("FIELD_ROOT_BASELINE: unshifted", Offset.Zero, rootBeforeFocus.topLeft)
         backend.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue("FIELD_FOCUS: rejected", it()) }
         backend.assertIsFocused()
+        dismissPresentationIme(backend, rootBeforeFocus)
         settleScale(1f, "setup field focus")
         captureScreen(collector.planned[4], setupTextRequests(english), setupElements(english))
         captureWarning(english, 5)
@@ -437,6 +443,37 @@ class Qmix70ScreenshotTest {
         captureInvitation(english, 8)
         captureInvitation(russian, 9)
     }
+
+    /** qmix#318: dismiss the observed platform IME without changing field focus or window policy. */
+    private fun dismissPresentationIme(field: SemanticsNodeInteraction, expectedRoot: Rect) {
+        val node = field.fetchSemanticsNode() // Instrumentation thread; no synchronizing fetch on Main.
+        awaitPresentationWindow(node, expectedRoot, imeVisible = true, step = "backend IME shown")
+        val device = UiDevice.getInstance(instrumentation)
+        assertTrue("FIELD_IME: public system Back rejected", device.pressBack())
+        awaitPresentationWindow(node, expectedRoot, imeVisible = false, step = "backend IME hidden/unshifted root")
+        field.assertIsFocused()
+    }
+
+    private fun awaitPresentationWindow(node: SemanticsNode, expectedRoot: Rect, imeVisible: Boolean, step: String) {
+        var observed: PresentationWindowReadiness? = null
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                val current = composeRule.runOnUiThread {
+                    val view = node.root as View
+                    PresentationWindowReadiness(
+                        ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()),
+                        view.hasWindowFocus(), nativeFrame(node.layoutInfo.coordinates.findRootCoordinates()).screen,
+                    )
+                }
+                observed = current
+                current.imeVisible == imeVisible && (imeVisible || (current.appWindowFocused && current.root == expectedRoot))
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("FIELD_WINDOW $step: expected IME=$imeVisible root=$expectedRoot; last=$observed", timeout)
+        }
+    }
+
+    private data class PresentationWindowReadiness(val imeVisible: Boolean?, val appWindowFocused: Boolean, val root: Rect)
 
     private fun localizedContext(language: String): Context {
         val base = instrumentation.targetContext
@@ -538,7 +575,7 @@ class Qmix70ScreenshotTest {
     }
 
     /** qmix#318: observed diagnostics only; IME pan/resize is not inferred from the PNG. */
-    private fun presentationWindowDiagnostic(snapshot: ScreenSnapshot): JSONObject = composeRule.runOnIdle {
+    private fun presentationWindowDiagnostic(snapshot: ScreenSnapshot): JSONObject = composeRule.runOnUiThread {
         val view = snapshot.native.node.root as View
         val decor = view.rootView
         val insets = ViewCompat.getRootWindowInsets(view)
