@@ -2,12 +2,15 @@ package com.qmix.tv
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -790,12 +793,17 @@ class HostingScreenTest {
             ),
         )
         var exits = 0
+        var invitations = 0
+        var returns = 0
+        var advancements = 0
         val handler = object : LiveRoomHandler {
-            override fun onStartOrNext() = Unit
+            override fun onStartOrNext() { advancements++ }
             override fun onInvite() {
+                invitations++
                 presentation.value = presentation.value.copy(invitationVisible = true)
             }
             override fun onBack(onExit: () -> Unit) = if (presentation.value.invitationVisible) {
+                returns++
                 presentation.value = presentation.value.copy(invitationVisible = false)
                 Unit
             } else {
@@ -813,10 +821,33 @@ class HostingScreenTest {
             )
         }
 
-        repeat(2) {
-            composeRule.onNodeWithText("Next").performKeyInput {
-                pressKey(Key.DirectionRight)
-                pressKey(Key.Enter)
+        fun awaitFocus(step: String, text: String) {
+            var last = "not observed"
+            try {
+                composeRule.waitUntil(timeoutMillis = 1_000) {
+                    val focused = composeRule.onAllNodes(isFocused()).fetchSemanticsNodes()
+                    last = "focused=${focused.map { it.config.getOrElse(SemanticsProperties.Text) { emptyList() } }}; " +
+                        "invitationVisible=${presentation.value.invitationVisible}; invitations=$invitations; " +
+                        "returns=$returns; advancements=$advancements; exits=$exits"
+                    focused.any { hasText(text).matches(it) }
+                }
+            } catch (timeout: ComposeTimeoutException) {
+                throw AssertionError("INVITE_HISTORY $step: expected focused $text; last=$last", timeout)
+            }
+            composeRule.onNodeWithText(text).assertIsFocused()
+        }
+
+        repeat(2) { iteration ->
+            val step = "iteration ${iteration + 1}"
+            awaitFocus("$step starting action", "Next")
+            composeRule.onNodeWithText("Next").performKeyInput { pressKey(Key.DirectionRight) }
+            awaitFocus("$step right to Invite", "Invite")
+            composeRule.onNodeWithText("Invite").performKeyInput { pressKey(Key.Enter) }
+            awaitFocus("$step invitation opened", "Back to room")
+            composeRule.runOnIdle {
+                assertTrue("$step invitation state", presentation.value.invitationVisible)
+                assertEquals("$step Invite dispatch", iteration + 1, invitations)
+                assertEquals("$step no queue advancement", 0, advancements)
             }
             composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertExists()
             composeRule.onNodeWithText("Room code: ABCD").assertExists()
@@ -824,12 +855,26 @@ class HostingScreenTest {
             composeRule.onNodeWithText("Back to room")
                 .assertIsFocused()
                 .performKeyInput { pressKey(Key.Enter) }
+            awaitFocus("$step restored Invite", "Invite")
             composeRule.onNodeWithText("Unchanged title").assertExists()
-            composeRule.runOnIdle { assertEquals(0, exits) }
+            composeRule.runOnIdle {
+                assertFalse("$step returned room state", presentation.value.invitationVisible)
+                assertEquals("$step Back dispatch", iteration + 1, returns)
+                assertEquals("$step unchanged server room", room, (presentation.value.synchronization as RoomSyncState.Active).room)
+                assertEquals("$step no exit", 0, exits)
+            }
+            // qmix#319: key injection does not focus its receiver; Back restores Invite.
+            composeRule.onNodeWithText("Invite").performKeyInput { pressKey(Key.DirectionLeft) }
+            awaitFocus("$step left to Next", "Next")
         }
 
         composeRule.runOnIdle { handleLiveRoomBack(handler) { exits++ } }
-        composeRule.runOnIdle { assertEquals(1, exits) }
+        composeRule.runOnIdle {
+            assertEquals(1, exits)
+            assertEquals(2, invitations)
+            assertEquals(2, returns)
+            assertEquals(0, advancements)
+        }
         composeRule.onNodeWithText("host-secret").assertDoesNotExist()
     }
 

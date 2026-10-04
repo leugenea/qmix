@@ -1,0 +1,1928 @@
+{
+  "schema": 1,
+  "purpose": "Approved original native Android TV gallery for the finite qmix70/qmix319 acceptance classes.",
+  "issues": {
+    "parent": {
+      "number": 70,
+      "url": "https://github.com/leugenea/qmix/issues/70"
+    },
+    "child": {
+      "number": 319,
+      "url": "https://github.com/leugenea/qmix/issues/319"
+    }
+  },
+  "capture": {
+    "identity": {
+      "artifactName": "android-tv-test-reports",
+      "checkoutSha": "467129473cf1429bab970d9cc051baa99c92d67c",
+      "checkoutTree": "93d1fbc8a59ec398cfab0e9335094ac280714b1a",
+      "eventName": "pull_request",
+      "eventSha": "467129473cf1429bab970d9cc051baa99c92d67c",
+      "job": "android-tv-instrumentation",
+      "prHeadSha": "b35d7b7617dc7d31d4d5568f810b140fc9b40426",
+      "runAttempt": "2",
+      "runId": "37176519956"
+    },
+    "runUrl": "https://github.com/leugenea/qmix/actions/runs/37176519956",
+    "nativeJob": {
+      "id": 111361091794,
+      "url": "https://github.com/leugenea/qmix/actions/runs/37176519956/job/111361091794",
+      "executionAttempt": 2
+    },
+    "nativeArtifact": {
+      "id": 11293324308,
+      "name": "android-tv-test-reports",
+      "bytes": 2139882,
+      "sha256": "98d0d5c787f3d14df56628eb57c3e58eaf4a089d93e378098af0ce28b9c68d5f",
+      "apiUrl": "https://api.github.com/repos/leugenea/qmix/actions/artifacts/11293324308",
+      "archiveDownloadUrl": "https://api.github.com/repos/leugenea/qmix/actions/artifacts/11293324308/zip",
+      "createdAt": "2026-10-04T04:30:21Z",
+      "expiresAt": "2027-01-02T04:22:48Z"
+    },
+    "device": {
+      "api": 36,
+      "width": 1920,
+      "height": 1080,
+      "physicalDensityDpi": 320,
+      "localDensity": 2,
+      "fontScale": 1
+    },
+    "localePolicy": "Per-image effective resource locale is observed; no global device-locale claim.",
+    "focusReceiptPolicy": "primaryAction.focused records the sampled action. focusedElements contains recorded gallery element receipts; shared-state captures record focus separately in primaryAction and have no gallery element array.",
+    "records": {
+      "ledger": {
+        "artifactMember": "reports/qmix70/device/ledger.json",
+        "bytes": 227007,
+        "sha256": "6c39b5877250592141a70444caef8e6c6e7704d7fd29b92608c5ec962fc92e97"
+      },
+      "preparedProvenance": {
+        "artifactMember": "reports/qmix70/device/provenance.json",
+        "bytes": 29905,
+        "sha256": "00ae33133bc7d178eebe93673850257e95da305c0f1019e196a8bafec1e2dc68"
+      },
+      "finalProvenance": {
+        "artifactMember": "reports/qmix70/provenance-final.json",
+        "bytes": 1986808,
+        "sha256": "e4de8cf331f134e7a23ed760864f5a02ad19cdbf4b9e4e42d501b5cea5c8f840"
+      }
+    },
+    "capturedApkHashes": {
+      "app": {
+        "bytes": 20314414,
+        "path": "android/app/build/outputs/apk/debug/app-debug.apk",
+        "sha256": "65950326937958253caddea352a8872f0293d9f8a2b1b44412e0df83c06f72cc",
+        "status": "available"
+      },
+      "instrumentation": {
+        "bytes": 2087434,
+        "path": "android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk",
+        "sha256": "2d66a162a565d4268b686f4fe5380b15505d8a5a1f8468d6e8e8404314928f7c",
+        "status": "available"
+      }
+    },
+    "apkHashScope": "Captured build-output hashes from collector provenance; APK bytes are not shipped in this gallery or claimed to be members of the selected report archive."
+  },
+  "capturedSourceHashes": {
+    "config": {
+      "files": [
+        {
+          "bytes": 37158,
+          "path": ".github/workflows/android.yml",
+          "sha256": "21441645301b756959efdb5e940262431a9a66e1d4cbd8fcf5c5ff00c12ffaee",
+          "status": "available"
+        },
+        {
+          "bytes": 5877,
+          "path": "android/app/build.gradle.kts",
+          "sha256": "7f8693b6c85d18a489cdc558e1d023239726a5f2e8cca3f8f7295890273d6c3c",
+          "status": "available"
+        },
+        {
+          "bytes": 44,
+          "path": "android/app/proguard-rules.pro",
+          "sha256": "7913ec8d307393282b042035ee1d9da1d2a29b16c607d208c1bbe5a8d5761e4d",
+          "status": "available"
+        },
+        {
+          "bytes": 170,
+          "path": "android/build.gradle.kts",
+          "sha256": "7af865aea3e2dde810363caa1c3f9eed33324aa47f1c7e281034d4bd69129b3d",
+          "status": "available"
+        },
+        {
+          "bytes": 2674,
+          "path": "android/gradle/libs.versions.toml",
+          "sha256": "1cfa83d6de55501d528619de9143b7f253d1bef96e560ebb8a5da35f45b172d9",
+          "status": "available"
+        },
+        {
+          "bytes": 247243,
+          "path": "android/gradle/verification-metadata.xml",
+          "sha256": "e0c998070890877880f9a90447c90441418c71bfb0aaadd5f4ffaa7364dc7da0",
+          "status": "available"
+        },
+        {
+          "bytes": 43705,
+          "path": "android/gradle/wrapper/gradle-wrapper.jar",
+          "sha256": "81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f",
+          "status": "available"
+        },
+        {
+          "bytes": 338,
+          "path": "android/gradle/wrapper/gradle-wrapper.properties",
+          "sha256": "3b6b8df392b92f86332d907707f3d952a32c8d6e1fedabafe2b5ec3d933a78c4",
+          "status": "available"
+        },
+        {
+          "bytes": 124,
+          "path": "android/gradle.properties",
+          "sha256": "4fbb21f5058d16d44714a12e466263bec68615f82bf0b5fd5e4daeef00996bea",
+          "status": "available"
+        },
+        {
+          "bytes": 8752,
+          "path": "android/gradlew",
+          "sha256": "734b3879d3501dce471cf0522d3bcbafe76873d9fc5129345b67fb43bd15e933",
+          "status": "available"
+        },
+        {
+          "bytes": 2872,
+          "path": "android/gradlew.bat",
+          "sha256": "2209f919a22528af59a2af2ad97e8d056cca18e39f7d87aa3fd549a73b180150",
+          "status": "available"
+        },
+        {
+          "bytes": 327,
+          "path": "android/settings.gradle.kts",
+          "sha256": "ac9ec8f3c81838dbca5622d2e64292500b11c617faa96ddfdc245c5842c731e4",
+          "status": "available"
+        },
+        {
+          "bytes": 228,
+          "path": "go.mod",
+          "sha256": "58d3ca70f8051fa68211c86e03ca8ff6cfc33710021344ca7bb50ac986eaa644",
+          "status": "available"
+        },
+        {
+          "bytes": 1206,
+          "path": "go.sum",
+          "sha256": "c9d62081e9322cee3e20b5c74821261d331f7900f58dbe38756173b82ad37a35",
+          "status": "available"
+        },
+        {
+          "bytes": 4831,
+          "path": "internal/buildinfo/buildinfo.go",
+          "sha256": "10cfce5065e9ae8e4aa418cb683d313a029ffbe6c8ad6928c0839b7b5a0a71e3",
+          "status": "available"
+        },
+        {
+          "bytes": 9357,
+          "path": "internal/buildinfo/buildinfo_test.go",
+          "sha256": "ec8b99384df53ef9fad24baa8bc851358321c22262bb9d04db8bdf71b3dc1d93",
+          "status": "available"
+        },
+        {
+          "bytes": 1803,
+          "path": "internal/buildinfo/cmd/version/main.go",
+          "sha256": "0878eef97a83dd6e2fb3fd5ee2c824ae5e045ba774aa7ddfe00496fe260cd225",
+          "status": "available"
+        },
+        {
+          "bytes": 3349,
+          "path": "internal/buildinfo/cmd/version/main_test.go",
+          "sha256": "84b0d3847adbd78c75f684ec784995ad6371184476d5c8bbb78ed76f118d097b",
+          "status": "available"
+        },
+        {
+          "bytes": 1371,
+          "path": "internal/buildinfo/commands_test.go",
+          "sha256": "eb411523708d46b9e27e4534860cdcf71c69f8f9cd6dcd92f27593677239dc5a",
+          "status": "available"
+        },
+        {
+          "bytes": 682,
+          "path": "internal/buildinfo/dockerfile_test.go",
+          "sha256": "0523aee2dff8dc5db9876eaad9a534a6a612f9bea27cdbdc49c69d2cea90ef41",
+          "status": "available"
+        }
+      ],
+      "status": "available"
+    },
+    "resources": {
+      "files": [
+        {
+          "bytes": 349,
+          "path": "android/app/src/debug/AndroidManifest.xml",
+          "sha256": "820e7c071268cc51f95b255dd70aea427a87643a8cef2f42dea342672087445a",
+          "status": "available"
+        },
+        {
+          "bytes": 319,
+          "path": "android/app/src/debug/res/xml/debug_network_security_config.xml",
+          "sha256": "ccd7f286dd27b3fe438ee1f6d304a1332651c8326a66d1674e85b959032ec370",
+          "status": "available"
+        },
+        {
+          "bytes": 1372,
+          "path": "android/app/src/main/AndroidManifest.xml",
+          "sha256": "56ec9eac2088d9dac037031233bb33873dabe6fa89ffebf5d46323f4f1fb2d08",
+          "status": "available"
+        },
+        {
+          "bytes": 426,
+          "path": "android/app/src/main/res/drawable/ic_launcher.xml",
+          "sha256": "107fdd945339a36eb5d9dca6c4517a9ea2d70f96ca719b74cb727205da836558",
+          "status": "available"
+        },
+        {
+          "bytes": 504,
+          "path": "android/app/src/main/res/drawable-hdpi/tv_banner.png",
+          "sha256": "fa56235948ff6cf0e8fba9d2cfa63a813b0bcb8b59463bf34fcae97d38ebbb40",
+          "status": "available"
+        },
+        {
+          "bytes": 319,
+          "path": "android/app/src/main/res/drawable-mdpi/tv_banner.png",
+          "sha256": "80073a92f6499b5f8780272414f893554c5f560061c851b7ea52a5a4b2f5a2e2",
+          "status": "available"
+        },
+        {
+          "bytes": 736,
+          "path": "android/app/src/main/res/drawable-xhdpi/tv_banner.png",
+          "sha256": "6fcb3554aa64da3f2ccba8040badb634de60b2bda77940d18a45363665123b66",
+          "status": "available"
+        },
+        {
+          "bytes": 1456,
+          "path": "android/app/src/main/res/drawable-xxhdpi/tv_banner.png",
+          "sha256": "2069b1efffb8df7f0bf41cba970255c0228cd3e04f380515b7ccfa52a297d72f",
+          "status": "available"
+        },
+        {
+          "bytes": 118,
+          "path": "android/app/src/main/res/values/colors.xml",
+          "sha256": "2976c7207fcb8daadb4680619ea2e5c531da4d2f8b06a8de15f468a0a42d636c",
+          "status": "available"
+        },
+        {
+          "bytes": 4596,
+          "path": "android/app/src/main/res/values/strings.xml",
+          "sha256": "c2be0f2c41a4b2c2550bf1ca3dd49b3631b003e5e4b479cdbaeed2334bc28c12",
+          "status": "available"
+        },
+        {
+          "bytes": 470,
+          "path": "android/app/src/main/res/values/themes.xml",
+          "sha256": "d891d19e42105ae1fc6da3b999f83e6e42e6fd03206e477dd8bdafe0e3582839",
+          "status": "available"
+        },
+        {
+          "bytes": 6193,
+          "path": "android/app/src/main/res/values-ru/strings.xml",
+          "sha256": "940a36f379bfb75f0b884dfa1c69768b3028b801557c267e998e479fea8b5167",
+          "status": "available"
+        },
+        {
+          "bytes": 257,
+          "path": "android/app/src/main/res/xml/data_extraction_rules.xml",
+          "sha256": "454a7d8f10fbc57a9ce333fa36898f3d537271aa80dbcfb82422adde23dedad2",
+          "status": "available"
+        },
+        {
+          "bytes": 410,
+          "path": "android/app/src/main/res/xml/network_security_config.xml",
+          "sha256": "66182a97f5a09c1c42cc5d16cd97d42e246f1d2f4e6fde11e63c34b75a20c54c",
+          "status": "available"
+        }
+      ],
+      "status": "available"
+    },
+    "source": {
+      "files": [
+        {
+          "bytes": 18067,
+          "path": "android/app/src/main/java/com/qmix/tv/AuthoritativePlaybackCoordinator.kt",
+          "sha256": "ed0f5874a8d9262b5b703ec71b6ba8c904104c64ae5353a2b4e3a8ff67bbcc15",
+          "status": "available"
+        },
+        {
+          "bytes": 6579,
+          "path": "android/app/src/main/java/com/qmix/tv/EndpointSettings.kt",
+          "sha256": "d0a7b07e6b31f4cef74a688cc553743ea5f128f6a83badfd014d4e3f81cae745",
+          "status": "available"
+        },
+        {
+          "bytes": 8975,
+          "path": "android/app/src/main/java/com/qmix/tv/ExoPlayerBackend.kt",
+          "sha256": "ff4426789bc59c9dd817f1a4832e1cf626297edec1f5ac948e72fd2ce43741eb",
+          "status": "available"
+        },
+        {
+          "bytes": 1761,
+          "path": "android/app/src/main/java/com/qmix/tv/GuestInvite.kt",
+          "sha256": "b1346b7a1cb2bbc19038265b9fcbc2c424b922f562bbf39d6b9af62b6f3682c0",
+          "status": "available"
+        },
+        {
+          "bytes": 28671,
+          "path": "android/app/src/main/java/com/qmix/tv/HostSessionController.kt",
+          "sha256": "c1fedb8134c254e3c3596a3b2c668f11f380610e542ffb26554aa65dd4bd2991",
+          "status": "available"
+        },
+        {
+          "bytes": 1957,
+          "path": "android/app/src/main/java/com/qmix/tv/HostingScreen.kt",
+          "sha256": "40eb5eaf2e9c6099a9f36b7dca93b151f052e6bba5adda10eaafd63f1063d99a",
+          "status": "available"
+        },
+        {
+          "bytes": 3293,
+          "path": "android/app/src/main/java/com/qmix/tv/InvitationScreen.kt",
+          "sha256": "3656a0e115add17d286c7ff6ce7024db63ceed912ce072a99809b015d5a6e801",
+          "status": "available"
+        },
+        {
+          "bytes": 2753,
+          "path": "android/app/src/main/java/com/qmix/tv/LiveRoomFocusMemory.kt",
+          "sha256": "df76422ee817c2410f3ff68d650f50476fa56852ffaca536ebf2753f93ce76e1",
+          "status": "available"
+        },
+        {
+          "bytes": 3869,
+          "path": "android/app/src/main/java/com/qmix/tv/LiveRoomPresentation.kt",
+          "sha256": "d17e78142e8ddea2851e0d8a694642c4cfb6fff0a22ff02ffaf479b2c0ac3584",
+          "status": "available"
+        },
+        {
+          "bytes": 20550,
+          "path": "android/app/src/main/java/com/qmix/tv/LiveRoomScreen.kt",
+          "sha256": "c50f4ce16941c94898d83620e191519ef500055697c7d16bb64c066803573b2b",
+          "status": "available"
+        },
+        {
+          "bytes": 3483,
+          "path": "android/app/src/main/java/com/qmix/tv/MainActivity.kt",
+          "sha256": "530db40710e8011fea5429a135b7d963d120869c78fe26c67a171a7a2a008118",
+          "status": "available"
+        },
+        {
+          "bytes": 7041,
+          "path": "android/app/src/main/java/com/qmix/tv/Media3PlaybackEngine.kt",
+          "sha256": "3f2c358b665c64c1358ff1567472fb283ec5cee3437014ef384a5beff1d02e74",
+          "status": "available"
+        },
+        {
+          "bytes": 3071,
+          "path": "android/app/src/main/java/com/qmix/tv/OkHttpRoomEventStream.kt",
+          "sha256": "33aec954139df7f30dcbf39ded489133b529b171252b9cb6455cd6d34ff2b5a7",
+          "status": "available"
+        },
+        {
+          "bytes": 1220,
+          "path": "android/app/src/main/java/com/qmix/tv/PlaybackEngine.kt",
+          "sha256": "36392966ee38db9d262218346e69f680d6e426a91e80454a60198efab4243381",
+          "status": "available"
+        },
+        {
+          "bytes": 13572,
+          "path": "android/app/src/main/java/com/qmix/tv/PlayerStatePublisher.kt",
+          "sha256": "c3a497fb5b06ad8649144fd85a728075850e232ba99c5c20450714849b75d44b",
+          "status": "available"
+        },
+        {
+          "bytes": 7055,
+          "path": "android/app/src/main/java/com/qmix/tv/QMixApplication.kt",
+          "sha256": "26f2453e2aceb46c96d1763e3ab49acba14595827c271657f04f630b0f91fabd",
+          "status": "available"
+        },
+        {
+          "bytes": 3627,
+          "path": "android/app/src/main/java/com/qmix/tv/QMixLogging.kt",
+          "sha256": "10a1455bbf96fbeda3c6235d8fe30f3540bbe9455acd03d992b7b5820d2f68fe",
+          "status": "available"
+        },
+        {
+          "bytes": 683,
+          "path": "android/app/src/main/java/com/qmix/tv/QMixTvTheme.kt",
+          "sha256": "27b3d17e9df1842572fffad0b03d44b37ced67d52dc7941f334ac1cd53b04932",
+          "status": "available"
+        },
+        {
+          "bytes": 10822,
+          "path": "android/app/src/main/java/com/qmix/tv/QueueAdvancementCoordinator.kt",
+          "sha256": "7c9739867c31cde7cc1168cf6d6e2067d9d9e76ca58cf7e9d15295e3bbb13e21",
+          "status": "available"
+        },
+        {
+          "bytes": 747,
+          "path": "android/app/src/main/java/com/qmix/tv/ReconnectBackoff.kt",
+          "sha256": "e07fe9c7c9ba591ca7aed01e1c86caeac58671138a4b3943bb3c4feb90888cbf",
+          "status": "available"
+        },
+        {
+          "bytes": 11129,
+          "path": "android/app/src/main/java/com/qmix/tv/RoomApiClient.kt",
+          "sha256": "159d99176ee4460ec778046e6972986cbc2829c0824b2c6a2f9226acc2d85c0c",
+          "status": "available"
+        },
+        {
+          "bytes": 8718,
+          "path": "android/app/src/main/java/com/qmix/tv/RoomRepository.kt",
+          "sha256": "d7e91fcaa07a263f4c33f1304fc4789ad2923bad31e8c21be3ed41a0b46d4c65",
+          "status": "available"
+        },
+        {
+          "bytes": 5779,
+          "path": "android/app/src/main/java/com/qmix/tv/SetupScreen.kt",
+          "sha256": "59250ed54416b41cc91c35d711ef4452e6734f5c35b18df79d4c0475bf89fb75",
+          "status": "available"
+        },
+        {
+          "bytes": 1725,
+          "path": "android/app/src/main/java/com/qmix/tv/TvPresentationComponents.kt",
+          "sha256": "2bb7bc1254233f7b7d72e0727b5761d2e545b46aa815139e5ef95182b93684e5",
+          "status": "available"
+        }
+      ],
+      "status": "available"
+    },
+    "test": {
+      "files": [
+        {
+          "bytes": 9,
+          "path": "android/app/src/androidTest/assets/corrupt.webm",
+          "sha256": "58aa1545ba429abc10d60b9b4431ee615d7e87e3ddcf15904f7199efe6fc8570",
+          "status": "available"
+        },
+        {
+          "bytes": 493345,
+          "path": "android/app/src/androidTest/assets/tone.m4a",
+          "sha256": "483efeaedb8b060e8ec9b76ca7a86f1a816551b188ddbc335b3a43b342c0a5b8",
+          "status": "available"
+        },
+        {
+          "bytes": 30886,
+          "path": "android/app/src/androidTest/assets/tone.webm",
+          "sha256": "8f5deefea9c8493e607d8d454c92fc77f962515f354eabccceed02043abcffa0",
+          "status": "available"
+        },
+        {
+          "bytes": 6642,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/EndpointSettingsStoreInstrumentationTest.kt",
+          "sha256": "f8bef4e290972d12bc195fe49895e99b159eee97aea86bd29465c38a01918ced",
+          "status": "available"
+        },
+        {
+          "bytes": 69700,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/HostSessionControllerInstrumentationTest.kt",
+          "sha256": "fd875a053bfe96f7952985a18220e3aaf0af524ea269bec583a9e437428a3996",
+          "status": "available"
+        },
+        {
+          "bytes": 2589,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/HostSessionFlowTestSupport.kt",
+          "sha256": "0bdacda4829f37ae08794c5159ed533e3a07224ffe97aecb37d12fdac4e72dd4",
+          "status": "available"
+        },
+        {
+          "bytes": 48677,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/HostingScreenInstrumentationTest.kt",
+          "sha256": "cc64fd5f532aebf3afc768b595e0a9f7d4fa931784bed8b3442096b5386759f8",
+          "status": "available"
+        },
+        {
+          "bytes": 13089,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/LiveRoomScreenCharacterizationTest.kt",
+          "sha256": "8e05868ab44b8d7f5e4529174da20a27a5834b2625c18e4fa908de8dad0f1e64",
+          "status": "available"
+        },
+        {
+          "bytes": 35250,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/MainActivityInstrumentationTest.kt",
+          "sha256": "718a96c5bfb1d5c4e69183318a7ab511a185d45ecc364f2954096b158995e9a7",
+          "status": "available"
+        },
+        {
+          "bytes": 23185,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/Media3PlaybackInstrumentationTest.kt",
+          "sha256": "c02844815471636111c8bbd5d11d21f9af14872096c5ee91faf58a32ffb2653b",
+          "status": "available"
+        },
+        {
+          "bytes": 94292,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/Qmix70ScreenshotTest.kt",
+          "sha256": "8691162fc8e7b3ce92b2f6c748084ab057aa07d15f4359733cb9796bff4f3110",
+          "status": "available"
+        },
+        {
+          "bytes": 25191,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/QueueAdvancementInstrumentationTest.kt",
+          "sha256": "bd2365216d38b85a963b14f47efa8f09971b2f946822b75aa424cd04d1415b06",
+          "status": "available"
+        },
+        {
+          "bytes": 4027,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/QueueTestFixtures.kt",
+          "sha256": "3692516963b59297376171ff76974623ded77baa1edd0101a95e5ee115bc3257",
+          "status": "available"
+        },
+        {
+          "bytes": 11975,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/RoomApiClientInstrumentationTest.kt",
+          "sha256": "0e25f8423d56c663666626479e0877c02ec5682b4a6d3bd25b278a19967b5388",
+          "status": "available"
+        },
+        {
+          "bytes": 1689,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/TvLauncherSmokeTest.kt",
+          "sha256": "9e9ef5469eb6f7678384a69ebc015b49c058e9b7ed2455192dd428c00fd19ea3",
+          "status": "available"
+        },
+        {
+          "bytes": 11420,
+          "path": "android/app/src/androidTest/java/com/qmix/tv/TvMaterialPresentationTest.kt",
+          "sha256": "bd75fef06dd2caf2307c778f256d89b6a8b1d561660f62fe059acd572279cebf",
+          "status": "available"
+        },
+        {
+          "bytes": 2743,
+          "path": "android/app/src/test/java/com/qmix/tv/AndroidLoggingTest.kt",
+          "sha256": "ab3d46c55a2005e43bd4787c6a82fb0fdd388916c3c3031c6c824c03f414eee4",
+          "status": "available"
+        },
+        {
+          "bytes": 56056,
+          "path": "android/app/src/test/java/com/qmix/tv/AuthoritativePlaybackCoordinatorTest.kt",
+          "sha256": "f3d44b7b31f0ca798172d325f91605016190c1a35d26338061c88432d3d22193",
+          "status": "available"
+        },
+        {
+          "bytes": 1055,
+          "path": "android/app/src/test/java/com/qmix/tv/CleartextPolicyTest.kt",
+          "sha256": "e25456639d7a58f47399351df5ff7cd233484088b98c227a8e806e50dfddcfff",
+          "status": "available"
+        },
+        {
+          "bytes": 8393,
+          "path": "android/app/src/test/java/com/qmix/tv/CoroutineQueueTest.kt",
+          "sha256": "22bfcc89950b98fbf4ebea54dcf969ed1767910b12b62a481420ccaea4334efa",
+          "status": "available"
+        },
+        {
+          "bytes": 4477,
+          "path": "android/app/src/test/java/com/qmix/tv/CoroutineRoomApiTest.kt",
+          "sha256": "f11bf5378f699d91b2187023eb65d76c735f07eee12bfaaf6a344a54dfd7ba54",
+          "status": "available"
+        },
+        {
+          "bytes": 12787,
+          "path": "android/app/src/test/java/com/qmix/tv/EndpointSettingsTest.kt",
+          "sha256": "922d30f26f1f851cd59475016b97ba8121d5cead2e3b7032796f1866da23baf5",
+          "status": "available"
+        },
+        {
+          "bytes": 2438,
+          "path": "android/app/src/test/java/com/qmix/tv/ExoPlayerBackendThreadContractTest.kt",
+          "sha256": "0ea24af017f1a10b80e089e564334d61536bd6d12901725d33debe20aedc3152",
+          "status": "available"
+        },
+        {
+          "bytes": 1173,
+          "path": "android/app/src/test/java/com/qmix/tv/GuestInviteTest.kt",
+          "sha256": "3563f99e720394a3774dab339e83f35b17c59c5a7c8dcb9c7603f4bf0c685aed",
+          "status": "available"
+        },
+        {
+          "bytes": 8852,
+          "path": "android/app/src/test/java/com/qmix/tv/HostPublisherPostedStartTest.kt",
+          "sha256": "6a64a9dedd5f312436bc545b7621876bfc417a864304dcf03bfdaf2ee9debb8f",
+          "status": "available"
+        },
+        {
+          "bytes": 17521,
+          "path": "android/app/src/test/java/com/qmix/tv/HostRoomClosureTest.kt",
+          "sha256": "6aeee9eb188553bf24311083ada844ee4b73faf857bbc25658a376eb23da788c",
+          "status": "available"
+        },
+        {
+          "bytes": 34883,
+          "path": "android/app/src/test/java/com/qmix/tv/HostRoomMissingRecoveryTest.kt",
+          "sha256": "828201c0ecc8aabc1269cee2408455431069962119fbbbe450ffa0c573ce6d70",
+          "status": "available"
+        },
+        {
+          "bytes": 22962,
+          "path": "android/app/src/test/java/com/qmix/tv/HostSequentialLoopTest.kt",
+          "sha256": "cc7be6a7232084233578be7440c4f8ed5df2cd6247d82e4c30092714d0a3f457",
+          "status": "available"
+        },
+        {
+          "bytes": 109159,
+          "path": "android/app/src/test/java/com/qmix/tv/HostSessionControllerTest.kt",
+          "sha256": "ce7957f9e43aff8b25c2ec8f8d599a75e2ef188b4c5e31534774decc6b6f1cbb",
+          "status": "available"
+        },
+        {
+          "bytes": 15064,
+          "path": "android/app/src/test/java/com/qmix/tv/HostSessionCoverageHeadroomTest.kt",
+          "sha256": "bdb1a2891e447e5a0a88fdfad788ab1c73f9c3d5eb2b0adc3d4dfe8b8c8ec8b9",
+          "status": "available"
+        },
+        {
+          "bytes": 2641,
+          "path": "android/app/src/test/java/com/qmix/tv/HostSessionFlowTestSupport.kt",
+          "sha256": "befe5afe1ed9440376e5bcfc7f2325fc28fcb7fe8d73655ebc544cdc08db975f",
+          "status": "available"
+        },
+        {
+          "bytes": 8710,
+          "path": "android/app/src/test/java/com/qmix/tv/HostSessionJVMBranchTest.kt",
+          "sha256": "f49a7a47c0feab59f74810a2e5064bfbd893b1bf310630e058dce9910a130e93",
+          "status": "available"
+        },
+        {
+          "bytes": 9431,
+          "path": "android/app/src/test/java/com/qmix/tv/HostSessionLifecycleTest.kt",
+          "sha256": "1b1d4b706c025d6c8b5573efac0659774f0774253900bf734ecf160d70b6ae41",
+          "status": "available"
+        },
+        {
+          "bytes": 45223,
+          "path": "android/app/src/test/java/com/qmix/tv/HostSessionReviewFindingsTest.kt",
+          "sha256": "1dbe1278fcc6e98af0e43f75cda376a7c2b53709dd51037f7568ccc020f1c4d5",
+          "status": "available"
+        },
+        {
+          "bytes": 9813,
+          "path": "android/app/src/test/java/com/qmix/tv/HostSessionSingleWorkerRegressionTest.kt",
+          "sha256": "e3fc01a4c191b803f722cba70f6c27d6981eca045a526af98ad98303799276a1",
+          "status": "available"
+        },
+        {
+          "bytes": 7818,
+          "path": "android/app/src/test/java/com/qmix/tv/HostSessionStateFlowMigrationTest.kt",
+          "sha256": "d7e33f3dfe47c241dc77a8df4298c3f203071f85f6de744946ab580990defdd9",
+          "status": "available"
+        },
+        {
+          "bytes": 53696,
+          "path": "android/app/src/test/java/com/qmix/tv/HostingScreenTest.kt",
+          "sha256": "d59b8cebd31c3927a45b01e021ad53dd6c9c1f454beaa4b538e954cdf44723df",
+          "status": "available"
+        },
+        {
+          "bytes": 1448,
+          "path": "android/app/src/test/java/com/qmix/tv/KeepScreenOnTest.kt",
+          "sha256": "db2572832e1e48a78eb41e72f508e77483a940c02ddfeedd69221a773f5dfb2e",
+          "status": "available"
+        },
+        {
+          "bytes": 23089,
+          "path": "android/app/src/test/java/com/qmix/tv/LiveRoomPresentationTest.kt",
+          "sha256": "df3877cd75dd6520fa9b5d01c01b4659734e884d53d129c084f674f3198f7039",
+          "status": "available"
+        },
+        {
+          "bytes": 15192,
+          "path": "android/app/src/test/java/com/qmix/tv/LocalizationContractTest.kt",
+          "sha256": "eb7270bf9c50cee0ddb75137f92d6ca9da23583076ec37b9bbfb1046e213ce96",
+          "status": "available"
+        },
+        {
+          "bytes": 12150,
+          "path": "android/app/src/test/java/com/qmix/tv/LocalizedHostingScreenTest.kt",
+          "sha256": "75cc7675802d50e64b93cdfc8f153bb231e07389e47febae85c470ffeb5221f6",
+          "status": "available"
+        },
+        {
+          "bytes": 14251,
+          "path": "android/app/src/test/java/com/qmix/tv/Media3PlaybackEngineTest.kt",
+          "sha256": "feedffa85c561e63d24fa64812fd6922c2edc10dbbfa1d6920c8916616e48dd5",
+          "status": "available"
+        },
+        {
+          "bytes": 26716,
+          "path": "android/app/src/test/java/com/qmix/tv/OkHttpRoomEventStreamTest.kt",
+          "sha256": "038c56a742d15b012fde68b02fcd3752a697b8a358ca999e1bdc7f8ddc149bde",
+          "status": "available"
+        },
+        {
+          "bytes": 5403,
+          "path": "android/app/src/test/java/com/qmix/tv/OkHttpSuspendTest.kt",
+          "sha256": "539f2d2de7fb727f05209f1e4874a69e0b14d56729befb0e251ff4cbccde69c0",
+          "status": "available"
+        },
+        {
+          "bytes": 2619,
+          "path": "android/app/src/test/java/com/qmix/tv/PlaybackCoroutineOwnershipTest.kt",
+          "sha256": "b80c54422b20b3f4f1d523c03785b0a9a00b040382077be952f0eea45c343633",
+          "status": "available"
+        },
+        {
+          "bytes": 1045,
+          "path": "android/app/src/test/java/com/qmix/tv/PlaybackEngineContractTest.kt",
+          "sha256": "23744a192feb96bff8093ccbd293d965dd5810371e32d114b8f7b79cc6df4047",
+          "status": "available"
+        },
+        {
+          "bytes": 1163,
+          "path": "android/app/src/test/java/com/qmix/tv/PlaybackErrorContractTest.kt",
+          "sha256": "28b64df09c86c0b4b8d9c6a758f0b021011ed443159e76f46e44708f6dee47d9",
+          "status": "available"
+        },
+        {
+          "bytes": 3221,
+          "path": "android/app/src/test/java/com/qmix/tv/PlaybackErrorMappingTest.kt",
+          "sha256": "a75a0463ddc53fbffccbe96c818cbbb9c5352af7a58acefc9dea4d08bb6dc736",
+          "status": "available"
+        },
+        {
+          "bytes": 2871,
+          "path": "android/app/src/test/java/com/qmix/tv/PlaybackLifecycleObserverTest.kt",
+          "sha256": "29d3b4c7911a17a1e7c184056ef36193a3a35dfadc54368a5b2d0b3ba086ea4e",
+          "status": "available"
+        },
+        {
+          "bytes": 49674,
+          "path": "android/app/src/test/java/com/qmix/tv/PlayerStatePublisherTest.kt",
+          "sha256": "3a592b6ee23d37929970527c3355a56229eb5ff6bcfb3f0ea2502ebb50e5dc61",
+          "status": "available"
+        },
+        {
+          "bytes": 15905,
+          "path": "android/app/src/test/java/com/qmix/tv/QueueAdvancementCoordinatorTest.kt",
+          "sha256": "6542df52f78ee6076a5ee03abbb9de8a5873db37709b3b252b06895a55fd8dff",
+          "status": "available"
+        },
+        {
+          "bytes": 5950,
+          "path": "android/app/src/test/java/com/qmix/tv/QueueMutationContextTest.kt",
+          "sha256": "4339b8f97f9d98000313efaaa3bb0edb74f292c592faaec351d080bc017da501",
+          "status": "available"
+        },
+        {
+          "bytes": 4548,
+          "path": "android/app/src/test/java/com/qmix/tv/QueueTestFixtures.kt",
+          "sha256": "8d01efd3f9bfb86a6b9505a368d8c3cd14b2b052502bccaffa17826019943e05",
+          "status": "available"
+        },
+        {
+          "bytes": 588,
+          "path": "android/app/src/test/java/com/qmix/tv/ReconnectBackoffTest.kt",
+          "sha256": "11662fedeb9e2d3ef55cffe3cb300baad5805007b5d6a5a3d2bf5c1fa6aaf205",
+          "status": "available"
+        },
+        {
+          "bytes": 3262,
+          "path": "android/app/src/test/java/com/qmix/tv/RoomAdvanceCommandTest.kt",
+          "sha256": "a1a68a270e53fd0b44987091d68c0decff78de7fe924aa125313b1a9c9f31b9c",
+          "status": "available"
+        },
+        {
+          "bytes": 12004,
+          "path": "android/app/src/test/java/com/qmix/tv/RoomApiClientTest.kt",
+          "sha256": "59b3dc449d9eeb8cd1eea7627c8be9fc0497f620435920cc22da977e7b28c604",
+          "status": "available"
+        },
+        {
+          "bytes": 3825,
+          "path": "android/app/src/test/java/com/qmix/tv/RoomFetchSuspendTest.kt",
+          "sha256": "e2d0c690a9d0d3f3f98d61ff80d00364e2c12aa89c6da57f20989e8f232a4c87",
+          "status": "available"
+        },
+        {
+          "bytes": 1233,
+          "path": "android/app/src/test/java/com/qmix/tv/RoomRepositoryContractTest.kt",
+          "sha256": "5d1eb431204db6aef6d7558acbbe3f92266d9a57d75c3cb2c62189b5d309c84d",
+          "status": "available"
+        },
+        {
+          "bytes": 114533,
+          "path": "android/app/src/test/java/com/qmix/tv/SequentialRoomRepositoryTest.kt",
+          "sha256": "d491a3c7c2a40bec18f407bf502ed163bcc98018b59081f36404a9c72551e5c6",
+          "status": "available"
+        }
+      ],
+      "status": "available"
+    }
+  },
+  "sourceBinding": {
+    "reviewedPrHeadSha": "b35d7b7617dc7d31d4d5568f810b140fc9b40426",
+    "reviewedCaptureTree": "93d1fbc8a59ec398cfab0e9335094ac280714b1a",
+    "capturedUniquePaths": 117,
+    "frozenTrackedPaths": 292,
+    "frozenSourceGuardSha256": "4fecb24ffbf9f3249258e812bc06782b2551f58f650dfca5db436054e98d1c16",
+    "sourceGuardEncoding": "UTF-8 JSON of path-to-SHA256 map, sorted keys, separators comma and colon, no whitespace or trailing newline.",
+    "frozenCandidateManifest": {
+      "sha256": "4561fedad29a6e3941c14138d5266ec5bc27993531e13e4d34ae36371ff6f692",
+      "bytes": 37533,
+      "availability": "Frozen candidate record retained by delivery owner; not shipped in this gallery."
+    },
+    "allCapturedRecordsMatchFrozenGuardAndRepositoryBytes": true
+  },
+  "galleryPolicy": "The image count records the observed completed finite plan; it is not a mandatory total or a locale permutation campaign.",
+  "imageCount": 15,
+  "images": [
+    {
+      "file": "setup-button-default.png",
+      "sha256": "eba56038752b774075cebffbb0c293a17d2939c0d77d0381adf54318f5365e13",
+      "bytes": 45858,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "shared_button_default"
+      ],
+      "observed": {
+        "state": "default",
+        "effectiveResourceLocale": "en-US",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1074,
+          "layoutIdentity": 173051116,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": false,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": []
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "setup-button-focused.png",
+      "sha256": "08af28294334be0150fde447be883eb1ed497d4946218b1eefb7608512ef4e69",
+      "bytes": 56209,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "shared_button_focused"
+      ],
+      "observed": {
+        "state": "focused",
+        "effectiveResourceLocale": "en-US",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1074,
+          "layoutIdentity": 173051116,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": true,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": []
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "setup-button-held-pressed.png",
+      "sha256": "b920f05c93a4a1f1f24524cc1dce8d004fb92fd8ef5db8b57a554be84d10c7d8",
+      "bytes": 46323,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "shared_button_held_pressed"
+      ],
+      "observed": {
+        "state": "held_pressed",
+        "effectiveResourceLocale": "en-US",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1074,
+          "layoutIdentity": 173051116,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": true,
+          "callbacks": 0,
+          "keyDown": true
+        },
+        "focusedElements": []
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "setup-button-disabled.png",
+      "sha256": "64aa82c11c647458712934dc4f66967a141ba87e1152c62a298dda2ad23007cf",
+      "bytes": 49216,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "shared_button_disabled"
+      ],
+      "observed": {
+        "state": "disabled",
+        "effectiveResourceLocale": "en-US",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1074,
+          "layoutIdentity": 173051116,
+          "rootIdentity": 52834274,
+          "enabled": false,
+          "focused": true,
+          "callbacks": 1,
+          "keyDown": false
+        },
+        "focusedElements": []
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "setup-backend-focused.png",
+      "sha256": "4960ee40be598f7d891e1aaf3db53b7e1a5e40a5c3b3cd292fd1c5fe8397063e",
+      "bytes": 45816,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "editable_field_focus"
+      ],
+      "observed": {
+        "state": "setup_field_focused",
+        "effectiveResourceLocale": "en",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1094,
+          "layoutIdentity": 145457775,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": false,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "backend input",
+            "semanticId": 1100,
+            "enabled": true,
+            "buttonRole": false,
+            "editable": true,
+            "clickAction": true,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "http-warning-en.png",
+      "sha256": "231bb5187ecd0c9b98b245a27245ca072e59b281c792f094ddd661e8e71c28e5",
+      "bytes": 79468,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "trusted_http_warning"
+      ],
+      "observed": {
+        "state": "http_warning",
+        "effectiveResourceLocale": "en",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1114,
+          "layoutIdentity": 107130754,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": true,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "confirm action",
+            "semanticId": 1114,
+            "enabled": true,
+            "buttonRole": true,
+            "editable": false,
+            "clickAction": true,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "http-warning-ru.png",
+      "sha256": "cbc5462e80103d49328f0f9ac422bb45497fe16ad83e09473f7a64d75977157d",
+      "bytes": 104278,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "trusted_http_warning"
+      ],
+      "observed": {
+        "state": "http_warning",
+        "effectiveResourceLocale": "ru",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1114,
+          "layoutIdentity": 107130754,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": true,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "confirm action",
+            "semanticId": 1114,
+            "enabled": true,
+            "buttonRole": true,
+            "editable": false,
+            "clickAction": true,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "setup-error-ru.png",
+      "sha256": "9b0739df7c7d80ddf89b14afc2f9f7438f5914950ad86bd2a89252ce58578929",
+      "bytes": 77753,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "recoverable_setup_error"
+      ],
+      "observed": {
+        "state": "setup_error",
+        "effectiveResourceLocale": "ru",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1125,
+          "layoutIdentity": 208312950,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": true,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "primary action",
+            "semanticId": 1125,
+            "enabled": true,
+            "buttonRole": true,
+            "editable": false,
+            "clickAction": true,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "invitation-replacement-long-url-en.png",
+      "sha256": "e0bbe75a0530e29a5c123355034b030cc094306972123523dbf314ffee03a13f",
+      "bytes": 125740,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "replacement_invitation",
+        "long_guest_url",
+        "real_qr"
+      ],
+      "observed": {
+        "state": "invitation_replacement",
+        "effectiveResourceLocale": "en",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1149,
+          "layoutIdentity": 233757425,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": true,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "enter action",
+            "semanticId": 1149,
+            "enabled": true,
+            "buttonRole": true,
+            "editable": false,
+            "clickAction": true,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "invitation-replacement-long-url-ru.png",
+      "sha256": "f5cbb756a21e36df76df9fd07f34c62c2d624786c38fd63ee75beef95a149824",
+      "bytes": 136717,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "replacement_invitation",
+        "long_guest_url",
+        "real_qr"
+      ],
+      "observed": {
+        "state": "invitation_replacement",
+        "effectiveResourceLocale": "ru",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1149,
+          "layoutIdentity": 233757425,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": true,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "enter action",
+            "semanticId": 1149,
+            "enabled": true,
+            "buttonRole": true,
+            "editable": false,
+            "clickAction": true,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "live-empty-en.png",
+      "sha256": "5fdb8525858f1cd9d41614cb41d1368cf1971b8b7d8c6eafd07c5e41b929142c",
+      "bytes": 63244,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "live_empty_current_and_queue"
+      ],
+      "observed": {
+        "state": "live_empty",
+        "effectiveResourceLocale": "en",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1158,
+          "layoutIdentity": 224276257,
+          "rootIdentity": 52834274,
+          "enabled": false,
+          "focused": false,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "invite action",
+            "semanticId": 1162,
+            "enabled": true,
+            "buttonRole": true,
+            "editable": false,
+            "clickAction": true,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "live-long-row19-en.png",
+      "sha256": "64b8efaaa9029a48ea90a250de1a1c3b6278545580d4b2a8271a774bcb12f352",
+      "bytes": 133972,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "long_unicode_current",
+        "long_read_only_queue",
+        "focused_scrolled_row19"
+      ],
+      "observed": {
+        "state": "live_long_row19",
+        "effectiveResourceLocale": "en",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1158,
+          "layoutIdentity": 224276257,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": false,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "queue row 19",
+            "semanticId": 1205,
+            "enabled": true,
+            "buttonRole": false,
+            "editable": false,
+            "clickAction": false,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "live-long-final-en.png",
+      "sha256": "3bb61463f69ae9a9fd1c10e752d70b2e8015cd3641c729ae4e837bbec03046fd",
+      "bytes": 128480,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "long_unicode_current",
+        "long_read_only_queue",
+        "focused_final_row99"
+      ],
+      "observed": {
+        "state": "live_long_final",
+        "effectiveResourceLocale": "en",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1158,
+          "layoutIdentity": 224276257,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": false,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "queue row 99",
+            "semanticId": 1227,
+            "enabled": true,
+            "buttonRole": false,
+            "editable": false,
+            "clickAction": false,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "live-notices-ru.png",
+      "sha256": "5f5462cea40c05cf3d614ad6e97109a7a9f96cb8684f42d69359a86151ab834c",
+      "bytes": 138499,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "long_unicode_current",
+        "reconnect_error_pending",
+        "focused_scrolled_row19"
+      ],
+      "observed": {
+        "state": "live_notices",
+        "effectiveResourceLocale": "ru",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1158,
+          "layoutIdentity": 224276257,
+          "rootIdentity": 52834274,
+          "enabled": false,
+          "focused": false,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "queue row 19",
+            "semanticId": 1247,
+            "enabled": true,
+            "buttonRole": false,
+            "editable": false,
+            "clickAction": false,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    },
+    {
+      "file": "missing-room-ru.png",
+      "sha256": "c7757e52daf3b84bdc8a3fc63c83710d34019581022d31dff1bb38870cef73d0",
+      "bytes": 55260,
+      "width": 1920,
+      "height": 1080,
+      "acceptanceClasses": [
+        "missing_room",
+        "replacement_timeout"
+      ],
+      "observed": {
+        "state": "missing_room",
+        "effectiveResourceLocale": "ru",
+        "globalDeviceLocaleClaim": false,
+        "api": 36,
+        "density": 2,
+        "fontScale": 1,
+        "primaryAction": {
+          "buttonId": 1268,
+          "layoutIdentity": 197491305,
+          "rootIdentity": 52834274,
+          "enabled": true,
+          "focused": true,
+          "callbacks": 0,
+          "keyDown": false
+        },
+        "focusedElements": [
+          {
+            "requestName": "new room action",
+            "semanticId": 1268,
+            "enabled": true,
+            "buttonRole": true,
+            "editable": false,
+            "clickAction": true,
+            "selectionSemantics": false
+          }
+        ]
+      },
+      "nativeOraclePassed": true,
+      "independentOriginalImageApproval": "PASS"
+    }
+  ],
+  "continuousSharedStateHistory": {
+    "files": [
+      "setup-button-default.png",
+      "setup-button-focused.png",
+      "setup-button-held-pressed.png",
+      "setup-button-disabled.png"
+    ],
+    "stateOrder": [
+      "default",
+      "focused",
+      "held_pressed",
+      "disabled"
+    ],
+    "semanticId": 1074,
+    "layoutIdentity": 173051116,
+    "rootIdentity": 52834274,
+    "identityScope": "One continuous captured Compose widget history in this run; later gallery identities are independent.",
+    "receipts": {
+      "releaseCallbacks": 1,
+      "disabledDelta": 0
+    }
+  },
+  "hostedVerification": {
+    "runId": 37176519956,
+    "selectedNativeAttempt": 2,
+    "native": {
+      "jobId": 111361091794,
+      "report": {
+        "artifactMember": "outputs/androidTest-results/connected/debug/TEST-emulator-5554 - 16-_app-.xml",
+        "bytes": 12042,
+        "sha256": "c1197c1e633cce1d2331e76ed813917bc64ee541fac6e6345bbe2dead9c15af6"
+      },
+      "tests": 71,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "retainedBuild": {
+      "originalExecutionAttempt": 1,
+      "originalExecutionJobId": 111360159022,
+      "originalExecutionJobUrl": "https://github.com/leugenea/qmix/actions/runs/37176519956/job/111360159022",
+      "attempt2MetadataJobId": 111361092781,
+      "attempt2MetadataJobUrl": "https://github.com/leugenea/qmix/actions/runs/37176519956/job/111361092781",
+      "artifact": {
+        "id": 11292858641,
+        "name": "android-build-reports",
+        "bytes": 120527,
+        "sha256": "d53fc4ec99adcfdc28c9e5f0e0813e440faf5b7ed0c007a43daafbd40d7a2c90",
+        "apiUrl": "https://api.github.com/repos/leugenea/qmix/actions/artifacts/11292858641",
+        "archiveDownloadUrl": "https://api.github.com/repos/leugenea/qmix/actions/artifacts/11292858641/zip",
+        "createdAt": "2026-10-04T04:21:16Z",
+        "expiresAt": "2027-01-02T04:16:19Z"
+      },
+      "freshBuildOrCanonicalJvmRerunClaim": false,
+      "jvm": {
+        "tests": 433,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "xmlFileCount": 41,
+        "reports": [
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.AndroidLoggingTest.xml",
+            "bytes": 1070,
+            "sha256": "0f4d82b797e1dec871abf14fbd9145adaf508f71b747081b6b93d4e5958d9dc0",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.AuthoritativePlaybackCoordinatorTest.xml",
+            "bytes": 8612,
+            "sha256": "53199b0c8de38d0270b24eea134c52d3683a8f502defb6486ba71f2622d73e62",
+            "tests": 51,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.CleartextPolicyTest.xml",
+            "bytes": 461,
+            "sha256": "73079edd9afc3288ad784aee3ec15b058100c445aea746a327b142abff973bf1",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.CoroutineQueueTest.xml",
+            "bytes": 1169,
+            "sha256": "c984ee953de12efdac21cc6d08cda064b0594d632b05adff91df484199870d2f",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.CoroutineRoomApiTest.xml",
+            "bytes": 733,
+            "sha256": "41fe49f13b2f914fafad00655a582f270f19a95b9742e481422fff7a16141523",
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.EndpointSettingsTest.xml",
+            "bytes": 2041,
+            "sha256": "b68ac3744a99fc8cccc971992d3849bad903aeb5b6be63244fbf03b50c1e0082",
+            "tests": 12,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.ExoPlayerBackendThreadContractTest.xml",
+            "bytes": 2758,
+            "sha256": "9e2669da9ac24365685e076226cead007d5c08962d083ed44c4fb37c5ec56ec5",
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.GuestInviteTest.xml",
+            "bytes": 442,
+            "sha256": "d0f698c44d4ecca012401b585a009d83847fb7e0632fc41bc39f82ad766d11af",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostPublisherPostedStartTest.xml",
+            "bytes": 496,
+            "sha256": "fbf0281b6a6afb4b10eb82a77cefbcec415b767c7a21daa46ddde0b87af83eba",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostRoomClosureTest.xml",
+            "bytes": 1933,
+            "sha256": "b904bc43f578ebd63083186a46abf25527d61ad5b3d31b75c98474ab536e3889",
+            "tests": 12,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostRoomMissingRecoveryTest.xml",
+            "bytes": 3361,
+            "sha256": "3e8c0aa77eb90a6dc4c1fe3b3b37af80b4b47ba53ad258e1c01eec25e64b7d6d",
+            "tests": 20,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostSequentialLoopTest.xml",
+            "bytes": 1827,
+            "sha256": "413b4f5354ecb92a45c95090ab90046eb246e58735f4fc4e4cb2bcac5bb21820",
+            "tests": 10,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostSessionControllerTest.xml",
+            "bytes": 5289,
+            "sha256": "fe5517602c5e02ba0314cd3c980b199d879604538982432f5e5850cacf75a3a7",
+            "tests": 33,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostSessionCoverageHeadroomTest.xml",
+            "bytes": 1148,
+            "sha256": "24d78287deb116f9f9a83b321df8f5800034806a5a203ab1dff7547da2b8d8e9",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostSessionJVMBranchTest.xml",
+            "bytes": 6500,
+            "sha256": "07319d03b7cc5f77abfc30526b64ca30fdd622a5257a8d0ad0f45fb15cbec182",
+            "tests": 9,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostSessionLifecycleTest.xml",
+            "bytes": 3174,
+            "sha256": "355aeb1ea5d8fc67de30fd8604e2ffc0e399482c3386f9e295139eb707e98c8c",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostSessionReviewFindingsTest.xml",
+            "bytes": 2158,
+            "sha256": "cd5b6c195e4f03b678165c4394c70086061667066aeb21e1f3c754ba5748f560",
+            "tests": 12,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostSessionSingleWorkerRegressionTest.xml",
+            "bytes": 668,
+            "sha256": "8a4aa2547953a87cdca77e9bcf69d01cd64d884b4c8ea93a39cc00d333eb5df0",
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostSessionStateFlowMigrationTest.xml",
+            "bytes": 972,
+            "sha256": "404238002c2c871cf1a3e1edfd0c64ecc926ffc51e260e19da5a4c4cfabbf976",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.HostingScreenTest.xml",
+            "bytes": 4679,
+            "sha256": "a509c06f5d133bf65087a89b7daf18e7dde101816f26b508d13db79b57c47f9c",
+            "tests": 31,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.KeepScreenOnTest.xml",
+            "bytes": 656,
+            "sha256": "deb3933069539b9b46ac55ee455cb12e7a06f4a3afecc270560ea58bddd871bf",
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.LiveRoomPresentationTest.xml",
+            "bytes": 2285,
+            "sha256": "07d37f316a30a278ab3b19dfb22201a6a4df1543931525878a0018fc01939b50",
+            "tests": 13,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.LocalizationContractTest.xml",
+            "bytes": 1555,
+            "sha256": "eca38184b5b4ed68b6af9841f2b9e6081248669efedf037700a8e19bf06b45e7",
+            "tests": 8,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.LocalizedHostingScreenTest.xml",
+            "bytes": 957,
+            "sha256": "5ea636ddd91518cee87e8b4d048cac21ef2f1fc94a7601c37661c2efb857bcff",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.Media3PlaybackEngineTest.xml",
+            "bytes": 3319,
+            "sha256": "fcb30979a657b4f6657d0115ad3d3514b9e63f74edbe0299d2af82296371bd0e",
+            "tests": 22,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.OkHttpRoomEventStreamTest.xml",
+            "bytes": 2723,
+            "sha256": "35c77fc137dbf6236d1adbb3cf5e0094d820c9aa34a324021509790222eee8ab",
+            "tests": 12,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.OkHttpSuspendTest.xml",
+            "bytes": 1190,
+            "sha256": "f52f1da113f0e9353c61a3cc55f7826cd395e2ab3e324a0addd3194838b4a899",
+            "tests": 6,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.PlaybackCoroutineOwnershipTest.xml",
+            "bytes": 464,
+            "sha256": "e94feab19b4e988653e9a318d465376eb9fc99186f3707b98e8e38000c6114c8",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.PlaybackEngineContractTest.xml",
+            "bytes": 457,
+            "sha256": "7e5b8c5c442f16ebeea67c9ff865c32132e968be9e4d4f68295cabf6239fc5d1",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.PlaybackErrorContractTest.xml",
+            "bytes": 737,
+            "sha256": "2eae59a3c13fecec203ba340cd231b78e31b4bd8cddc0c2796e0ea4b19466af9",
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.PlaybackErrorMappingTest.xml",
+            "bytes": 998,
+            "sha256": "41615b18c2440e3f88dd074db0cf8a5c64e960aaf8e76606ddb0e445b80dce70",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.PlaybackLifecycleObserverTest.xml",
+            "bytes": 601,
+            "sha256": "1e7f86496308841bc20707082915bae20b9fac30017902b3ea1e99183b7c310f",
+            "tests": 2,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.PlayerStatePublisherTest.xml",
+            "bytes": 6132,
+            "sha256": "5d96ca165995c429f0c168c527705cde22c889bf2b0aed1cc6466b00b895e8a1",
+            "tests": 36,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.QueueAdvancementCoordinatorTest.xml",
+            "bytes": 3395,
+            "sha256": "69fdda72a5cebb5ddd85edf6bfc76dddda396172ca49dddf255f5412a305f102",
+            "tests": 20,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.QueueMutationContextTest.xml",
+            "bytes": 908,
+            "sha256": "712ec1f7faaf0fcf8187f4816324104437f3354d6ddaf8c40034a0dd7d4b2975",
+            "tests": 4,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.ReconnectBackoffTest.xml",
+            "bytes": 460,
+            "sha256": "f215b7be054cbf60961c171c51e8db5a3d52c79fd1202ffba30f8bb24272282f",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.RoomAdvanceCommandTest.xml",
+            "bytes": 969,
+            "sha256": "ee317625a392ca72aa6161521d9e9046697f32c33ebac8dfa5300e88ca4a6ad0",
+            "tests": 5,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.RoomApiClientTest.xml",
+            "bytes": 2384,
+            "sha256": "1b8a843d12d24da925566726d87bcf838ecca6665da8a55e4737447aa25e997c",
+            "tests": 16,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.RoomFetchSuspendTest.xml",
+            "bytes": 700,
+            "sha256": "ad31cde2208cf6aecca327de97809c508ffbdfdacefa17927db4c4ace307d8ce",
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.RoomRepositoryContractTest.xml",
+            "bytes": 453,
+            "sha256": "15aae2d208009b4da6c64094164e2b205e9cc09f129b1dde114dd23d4687da4d",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          {
+            "artifactMember": "test-results/testDebugUnitTest/TEST-com.qmix.tv.SequentialRoomRepositoryTest.xml",
+            "bytes": 6765,
+            "sha256": "7e07b90ebe06f6ecdd4228d6008b400291415aa853c10ca48f03e1b0197ff755",
+            "tests": 42,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "lint": {
+        "issues": 0,
+        "report": {
+          "artifactMember": "reports/lint-results-debug.xml",
+          "bytes": 87,
+          "sha256": "3782329f5ec7fc80243d071df4885364697fe238cd16d0fd49637d3010e96025"
+        }
+      }
+    },
+    "combinedInstructionCoverage": {
+      "nativeJobId": 111361091794,
+      "report": {
+        "artifactMember": "reports/jacoco/jacocoDebugReport/jacocoDebugReport.xml",
+        "bytes": 451027,
+        "sha256": "85c33f5c01cfe8cda77da780310a4938f8e81fe4a63cdd5cd02a9d3b2d422954"
+      },
+      "covered": 22967,
+      "missed": 925,
+      "total": 23892,
+      "percent": 96.12841118365981,
+      "minimumRatio": 0.95,
+      "gatePassed": true,
+      "scope": "Combined JVM plus connected-native JaCoCo root INSTRUCTION; native job ran JVM for coverage, canonical433 JUnit belong to the retained build and are counted once."
+    },
+    "routedGoRuntime": "skipped; no fresh Go runtime/integration execution claimed."
+  },
+  "approval": {
+    "sourceVerdict": "SOURCE_PASS",
+    "nativeImageVerdict": "PASS",
+    "reviewedPrHeadSha": "b35d7b7617dc7d31d4d5568f810b140fc9b40426",
+    "reviewedTree": "93d1fbc8a59ec398cfab0e9335094ac280714b1a",
+    "allOriginalImagesIndividuallyApproved": true,
+    "scope": "Bounded source/native/gallery acceptance; final evidence-only-head gates, delivery, merge and exact-merge postmerge acceptance remain pending.",
+    "records": [
+      {
+        "label": "Independent candidate3 source review Markdown",
+        "bytes": 10643,
+        "sha256": "6d2474e132ac4bbeaa4e183617866c4800283cf153659d709574a4b47e75fbc1",
+        "availability": "Review record retained by delivery owner; not shipped in this gallery."
+      },
+      {
+        "label": "Independent candidate3 source review JSON",
+        "bytes": 11385,
+        "sha256": "5ee58c0a5d3c572f2f2f7e5c88bffdfe4ad235583389b7b94d1d2d7a577674c3",
+        "availability": "Review record retained by delivery owner; not shipped in this gallery."
+      },
+      {
+        "label": "Independent candidate3 native/image review Markdown",
+        "bytes": 20417,
+        "sha256": "8c7f7404abe6f4091678f7cb713686976546cc9abe88737afd2279fd675bba11",
+        "availability": "Review record retained by delivery owner; not shipped in this gallery."
+      },
+      {
+        "label": "Independent candidate3 native/image review JSON",
+        "bytes": 172033,
+        "sha256": "226cec21ace97a4abd41f3133ac021f879cdb4bb978678d586e1e8fc41b351ac",
+        "availability": "Review record retained by delivery owner; not shipped in this gallery."
+      }
+    ]
+  },
+  "publication": {
+    "status": "Pending parent commit, final gates and immutable issue embeds/readback.",
+    "commitSha": null,
+    "issueImageSets": {
+      "319": [
+        "live-empty-en.png",
+        "live-long-row19-en.png",
+        "live-long-final-en.png",
+        "live-notices-ru.png",
+        "missing-room-ru.png"
+      ],
+      "70": [
+        "setup-button-default.png",
+        "setup-button-focused.png",
+        "setup-button-held-pressed.png",
+        "setup-button-disabled.png",
+        "setup-backend-focused.png",
+        "http-warning-en.png",
+        "http-warning-ru.png",
+        "setup-error-ru.png",
+        "invitation-replacement-long-url-en.png",
+        "invitation-replacement-long-url-ru.png",
+        "live-empty-en.png",
+        "live-long-row19-en.png",
+        "live-long-final-en.png",
+        "live-notices-ru.png",
+        "missing-room-ru.png"
+      ]
+    },
+    "immutablePublicationHandles": "Unavailable until parent delivery; capture checkout/event SHA is not a publication SHA."
+  },
+  "limitations": [
+    "Synthetic framework/API36 HDMI key injection; no physical remote session claimed.",
+    "Framework semantic roles/names verified; no executed TalkBack service claimed.",
+    "Published RC and target hardware acceptance remain qmix62.",
+    "Original F2 failure cause remains unproven; repaired repeated Invite/QR/Back history passed.",
+    "Approved partial unfocused scroll-neighbor rows and preserved metadata/URL ellipsis are retained."
+  ]
+}

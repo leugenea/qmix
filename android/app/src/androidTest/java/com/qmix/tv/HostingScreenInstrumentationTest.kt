@@ -15,6 +15,11 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.tv.material3.darkColorScheme
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
@@ -417,6 +422,8 @@ class HostingScreenInstrumentationTest {
         composeRule.onNodeWithText("Old queued title").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("QR code for https://guest.example/r/ABCD").assertDoesNotExist()
         composeRule.onNodeWithText("New room").assertIsFocused().assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+            .assertIsEnabled()
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         assertTrue("D-pad center was not accepted", device.pressDPadCenter())
         try {
@@ -582,11 +589,17 @@ class HostingScreenInstrumentationTest {
 
         val focusedPixels = composeRule.onNodeWithTag("queue-track-track-0").captureToImage().toPixelMap()
         val middleY = focusedPixels.height / 2
-        val visibleWhiteBorder = (0 until minOf(12, focusedPixels.width)).any { x ->
+        val focusRole = darkColorScheme().onSurface
+        val visibleRoleBorder = (0 until minOf(12, focusedPixels.width)).any { x ->
             val color = focusedPixels[x, middleY]
-            color.red > 0.9f && color.green > 0.9f && color.blue > 0.9f && color.alpha > 0.9f
+            colorDistance(color, focusRole) <= 2f / 255f && color.alpha > 0.9f
         }
-        assertTrue("focused queue row has no visible white border", visibleWhiteBorder)
+        assertTrue("qmix#319: focused queue row has no visible shared onSurface border", visibleRoleBorder)
+        val row = composeRule.onNodeWithTag("queue-track-track-0").fetchSemanticsNode().config
+        assertTrue("qmix#319: queue must remain read-only", !row.contains(SemanticsActions.OnClick))
+        assertTrue("qmix#319: queue must not expose local selection", !row.contains(SemanticsProperties.Selected))
+        assertTrue("qmix#319: queue must not expose Button role",
+            !row.contains(SemanticsProperties.Role) || row[SemanticsProperties.Role] != Role.Button)
     }
 
     @Test
